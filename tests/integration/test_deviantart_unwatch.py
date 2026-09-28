@@ -124,3 +124,12 @@ def test_route_treats_not_watching_as_done(watch_feed, monkeypatch):
     monkeypatch.setattr(deviantart_service, "is_watching", lambda tok, u: False)
     resp = deviantart_routes.deviantart_unwatch_route(username="zoe", posts="purge")
     assert json.loads(resp.body) == {"ok": True, "username": "zoe", "posts": "purge", "count": 3, "was_watching": False}
+
+
+def test_artist_name_links_to_a_feed_search_on_their_profile_path():
+    """The Watch-feed byline's artist name filters the feed to that artist: a search on ``deviantart.com/<user>/`` matches only
+    their links (search covers e.link), so a lookalike like ``zoe_2`` isn't pulled in and authorless older posts are."""
+    src = open("templates/_entry_pane.html").read()
+    assert 'class="entry-author-link"' in src
+    assert "&q={{ ('deviantart.com/' ~ (selected_entry.da_watch_artist | lower) ~ '/') | urlencode }}" in src
+    assert ".entry-author-link, .entry-tag-link" in open("static/js/app.js").read()

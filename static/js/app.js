@@ -18473,7 +18473,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       if (link.hasAttribute('download')) {
         return;
       }
-      if (!link.matches('.tree-item, .feed-link, .tag-link, .posts-toolbar a, .entry-feed-link, .entry-tag-link, .menu-popover > a.menu-item')) {
+      if (!link.matches('.tree-item, .feed-link, .tag-link, .posts-toolbar a, .entry-feed-link, .entry-author-link, .entry-tag-link, .menu-popover > a.menu-item')) {
         return;
       }
 
