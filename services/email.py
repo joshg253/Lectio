@@ -66,6 +66,8 @@ def _base_css() -> str:
             font-weight: 600; text-decoration: none; border-radius: 999px; }}
           .item {{ padding: 18px 24px; border-top: 1px solid {L["line"]}; }}
           .item:first-child {{ border-top: none; }}
+          .item-thumb {{ display: block; width: 100%; height: auto; max-height: 200px; object-fit: cover; border-radius: 8px;
+            margin: 0 0 12px; background: #ffffff; }}
           .item-link {{ font-size: 13px; font-weight: 600; color: {L["link"]}; text-decoration: none; }}
           .footer {{ padding: 14px 6px 0; font-size: 12px; color: {L["muted"]}; text-align: center; }}
           .footer a {{ color: {L["muted"]}; }}
@@ -176,8 +178,14 @@ def _build_digest_html(articles: list[dict]) -> str:
         safe_link = html.escape(str(art.get("link") or ""))
         safe_excerpt = html.escape(str(art.get("excerpt") or ""))
         excerpt_p = f'<p class="excerpt">{safe_excerpt}</p>' if safe_excerpt else ""
+        lead = str(art.get("lead_image_url") or "")
+        thumb = (
+            f'<a href="{safe_link}"><img class="item-thumb" src="{html.escape(lead)}" alt=""></a>'
+            if lead.startswith(("http://", "https://"))
+            else ""
+        )
         items.append(
-            f'<div class="item">{_meta_line(str(art.get("feed_title") or ""), None, None)}'
+            f'<div class="item">{thumb}{_meta_line(str(art.get("feed_title") or ""), None, None)}'
             f'<h2><a href="{safe_link}">{safe_title}</a></h2>{excerpt_p}'
             f'<a class="item-link" href="{safe_link}">Read →</a></div>'
         )

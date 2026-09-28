@@ -219,3 +219,12 @@ def test_hero_is_skipped_when_the_body_carries_the_lead_image_html_escaped():
     lead = "https://cdn.example.com/img.jpg?w=1200&h=800"
     body = '<p><img src="https://cdn.example.com/img.jpg?w=1200&amp;h=800"></p>'
     assert 'class="hero"' not in _build_html("T", "F", "https://example.com/a", "", excerpt_html=body, lead_image_url=lead)
+
+
+def test_digest_item_shows_its_lead_image_as_a_thumbnail():
+    from services.email import _build_digest_html
+
+    out = _build_digest_html(
+        [{"title": "One", "link": "https://a.test/1", "lead_image_url": LEAD}, {"title": "Two", "lead_image_url": "javascript:x"}]
+    )
+    assert out.count('class="item-thumb"') == 1 and f'src="{LEAD}"' in out

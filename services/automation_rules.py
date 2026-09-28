@@ -56,6 +56,7 @@ from main import (
     _star_entry_for_current_user,
     author_filter_token,
     build_keyword_matcher,
+    email_article_extras,
     entry_effective_date,
     feed_display_title,
     feed_in_rule_scope,
@@ -566,6 +567,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                     article["link"],
                                     article["excerpt"],
                                     cc_addr=cc_addr,
+                                    **email_article_extras(fu, article["entry_id"], entry),
                                 )
                                 if ok:
                                     immediate_sent += 1

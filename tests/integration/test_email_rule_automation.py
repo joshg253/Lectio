@@ -63,8 +63,11 @@ def _seed(reader) -> None:
 def test_immediate_delivery_sends_matching_entry_only(configured, monkeypatch):
     sent = []
 
-    def fake_send(api_key, from_addr, to, title, feed_title, link, excerpt, cc_addr=None):
+    extras: list[dict] = []
+
+    def fake_send(api_key, from_addr, to, title, feed_title, link, excerpt, cc_addr=None, **kw):
         sent.append(title)
+        extras.append(kw)
         return True, None
 
     monkeypatch.setattr(automation_rules, "send_article_email", fake_send)
@@ -74,6 +77,21 @@ def test_immediate_delivery_sends_matching_entry_only(configured, monkeypatch):
     main._run_email_rules_after_refresh({FEED})
 
     assert sent == ["Nintendo Switch OLED $199"]
+    # Same entry-pane extras as a manual share (lead image, author, date), so automation emails get the full template.
+    assert set(extras[0]) == {"lead_image_url", "author", "published"}
+
+
+def test_digest_items_carry_their_lead_image(configured, monkeypatch):
+    digests: list[list[dict]] = []
+    monkeypatch.setattr(main, "send_digest_email", lambda *a, **kw: (digests.append(a[3]), (True, None))[1])
+    monkeypatch.setattr(
+        main.lead_image_service, "get_cached_lead_image_url", lambda fu, eid: "https://cdn.test/lead.jpg" if eid == "e-match" else None
+    )
+    _add_rule(delivery="batch", batch_count=1)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})
+    assert [a["lead_image_url"] for a in digests[0]] == ["https://cdn.test/lead.jpg"]
 
 
 def test_no_rules_sends_nothing(configured, monkeypatch):
