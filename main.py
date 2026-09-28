@@ -7063,6 +7063,33 @@ def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | 
     return dict(row) if row else None
 
 
+def get_inherited_tag_filter_signs(conn: sqlite3.Connection, feed_url: str) -> dict[str, str]:
+    """tag -> '+'/'-' from ENABLED folder/global/multi-feed tag_filter rules covering feed_url. Display-only: the post-header chips
+    color these apart from the feed's own rule, so a filter set at a broader level is visible. Clicking still edits the feed rule.
+
+    The feed's own rule wins the display even while disabled: a chip click creates that rule disabled (armed later in Automation),
+    so the chips have to show its state for the click to visibly land."""
+    rows = conn.execute(
+        "SELECT keyword, scope, scope_id FROM highlight_keywords WHERE type = 'tag_filter' AND scope != 'feed' AND enabled = 1"
+    ).fetchall()
+    out: dict[str, str] = {}
+    for row in rows:
+        scope, scope_id = str(row["scope"]), str(row["scope_id"] or "")
+        folder_feeds: set[str] | None = None
+        if scope in ("folder", "folders"):
+            folder_feeds = set()
+            for fid in rule_scope_folder_ids(scope, scope_id):
+                folder_feeds |= get_folder_feed_urls(conn, fid)
+        if not feed_in_rule_scope(scope, scope_id, feed_url, folder_feeds):
+            continue
+        req, good, exc = parse_tag_filter_spec(str(row["keyword"] or ""))
+        for tag in req | good:
+            out.setdefault(tag, "+")
+        for tag in exc:
+            out.setdefault(tag, "-")
+    return out
+
+
 def toggle_feed_tag_filter(conn: sqlite3.Connection, feed_url: str, tag: str, sign: str) -> dict:
     """Toggle a signed tag on the feed's tag_filter rule from the post-header
     chips. Same sign already present → remove it; opposite sign → flip it;
@@ -14940,6 +14967,7 @@ def _build_orphan_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         "feed_tag_suggestions": feed_tag_suggestions,
         "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
         "feed_tag_filter_signs": {},
+        "feed_tag_inherited_signs": {},
         "author_filter_token": None,
         "feed_icon_url": None,
         "is_orphan_archive": True,
@@ -17336,10 +17364,12 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             feed_tag_suggestions.append(normalized)
         # Current +/- state of the feed's tag_filter rule, so active signs render lit.
         feed_tag_filter_signs: dict[str, str] = {}
+        feed_tag_inherited_signs: dict[str, str] = {}
         _author_token = author_filter_token(getattr(entry, "authors_str", None))
         if feed_tag_suggestions or _author_token:
             with get_meta_connection() as _rule_conn:
                 _rule = get_feed_tag_filter_rule(_rule_conn, str(entry.feed_url))
+                feed_tag_inherited_signs = get_inherited_tag_filter_signs(_rule_conn, str(entry.feed_url))
             if _rule:
                 _req, _good, _exc = parse_tag_filter_spec(str(_rule["keyword"] or ""))
                 feed_tag_filter_signs = {t: "+" for t in (_req | _good)} | {t: "-" for t in _exc}
@@ -17806,6 +17836,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "pinned_only_feed_tags": pinned_only_tags,
             "feed_tag_chips_collapsed": FEED_TAG_CHIPS_COLLAPSED,
             "feed_tag_filter_signs": feed_tag_filter_signs,
+            "feed_tag_inherited_signs": feed_tag_inherited_signs,
             "author_filter_token": _author_token,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,

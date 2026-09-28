@@ -3945,6 +3945,14 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   color: #e05c5c;
 }
 
+/* Set by an enabled folder/global tag_filter rule rather than this feed's own: lit, but in the accent color, so the level the
+   filter lives at is visible. The arrow's direction still says include vs drop. */
+.feed-tag-filter-sign.include.inherited,
+.feed-tag-filter-sign.exclude.inherited {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .feed-tag-filter-sign.add-tag {
   font-weight: 700;
 }
