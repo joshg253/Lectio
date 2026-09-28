@@ -243,3 +243,10 @@ def test_a_link_to_the_lead_left_after_the_strip_keeps_the_hero():
     body, out_lead = main._strip_lead_image_opener(html, lead, "https://www.dorktower.com/feed/", True)
     assert out_lead == lead
     assert "<img" not in body
+
+
+def test_a_bluesky_video_poster_is_not_also_a_hero():
+    poster = "https://video.bsky.app/watch/did%3Aplc%3Ax/bafk/thumbnail.jpg"
+    html = f'<p>a reel</p><p><video controls preload="none" poster="{poster}" data-bsky-hls-src="x.m3u8"></video></p>'
+    _, lead = main._strip_lead_image_opener(html, poster, "https://bsky.app/profile/did:plc:x/rss", True)
+    assert lead is None

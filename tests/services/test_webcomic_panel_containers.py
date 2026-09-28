@@ -242,3 +242,10 @@ def test_the_injected_url_is_attribute_escaped(monkeypatch):
     content, _lead = _inject(BODYLESS)
     assert 'onerror="alert(1)"' not in content
     assert "&quot;" in content
+
+
+def test_a_body_with_a_video_gets_no_panel(webcomic_injection):
+    """A Bluesky clip on a webcomic-strategy feed: the fetched "panel" was the video's poster, rendered above the video itself."""
+    body = '<p>a tiny snek reel!</p><p><video controls preload="none" width="720" height="1280"></video></p>'
+    content, lead = _inject(body)
+    assert content == body and lead == CARD_URL

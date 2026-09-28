@@ -4525,7 +4525,12 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (video.dataset.portraitCapChecked) return;
         video.dataset.portraitCapChecked = '1';
         if (video.height > video.width) {
-          video.style.maxWidth = `min(${cap}px, 100%)`;
+          // Height-bound, not just width-bound: at an 800px cap a 9:16 clip was ~1420px tall, its controls off screen
+          // (tinysnek, 2026-09-28). The explicit aspect-ratio sizes the box before any frame loads (preload="none").
+          video.style.aspectRatio = `${video.width} / ${video.height}`;
+          video.style.width = 'auto';
+          video.style.height = `min(80vh, ${Math.round((cap * video.height) / video.width)}px)`;
+          video.style.maxWidth = '100%';
         }
       });
     }

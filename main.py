@@ -16435,7 +16435,8 @@ def _inject_webcomic_panel_into_bodyless_entry(
     """
     if not feed_url or not lead_image_service._is_feed_webcomic(feed_url):
         return content_html, lead_image_url
-    if content_html and _HAS_IMG_RE.search(content_html):
+    # A <video> is the post's own media too: a Bluesky clip's poster frame "injected" above it rendered the video twice (tinysnek).
+    if content_html and (_HAS_IMG_RE.search(content_html) or re.search(r"<video\b", content_html, re.IGNORECASE)):
         return content_html, lead_image_url
     if body_had_image and show_lead_in_article:
         return content_html, lead_image_url
@@ -16821,7 +16822,9 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
             # append (fetch_post_images), not the author placing it in the flow. That
             # append IS the post's real content, so leave it in the body and keep the
             # separate lead too, rather than treating it as author-placed duplication.
-            pass
+            # Except a video's poster: the <video> already shows that frame, so a hero of it is the clip twice.
+            if any(lead_image_url in t for t in re.findall(r"<video\b[^>]*>", html.unescape(content_html), re.IGNORECASE)):
+                lead_image_url = None
         else:
             # Lead URL is buried mid-article (author placed it there) — show it in
             # its natural position, not as a separate top lead.
