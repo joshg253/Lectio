@@ -155,7 +155,10 @@ def _build_html(
         excerpt_block = "".join(f'<p class="excerpt">{para}</p>' for para in safe_excerpt.split("\n\n") if para)
     # The lead image as a hero, like the entry pane — unless the body already carries it (the pane hoists it; here it would repeat).
     hero = ""
-    if lead_image_url and lead_image_url.startswith(("http://", "https://")) and lead_image_url not in (excerpt_html or ""):
+    body = excerpt_html or ""
+    # Sanitized HTML escapes & as &amp; in attributes, so the raw URL alone misses a query-string image the body already shows.
+    in_body = bool(lead_image_url) and (lead_image_url in body or html.escape(lead_image_url) in body)
+    if lead_image_url and lead_image_url.startswith(("http://", "https://")) and not in_body:
         hero = f'<a href="{safe_link}"><img class="hero" src="{html.escape(lead_image_url)}" alt=""></a>'
     card = (
         f'{hero}<div class="body">{_meta_line(feed_title, published, author)}'

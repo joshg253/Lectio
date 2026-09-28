@@ -213,3 +213,9 @@ def test_digest_uses_the_same_look():
     out = _build_digest_html([{"title": "One", "feed_title": "Feed A", "link": "https://a.test/1", "excerpt": "e"}, {"title": "Two"}])
     assert out.count('class="item"') == 2
     assert "digest · 2 articles" in out and "#fcfbf7" in out
+
+
+def test_hero_is_skipped_when_the_body_carries_the_lead_image_html_escaped():
+    lead = "https://cdn.example.com/img.jpg?w=1200&h=800"
+    body = '<p><img src="https://cdn.example.com/img.jpg?w=1200&amp;h=800"></p>'
+    assert 'class="hero"' not in _build_html("T", "F", "https://example.com/a", "", excerpt_html=body, lead_image_url=lead)

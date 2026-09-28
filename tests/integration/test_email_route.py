@@ -333,7 +333,18 @@ def test_share_carries_the_entry_pane_extras(monkeypatch):
     monkeypatch.setattr(routes.entries.lead_image_service, "get_cached_lead_image_url", lambda fu, eid: "https://cdn.test/lead.jpg")
     monkeypatch.setattr(routes.entries, "entry_effective_date", lambda e: dt.datetime(2026, 9, 4, tzinfo=dt.timezone.utc))
     entry = routes.entries.get_reader().get_entry(("f", "1"), None)
-    entry.author = "Morgan Park"
+    entry.authors_str = "Morgan Park"
     with TestClient(app) as client:
         client.post("/entries/email", data={"feed_url": "f", "entry_id": "1", "to_addr": "a@b.com"})
     assert (sent["lead_image_url"], sent["author"], sent["published"]) == ("https://cdn.test/lead.jpg", "Morgan Park", "Sep 4, 2026")
+
+
+def test_hero_never_falls_back_to_the_list_thumbnail_except_youtube(monkeypatch):
+    """The list thumbnail can be a cropped panel; only YouTube's computed thumbnail (the full video frame) stands in."""
+    monkeypatch.setattr(routes.entries.lead_image_service, "get_cached_lead_image_url", lambda fu, eid: None)
+    monkeypatch.setattr(
+        routes.entries.lead_image_service, "get_cached_entry_thumbnail", lambda fu, eid, link: "https://thumb.test/crop.jpg"
+    )
+    assert routes.entries.email_lead_image_url("https://blog.test/feed", "1", "https://blog.test/p") is None
+    yt = "https://www.youtube.com/feeds/videos.xml?channel_id=x"
+    assert routes.entries.email_lead_image_url(yt, "1", "https://youtu.be/x") == "https://thumb.test/crop.jpg"

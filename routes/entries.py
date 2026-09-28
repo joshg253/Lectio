@@ -2532,17 +2532,22 @@ def _email_full_body(feed_url: str, entry_id: str, link: str, stored: str) -> st
 
 
 def _email_article_extras(feed_url: str, entry_id: str, entry) -> dict:
-    """What makes a shared article look like the entry pane: its lead image (the raw article image, not the list thumbnail, which
-    can be a cropped panel; YouTube falls back to its computed thumbnail), author, and date."""
-    lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id) or lead_image_service.get_cached_entry_thumbnail(
-        feed_url, entry_id, str(entry.link or "")
-    )
+    """What makes a shared article look like the entry pane: its lead image, author, and date."""
     published = entry_effective_date(entry)
     return {
-        "lead_image_url": lead or None,
-        "author": str(getattr(entry, "author", None) or "").strip() or None,
+        "lead_image_url": email_lead_image_url(feed_url, entry_id, str(entry.link or "")),
+        "author": str(getattr(entry, "authors_str", None) or "").strip() or None,
         "published": f"{published:%b} {published.day}, {published:%Y}" if published else None,
     }
+
+
+def email_lead_image_url(feed_url: str, entry_id: str, link: str) -> str | None:
+    """The raw article lead image for an email hero. The list thumbnail is not a fallback — it can be a cropped panel or a promoted
+    variant — except for YouTube, whose computed "thumbnail" is the full video frame."""
+    lead = lead_image_service.get_cached_lead_image_url(feed_url, entry_id)
+    if not lead and "youtube.com/feeds/videos.xml" in feed_url:
+        lead = lead_image_service.get_cached_entry_thumbnail(feed_url, entry_id, link)
+    return lead or None
 
 
 @router.post("/entries/email")
