@@ -2969,3 +2969,25 @@ def test_check_and_cache_webcomic_lock_logs_a_persist_failure(tmp_path: Path, mo
         service.check_and_cache_webcomic_lock("https://cad-comic.com/feed/", "e4", link)
 
     assert any("locked_until" in r.message for r in caplog.records)
+
+
+# --- author-context skip: only while the author element is still open ---
+
+
+def test_image_after_a_closed_byline_is_not_a_headshot():
+    """dorktower.com: the comic sits a few hundred chars below the WordPress byline span, which closed long before it — every
+    comic was skipped as the author's photo, leaving webcomic thumbnails empty."""
+    service = _build_service(Path("/tmp"), [])
+    html = (
+        '<span class="byline"> by <span class="author vcard"><a class="url fn n" href="/author/x/">X</a></span></span>'
+        '</div></header><div class="entry-content"><p><a href="/files/c.jpg">'
+        '<img class="aligncenter size-full wp-image-1" src="/files/2026/09/DorkTower2382.jpg" width="1440" height="2439"></a></p>'
+    )
+    url = service._extract_preferred_source_image_url(html, "https://www.dorktower.com/p/", "https://www.dorktower.com/p/")
+    assert url == "https://www.dorktower.com/files/2026/09/DorkTower2382.jpg"
+
+
+def test_image_inside_an_open_author_box_is_still_skipped():
+    service = _build_service(Path("/tmp"), [])
+    assert service._in_open_author_context('<div class="author-box"><div class="avatar">') is True
+    assert service._in_open_author_context('<address class="article-author">X</address><figure>') is False
