@@ -17294,6 +17294,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
 
         published_dt = entry_effective_date(entry)
         author_name = (getattr(entry, "authors_str", None) or "").strip() or None
+        # DA Watch feed: byline gets an Unwatch ✕. The feed file only carries the newest 50 posts, so
+        # posts that aged out before author capture shipped never got an author in reader — fall back
+        # to our DA store (matched on link).
+        da_watch_artist = None
+        if deviantart_service.deviantart_feed_id_from_url(str(feed_url)) and str(feed_url) == deviantart_watch_feed_url():
+            da_watch_artist = deviantart_service.username_from_url(str(entry.link or ""))
+            if not author_name and entry.link:
+                with get_meta_connection() as _da_conn:
+                    _row = _da_conn.execute(
+                        "SELECT author FROM deviantart_entries WHERE entry_url = ? AND author != '' LIMIT 1", (str(entry.link),)
+                    ).fetchone()
+                author_name = (str(_row["author"]) if _row else None) or da_watch_artist
 
         content_html = _resolve_entry_content_html(entry)
 
@@ -17956,6 +17968,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "feed_tag_filter_signs": feed_tag_filter_signs,
             "feed_tag_inherited_signs": feed_tag_inherited_signs,
             "author_filter_token": _author_token,
+            "da_watch_artist": da_watch_artist,
             "feed_icon_url": get_favicon_url(entry.feed_url, getattr(entry.feed, "link", None) if hasattr(entry, "feed") else None),
             "pending_lead_image": _pending_lead_image,
             "audio_feed_suggestion": _audio_feed_suggestion,
@@ -23100,6 +23113,77 @@ def _hard_delete_entry(reader, feed_url: str, entry_id: str, entry) -> None:
         reader.delete_entry((feed_url, entry_id), missing_ok=True)
     else:
         reader._storage.delete_entries([(feed_url, entry_id)])
+
+
+def deviantart_watch_feed_url() -> str | None:
+    """file:// URL of the combined DeviantArt Watch feed, or None if it isn't set up."""
+    with get_meta_connection() as conn:
+        row = conn.execute("SELECT id FROM deviantart_feeds WHERE source = 'watch' LIMIT 1").fetchone()
+    return deviantart_service.feed_file_url(str(row["id"])) if row else None
+
+
+def apply_deviantart_unwatch_posts_action(username: str, action: str) -> int:
+    """After un-Watching an artist, handle their posts already in the Watch feed.
+
+    ``action``: ``keep`` (leave as-is), ``read`` (mark unread ones read) or ``purge``
+    (tombstone + delete; starred, archived and tagged posts are always spared). Posts are
+    matched by link (``deviantart.com/<user>/...``), not byline — most older posts have no
+    author. Returns how many posts were marked read / deleted."""
+    feed_url = deviantart_watch_feed_url()
+    target = username.strip().lower()
+    if action not in ("read", "purge") or not feed_url or not target:
+        return 0
+    like = "%deviantart.com/" + target.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+    with get_reader() as reader:
+        rows = (
+            reader._storage.get_db()
+            .execute(
+                f"""SELECT e.id, e.link, e.read FROM entries e
+                WHERE e.feed = ? AND e.link LIKE ? ESCAPE '\\'
+                  AND NOT EXISTS (SELECT 1 FROM entry_tags t WHERE t.feed = e.feed AND t.id = e.id
+                                  AND t.key LIKE '{MANUAL_TAG_KEY_PREFIX}%')""",
+                (feed_url, like),
+            )
+            .fetchall()
+        )
+        ids = [str(eid) for eid, link, read in rows if (deviantart_service.username_from_url(str(link or "")) or "").lower() == target]
+        if action == "read":
+            unread = {str(eid) for eid, _link, read in rows if not read}
+            pairs = [(feed_url, eid) for eid in ids if eid in unread]
+            for pair in pairs:
+                reader.mark_entry_as_read(pair)
+            if pairs:
+                now_str = datetime.now().isoformat()
+                with get_meta_connection() as conn:
+                    conn.executemany(
+                        "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?,?,?)"
+                        " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at=excluded.read_at",
+                        [(fu, eid, now_str) for fu, eid in pairs],
+                    )
+                _bump_unread_counts_generation()
+            invalidate_unread_counts_cache()
+            return len(pairs)
+
+        with get_meta_connection() as conn:
+            protected = {
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT entry_id FROM saved_entries WHERE feed_url = ? UNION SELECT entry_id FROM archived_entries WHERE feed_url = ?",
+                    (feed_url, feed_url),
+                )
+            }
+        pairs = [(feed_url, eid) for eid in ids if eid not in protected]
+        for i in range(0, len(pairs), _PRUNE_DELETE_BATCH):
+            batch = pairs[i : i + _PRUNE_DELETE_BATCH]
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO deleted_entries (feed_url, entry_id, created_at) VALUES (?, ?, ?)",
+                    [(fu, eid, datetime.now().isoformat()) for fu, eid in batch],
+                )
+                conn.executemany("DELETE FROM entry_read_state WHERE feed_url = ? AND entry_id = ?", batch)
+            reader._storage.delete_entries(batch)
+    invalidate_unread_counts_cache()
+    return len(pairs)
 
 
 # Tested directly as main._ENTRY_LINK_MAX_LEN by tests/integration/test_entry_link_override.py;

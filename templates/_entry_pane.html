@@ -60,7 +60,15 @@
         >{% if selected_entry.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
-        <span class="entry-author-inline">by {{ selected_entry.author }}{% if selected_entry.author_filter_token %}
+        <span class="entry-author-inline">by {{ selected_entry.author }}{% if selected_entry.da_watch_artist %}
+        <button
+          type="button"
+          class="feed-tag-filter-sign da-unwatch"
+          data-da-unwatch="{{ selected_entry.da_watch_artist }}"
+          title="Unwatch {{ selected_entry.da_watch_artist }} on DeviantArt"
+          aria-label="Unwatch {{ selected_entry.da_watch_artist }} on DeviantArt"
+        >✕</button>
+        {% elif selected_entry.author_filter_token %}
         {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
         {% set author_inherited = (selected_entry.feed_tag_inherited_signs or {}).get(selected_entry.author_filter_token) if not author_sign else none %}
         {% set author_inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}

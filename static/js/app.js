@@ -17620,6 +17620,37 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       submitFolderDeletion(action, moveTo);
     });
 
+    document.getElementById('da-unwatch-confirm')?.addEventListener('click', async (event) => {
+      const confirmButton = event.currentTarget;
+      const modal = document.getElementById('da-unwatch-modal');
+      const username = document.getElementById('da-unwatch-name')?.textContent || '';
+      const posts = modal?.querySelector('input[name="da-unwatch-posts"]:checked')?.value || 'keep';
+      if (!username) return;
+      confirmButton.disabled = true;
+      try {
+        const resp = await fetch('/deviantart/unwatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          credentials: 'same-origin',
+          body: new URLSearchParams({ username, posts }).toString(),
+        });
+        const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        if (!resp.ok || !data.ok) throw new Error(data.error || 'failed');
+        modal?.setAttribute('hidden', '');
+        const n = data.count || 0;
+        const tail = posts === 'read' ? ` — ${n} post${n === 1 ? '' : 's'} marked read`
+          : posts === 'purge' ? ` — ${n} post${n === 1 ? '' : 's'} deleted` : '';
+        showToastMessage((data.was_watching === false ? `${username} wasn't on your DeviantArt Watch list` : `Unwatched ${username} on DeviantArt`) + tail);
+        if (posts !== 'keep' && n) {
+          await loadScopePanesWithoutFullRefresh(window.location.href, false);
+        }
+      } catch (err) {
+        showToastMessage('Unwatch failed: ' + (err.message || err));
+      } finally {
+        confirmButton.disabled = false;
+      }
+    });
+
     youtubeSyncButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -18974,6 +19005,23 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             showToastMessage('Filter update failed: ' + (err.message || err));
             signButton.disabled = false;
           }
+        });
+      }
+
+      // ✕ on a DeviantArt Watch-feed byline: unwatch the artist, asking what to do with their posts here.
+      for (const unwatchButton of document.querySelectorAll('[data-da-unwatch]')) {
+        if (unwatchButton.dataset.boundClick) {
+          continue;
+        }
+        unwatchButton.dataset.boundClick = '1';
+        unwatchButton.addEventListener('click', () => {
+          const modal = document.getElementById('da-unwatch-modal');
+          const nameEl = document.getElementById('da-unwatch-name');
+          if (!modal || !nameEl) return;
+          nameEl.textContent = unwatchButton.getAttribute('data-da-unwatch') || '';
+          const keep = modal.querySelector('input[name="da-unwatch-posts"][value="keep"]');
+          if (keep instanceof HTMLInputElement) keep.checked = true;
+          modal.removeAttribute('hidden');
         });
       }
 

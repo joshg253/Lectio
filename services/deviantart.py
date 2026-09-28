@@ -916,6 +916,24 @@ def watch_user(access_token: str, username: str) -> tuple[bool, str]:
     return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
 
 
+def unwatch_user(access_token: str, username: str) -> tuple[bool, str]:
+    """Remove `username` from the authenticated user's Watch list. Returns (ok, message)."""
+    resp = _request("GET", f"{_API_BASE}/user/friends/unwatch/{username}", headers=_user_headers(access_token))
+    is_json = resp.headers.get("content-type", "").startswith("application/json")
+    if resp.status_code == 200 and (resp.json().get("success") if is_json else False):
+        return True, "ok"
+    return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
+
+
+def is_watching(access_token: str, username: str) -> bool | None:
+    """Whether the authenticated user Watches `username`; None when DA doesn't say."""
+    resp = _request("GET", f"{_API_BASE}/user/friends/watching/{username}", headers=_user_headers(access_token))
+    if resp.status_code != 200 or not resp.headers.get("content-type", "").startswith("application/json"):
+        return None
+    watching = resp.json().get("watching")
+    return watching if isinstance(watching, bool) else None
+
+
 # --- Expiring image URLs (mature deviations) ---------------------------------
 # DA serves images from wixmp with a signed JWT in the query string. Ordinary
 # deviations get a permanently-signed URL, but **mature** ones are signed with
