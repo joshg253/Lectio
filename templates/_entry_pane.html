@@ -63,14 +63,15 @@
         <span class="entry-author-inline">by {{ selected_entry.author }}{% if selected_entry.author_filter_token %}
         {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
         {% set author_inherited = (selected_entry.feed_tag_inherited_signs or {}).get(selected_entry.author_filter_token) if not author_sign else none %}
+        {% set author_inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}
         <span class="author-filter-signs">
           <button
             type="button"
             class="feed-tag-filter-sign include{% if author_sign == '+' %} active{% elif author_inherited == '+' %} inherited{% endif %}"
             data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
             data-tag-filter-sign="+"
-            title="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
-            aria-label="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops"
+            title="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops{% if author_inherited == '+' %}{{ author_inherited_note }}{% endif %}"
+            aria-label="Feed filter: good author — rescues posts by {{ selected_entry.author }} from drops{% if author_inherited == '+' %}{{ author_inherited_note }}{% endif %}"
             aria-pressed="{{ 'true' if author_sign == '+' else 'false' }}"
           >▲</button>
           <button
@@ -78,8 +79,8 @@
             class="feed-tag-filter-sign exclude{% if author_sign == '-' %} active{% elif author_inherited == '-' %} inherited{% endif %}"
             data-tag-filter-tag="{{ selected_entry.author_filter_token }}"
             data-tag-filter-sign="-"
-            title="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
-            aria-label="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them)"
+            title="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them){% if author_inherited == '-' %}{{ author_inherited_note }}{% endif %}"
+            aria-label="Feed filter: drop posts by {{ selected_entry.author }} (unless a good tag rescues them){% if author_inherited == '-' %}{{ author_inherited_note }}{% endif %}"
             aria-pressed="{{ 'true' if author_sign == '-' else 'false' }}"
           >▼</button>
         </span>
@@ -263,8 +264,9 @@
         {% set collapse_after = selected_entry.feed_tag_chips_collapsed or 8 %}
         {% for tag in selected_entry.feed_tag_suggestions %}
         {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
-        {# Set by an enabled folder/global rule, shown only where the feed's own rule is silent on the tag. #}
+        {# Set by an enabled broader (folder/global/multi-feed) rule, shown only where the feed's own rule is silent on the tag. #}
         {% set inherited_sign = (selected_entry.feed_tag_inherited_signs or {}).get(tag) if not active_sign else none %}
+        {% set inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}
         {# Past the collapse point the chip is present but hidden, not omitted:
            a publisher's platform tags sort late (RPS puts "PC" 10th of 28), and
            an absent chip cannot be filtered on at all. #}
@@ -303,8 +305,8 @@
             class="feed-tag-filter-sign include{% if active_sign == '+' %} active{% elif inherited_sign == '+' %} inherited{% endif %}"
             data-tag-filter-tag="{{ tag }}"
             data-tag-filter-sign="+"
-            title="Feed filter: good tag — rescues #{{ tag }} posts from drops{% if inherited_sign == '+' %} (set by a folder/global rule; clicking sets it on this feed){% endif %}"
-            aria-label="Feed filter: good tag — rescues #{{ tag }} posts from drops"
+            title="Feed filter: good tag — rescues #{{ tag }} posts from drops{% if inherited_sign == '+' %}{{ inherited_note }}{% endif %}"
+            aria-label="Feed filter: good tag — rescues #{{ tag }} posts from drops{% if inherited_sign == '+' %}{{ inherited_note }}{% endif %}"
             aria-pressed="{{ 'true' if active_sign == '+' else 'false' }}"
           >▲</button>
           <button
@@ -312,8 +314,8 @@
             class="feed-tag-filter-sign exclude{% if active_sign == '-' %} active{% elif inherited_sign == '-' %} inherited{% endif %}"
             data-tag-filter-tag="{{ tag }}"
             data-tag-filter-sign="-"
-            title="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them){% if inherited_sign == '-' %} (set by a folder/global rule; clicking sets it on this feed){% endif %}"
-            aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them)"
+            title="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them){% if inherited_sign == '-' %}{{ inherited_note }}{% endif %}"
+            aria-label="Feed filter: drop #{{ tag }} posts (unless a good tag rescues them){% if inherited_sign == '-' %}{{ inherited_note }}{% endif %}"
             aria-pressed="{{ 'true' if active_sign == '-' else 'false' }}"
           >▼</button>
           {% endif %}

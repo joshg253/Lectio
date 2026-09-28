@@ -7065,7 +7065,10 @@ def get_feed_tag_filter_rule(conn: sqlite3.Connection, feed_url: str) -> dict | 
 
 def get_inherited_tag_filter_signs(conn: sqlite3.Connection, feed_url: str) -> dict[str, str]:
     """tag -> '+'/'-' from ENABLED folder/global/multi-feed tag_filter rules covering feed_url. Display-only: the post-header chips
-    color these apart from the feed's own rule, so a filter set at a broader level is visible. Clicking still edits the feed rule."""
+    color these apart from the feed's own rule, so a filter set at a broader level is visible. Clicking still edits the feed rule.
+
+    The feed's own rule wins the display even while disabled: a chip click creates that rule disabled (armed later in Automation),
+    so the chips have to show its state for the click to visibly land."""
     rows = conn.execute(
         "SELECT keyword, scope, scope_id FROM highlight_keywords WHERE type = 'tag_filter' AND scope != 'feed' AND enabled = 1"
     ).fetchall()
