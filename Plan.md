@@ -98,6 +98,12 @@ do that first as the smaller, lower-risk step, and let it validate the shared-st
 extending to images/favicons. Worth a real plan before any of it, same bar as the dedup-combining
 idea below.
 
+### Similar-feeds Combine refuses when every candidate is failing
+
+The similar-feeds utility's Compare → Combine (app.js, "None of these returned valid feed data — nothing to combine") blocks the merge
+when no candidate fetches. Raised 2026-09-28 on a pair differing only by a trailing slash, both 403: Josh had to combine them by
+hand from Feeds. When the URLs differ only trivially (trailing slash, scheme, `www.`), still offer Combine with a survivor picker.
+
 **Dedup subsystem** — biggest single feature idea on the list.
 
 ### Combine cross-feed duplicates instead of marking one read

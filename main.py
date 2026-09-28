@@ -5233,12 +5233,12 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
 # Types whose `keyword` column is a plain search term (comma-list = OR of
 # terms, already how a single rule's multi-keyword list works) rather than
 # something else entirely -- deduplicate's is a match-method enum,
-# tag_filter's is a +/-tag spec (merged by its own _merge_tag_filter_specs),
 # youtube_playlist/instapaper/quire/save_article's is optional and its
 # semantics for the merge/action types aren't confirmed. Scoped to exactly
 # the two types the 2026-08-19 measurement found real mergeable groups in --
-# see Plan.md "Utilities: find rules that could be one rule".
-_MERGEABLE_RULE_TYPES = frozenset({"highlight", "mark_as_read"})
+# see Plan.md "Utilities: find rules that could be one rule". tag_filter is
+# mergeable too, but by spec union (_union_tag_filter_specs), not a keyword join.
+_MERGEABLE_RULE_TYPES = frozenset({"highlight", "mark_as_read", "tag_filter"})
 
 # Fields (besides scope/scope_id/type/search_in/is_regex/keyword) that change
 # a rule's *behavior*, not just its keyword list. Two rules that differ here
@@ -5270,6 +5270,8 @@ def find_mergeable_rule_groups(conn: sqlite3.Connection) -> tuple[list[dict], li
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, sort_order"
         " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
+        # Disabled tag filters are chip-tuning drafts (see toggle_feed_tag_filter); merging one would arm it.
+        " OR (type = 'tag_filter' AND enabled = 1)"
         " ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     by_identity: dict[tuple, list[dict]] = {}
@@ -5290,16 +5292,17 @@ def find_mergeable_rule_groups(conn: sqlite3.Connection) -> tuple[list[dict], li
         leftover: list[dict] = []
         for settings_rows in by_settings.values():
             if len(settings_rows) >= 2:
-                groups.append(
-                    {
-                        "type": rule_type,
-                        "scope": scope,
-                        "scope_id": scope_id,
-                        "search_in": search_in,
-                        "is_regex": is_regex,
-                        "rules": settings_rows,
-                    }
-                )
+                group = {
+                    "type": rule_type,
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "search_in": search_in,
+                    "is_regex": is_regex,
+                    "rules": settings_rows,
+                }
+                if rule_type == "tag_filter":
+                    group["behavior_change"] = _tag_filter_merge_changes_behavior([r["keyword"] for r in settings_rows])
+                groups.append(group)
             else:
                 leftover.extend(settings_rows)
         if len(leftover) >= 2:
@@ -5347,11 +5350,14 @@ def merge_highlight_rule_group(
     """
     if rule_type not in _MERGEABLE_RULE_TYPES:
         return None
+    # Same draft exclusion as find_mergeable_rule_groups: a disabled tag filter is never swept into a merge.
+    enabled_clause = " AND enabled = 1" if rule_type == "tag_filter" else ""
     rows = conn.execute(
         "SELECT rowid, * FROM highlight_keywords"
         " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
         " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?"
-        " ORDER BY sort_order ASC, rowid ASC",
+        + enabled_clause
+        + " ORDER BY sort_order ASC, rowid ASC",
         (
             rule_type,
             scope,
@@ -5376,7 +5382,9 @@ def merge_highlight_rule_group(
         kw = str(r["keyword"] or "").strip()
         if kw and kw not in seen_kw:
             seen_kw.append(kw)
-    if is_regex:
+    if rule_type == "tag_filter":
+        merged_keyword = _union_tag_filter_specs(seen_kw)
+    elif is_regex:
         merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
     else:
         # Flatten to the individual-keyword level too, so merging a rule that
@@ -5395,7 +5403,7 @@ def merge_highlight_rule_group(
     conn.execute(
         "DELETE FROM highlight_keywords"
         " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
-        " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?",
+        " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?" + enabled_clause,
         (
             rule_type,
             scope,
@@ -5474,6 +5482,8 @@ def find_regex_convertible_rule_groups(conn: sqlite3.Connection) -> list[dict]:
         "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
         " email_to, batch_time, batch_count, cc_me, sort_order"
         " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
+        # Disabled tag filters are chip-tuning drafts (see toggle_feed_tag_filter); merging one would arm it.
+        " OR (type = 'tag_filter' AND enabled = 1)"
         " ORDER BY sort_order ASC, rowid ASC"
     ).fetchall()
     by_identity: dict[tuple, list[dict]] = {}
@@ -5606,6 +5616,54 @@ def _split_plain_keywords(raw: str) -> set[str]:
 
 
 def find_redundant_feed_rules(conn: sqlite3.Connection) -> list[dict]:
+    """Plain keyword feed rules covered by a folder rule, plus tag_filter feed rules that do nothing (see the two helpers)."""
+    return _find_redundant_keyword_feed_rules(conn) + _find_redundant_tag_filter_feed_rules(conn)
+
+
+def _find_redundant_tag_filter_feed_rules(conn: sqlite3.Connection) -> list[dict]:
+    """Enabled tag_filter feed rules that change nothing: ``no_op`` when the spec has no ``-``/``++`` tag at all (a ``+`` only
+    rescues from its own rule's drops, never another rule's), ``covered`` when every ``-`` tag is already dropped by an enabled
+    folder tag_filter rule on a folder holding the feed that rescues no more than the feed rule does. ``++`` feed rules are never
+    flagged: a whitelist's cut isn't reproduced by anything else."""
+    feed_rows = conn.execute(
+        "SELECT scope_id AS feed_url, keyword FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'feed' AND enabled = 1"
+    ).fetchall()
+    if not feed_rows:
+        return []
+    folder_specs: dict[int, list[tuple[set[str], set[str]]]] = {}  # folder_id -> [(exclude, saving)]
+    for r in conn.execute(
+        "SELECT scope_id, keyword FROM highlight_keywords WHERE type = 'tag_filter' AND scope = 'folder' AND enabled = 1"
+    ).fetchall():
+        try:
+            fid = int(r["scope_id"])
+        except TypeError, ValueError:
+            continue
+        req, good, exc = parse_tag_filter_spec(str(r["keyword"] or ""))
+        folder_specs.setdefault(fid, []).append((exc, req | good))
+
+    redundant = []
+    for r in feed_rows:
+        feed_url = str(r["feed_url"])
+        req, good, exc = parse_tag_filter_spec(str(r["keyword"] or ""))
+        if req:
+            continue
+        base = {"feed_url": feed_url, "keyword": r["keyword"], "type": "tag_filter", "search_in": "title"}
+        if not exc:
+            redundant.append({**base, "reason": "no_op", "covering_folder_id": None})
+            continue
+        feed_saving = good
+        for (fid,) in conn.execute("SELECT folder_id FROM folder_feeds WHERE feed_url = ?", (feed_url,)).fetchall():
+            covered = set()
+            for f_exc, f_saving in folder_specs.get(int(fid), []):
+                if f_saving <= feed_saving:
+                    covered |= f_exc
+            if exc <= covered:
+                redundant.append({**base, "reason": "covered", "covering_folder_id": int(fid)})
+                break
+    return redundant
+
+
+def _find_redundant_keyword_feed_rules(conn: sqlite3.Connection) -> list[dict]:
     """Feed-scoped rules already fully covered by a same-type, same-search_in
     folder rule on a folder the feed belongs to -- the folder rule already
     catches everything the feed rule would, so the feed rule does nothing.
@@ -5660,6 +5718,33 @@ def find_redundant_feed_rules(conn: sqlite3.Connection) -> list[dict]:
                 )
                 break
     return redundant
+
+
+# On a cross-rule sign conflict the union keeps the strongest: a drop outranks a whitelist, which outranks a rescue.
+_TAG_FILTER_SIGN_RANK = {"-": 2, "++": 1, "+": 0}
+
+
+def _union_tag_filter_specs(specs: list[str]) -> str:
+    """One tag_filter spec holding every signed tag in *specs*, first-seen order, deduped by tag."""
+    by_tag: dict[str, str] = {}
+    for spec in specs:
+        for token in spec.split(","):
+            token = token.strip()
+            sign = next((p for p in ("++", "+", "-") if token.startswith(p)), "")
+            tag = normalize_tag_value(token[len(sign) :])
+            sign = sign or "+"  # bare = good, as in parse_tag_filter_spec
+            if tag and (tag not in by_tag or _TAG_FILTER_SIGN_RANK[sign] > _TAG_FILTER_SIGN_RANK[by_tag[tag]]):
+                by_tag[tag] = sign
+    return ", ".join(f"{sign}{tag}" for tag, sign in by_tag.items())
+
+
+def _tag_filter_merge_changes_behavior(specs: list[str]) -> bool:
+    """Whether merging these tag_filter rules into one changes what they mark read.
+
+    A ``+``/``++`` tag only acts on its own rule's ``-`` tags, so separate rules are exactly their union only when they all share the
+    same ``+`` and ``++`` sets (e.g. all pure ``-`` rules). Otherwise a merge lets one rule's rescue reach another's drops."""
+    parsed = [parse_tag_filter_spec(s) for s in specs]
+    return any((req, good) != (parsed[0][0], parsed[0][1]) for req, good, _exc in parsed[1:])
 
 
 def _merge_tag_filter_specs(conn: sqlite3.Connection, feed_url: str, incoming: str) -> str | None:

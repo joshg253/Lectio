@@ -12248,10 +12248,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           if (ids.length <= 2) return ids.map(id => folderNames[id] || `Folder ${id}`).join(', ');
           return `${ids.length} folders`;
         }
-        if (scope === 'feed') return feedTitles[scopeId] || scopeId;
+        // Once the server's full feed list is in, a URL missing from it is a feed no longer subscribed: the rule is kept (it may
+        // just need re-pointing at the feed's new URL), but its raw URL/file path is no name to show.
+        const feedLabel = u => feedTitles[u] || (hlServerFeedTitles ? '(unsubscribed feed)' : u);
+        if (scope === 'feed') return feedLabel(scopeId);
         if (scope === 'feeds') {
           const urls = String(scopeId || '').split('\n').map(s => s.trim()).filter(Boolean);
-          if (urls.length <= 2) return urls.map(u => feedTitles[u] || u).join(', ');
+          if (urls.length <= 2) return urls.map(feedLabel).join(', ');
           return `${urls.length} feeds`;
         }
         return scope;
@@ -13142,6 +13145,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const typeLabel = HL_TYPE_LABELS[group.type] || group.type;
           label.textContent = `${group.rules.length} ${typeLabel} rules on ${hlScopeLabel(group.scope, group.scope_id)} could be one:`;
           card.appendChild(label);
+          if (group.behavior_change) {
+            // A +/++ tag only acts on its own rule's drops, so merging rules with different ones widens their reach.
+            const warn = document.createElement('div');
+            warn.className = 'hl-suggestion-label';
+            warn.textContent = '⚠ Changes behavior: each rule\'s + tags will start rescuing posts from every other rule\'s − tags (and ++ will apply to all of them).';
+            card.appendChild(warn);
+          }
           const chips = document.createElement('div');
           chips.className = 'hl-suggestion-chips';
           group.rules.forEach((r) => {
@@ -13240,7 +13250,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const label = document.createElement('div');
           label.className = 'hl-suggestion-label';
           const typeLabel = HL_TYPE_LABELS[r.type] || r.type;
-          label.textContent = `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule:`;
+          label.textContent = r.reason === 'no_op'
+            ? `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} does nothing — a + tag only rescues from − tags in the same rule:`
+            : `${typeLabel} rule "${r.keyword}" on ${hlScopeLabel('feed', r.feed_url)} is already covered by the ${hlScopeLabel('folder', String(r.covering_folder_id))} folder rule${r.type === 'tag_filter' ? 's' : ''}:`;
           card.appendChild(label);
           const btn = document.createElement('button');
           btn.type = 'button';

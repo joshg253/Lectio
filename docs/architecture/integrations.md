@@ -152,13 +152,13 @@ landed above, so multiple single-keyword rules sharing everything else
 accumulated from before that existed. The identity that makes rules
 mergeable is `(type, scope, scope_id, search_in, is_regex)` — two rules
 differing only in `keyword` collapse into one, joined as a comma list (plain)
-or `(a)|(b)` alternation (regex). Scoped to exactly `highlight` and
-`mark_as_read` (`_MERGEABLE_RULE_TYPES`): `deduplicate`'s keyword is a
-match-method enum, `tag_filter`'s is a +/-tag spec (already merged by its own
-`_merge_tag_filter_specs`, folded on add rather than offered as a suggestion),
-and the optional-keyword action types (`youtube_playlist`, `instapaper`,
-`quire`, `save_article`) aren't confirmed to share the same OR-of-terms
-semantics when non-blank.
+or `(a)|(b)` alternation (regex). Scoped to `highlight`, `mark_as_read` and `tag_filter` (`_MERGEABLE_RULE_TYPES`):
+`deduplicate`'s keyword is a match-method enum, and the optional-keyword action types (`youtube_playlist`, `instapaper`,
+`quire`, `save_article`) aren't confirmed to share the same OR-of-terms semantics when non-blank.
+
+`tag_filter` groups (enabled rules only — disabled ones are chip drafts) merge by spec union (`_union_tag_filter_specs`, deduped by
+tag; on a sign conflict `-` beats `++` beats `+`). A `+`/`++` tag only acts on its own rule's `-` tags, so the union equals the
+separate rules only when they share the same `+`/`++` sets; otherwise the group carries `behavior_change` and the card warns.
 
 **A same-identity group is not automatically the same rule.** Two rules can
 share type/scope/search_in/is_regex and still mean different things —
@@ -217,6 +217,10 @@ the folder rule already catches everything it would. Plain rules only (a
 regex's language isn't decidable as a subset this way). Flagged for removal
 via the existing `/highlights/remove`, not a new endpoint — removing one rule
 was already a solved problem.
+
+For `tag_filter` feed rules (`_find_redundant_tag_filter_feed_rules`): `covered` when every `-` tag is dropped by enabled folder
+tag_filter rules that rescue no more than the feed rule does; `no_op` when the spec is `+` only, since a `+` never rescues from
+another rule's drops. `++` feed rules are never flagged.
 
   It's a **general** automation rule (any feed/folder scope, via the shared
   `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
