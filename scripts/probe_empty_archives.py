@@ -19,10 +19,16 @@ to pick up -- this script deliberately does not recapture anything itself,
 same reasoning recapture_archived_entries.py already gives for staying
 entry-at-a-time rather than a blind bulk mode.
 
+With --write it also backfills archived_entry.source_fetch_status (added 2026-09-23; NULL on rows captured before) for rows that
+are still NULL, using the capture-time classifier (starred_archive._classify_fetch_error): http_<code>, timeout, tls, connect,
+blocked, error, or no_link. A row whose page is reachable NOW is left NULL on purpose -- its capture really did fail, and a recapture
+(which records a real status) is the fix, not an "ok" that would hide it. The status is as of the probe, not the original capture.
+
 Usage:
     docker compose exec lectio uv run scripts/probe_empty_archives.py --user u_x
     docker compose exec lectio uv run scripts/probe_empty_archives.py --user u_x --json out.json
     docker compose exec lectio uv run scripts/probe_empty_archives.py --user u_x --limit 50
+    docker compose exec lectio uv run scripts/probe_empty_archives.py --user u_x --write
 """
 
 from __future__ import annotations
@@ -37,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
 from services import tenancy, url_guard  # noqa: E402
+from services.starred_archive import _classify_fetch_error  # noqa: E402
 
 _DELAY_SECONDS = 1.0
 
@@ -50,6 +57,7 @@ def _find_candidates(conn) -> list[dict]:
           AND (source_html_zlib IS NULL OR LENGTH(source_html_zlib) = 0)
           AND (readability_html_zlib IS NULL OR LENGTH(readability_html_zlib) = 0)
           AND (content_html_zlib IS NULL OR LENGTH(content_html_zlib) = 0)
+          AND source_fetch_status IS NULL
         """
     ).fetchall()
     return [dict(r) for r in rows]
@@ -57,21 +65,30 @@ def _find_candidates(conn) -> list[dict]:
 
 def _probe(url: str) -> dict:
     if not url:
-        return {"verdict": "no-link"}
+        return {"verdict": "no-link", "fetch_status": "no_link"}
     try:
         with url_guard.build_client(timeout=15, headers={"User-Agent": "Mozilla/5.0 (compatible; Lectio/1.0)"}) as client:
             resp = url_guard.safe_get(client, url)
     except Exception as exc:  # noqa: BLE001 -- any fetch failure is a verdict, not a crash
-        return {"verdict": "unreachable", "detail": f"{type(exc).__name__}: {exc}"[:200]}
+        return {"verdict": "unreachable", "detail": f"{type(exc).__name__}: {exc}"[:200], "fetch_status": _classify_fetch_error(exc)}
     if resp.status_code >= 400:
-        return {"verdict": "dead", "status": resp.status_code}
+        return {"verdict": "dead", "status": resp.status_code, "fetch_status": f"http_{resp.status_code}"}
     body_len = len(resp.text or "")
     if body_len < 500:
         return {"verdict": "thin", "status": resp.status_code, "bytes": body_len}
     return {"verdict": "reachable", "status": resp.status_code, "bytes": body_len}
 
 
-def run(uid: str, limit: int | None, json_path: str | None) -> None:
+def _write_status(uid: str, row: dict, fetch_status: str) -> None:
+    with tenancy.user_context(uid):
+        with main.archive_conn() as conn:
+            conn.execute(
+                "UPDATE archived_entry SET source_fetch_status = ? WHERE feed_url = ? AND entry_id = ? AND source_fetch_status IS NULL",
+                (fetch_status, row["feed_url"], row["entry_id"]),
+            )
+
+
+def run(uid: str, limit: int | None, json_path: str | None, write: bool = False) -> None:
     with tenancy.user_context(uid):
         with main.archive_conn() as conn:
             candidates = _find_candidates(conn)
@@ -84,6 +101,8 @@ def run(uid: str, limit: int | None, json_path: str | None) -> None:
     for i, row in enumerate(candidates, 1):
         verdict = _probe(row.get("link") or row["entry_id"])
         counts[verdict["verdict"]] = counts.get(verdict["verdict"], 0) + 1
+        if write and verdict.get("fetch_status"):
+            _write_status(uid, row, verdict["fetch_status"])
         results.append({**row, **verdict})
         if i % 25 == 0 or i == len(candidates):
             print(f"  [{i}/{len(candidates)}] {counts}", flush=True)
@@ -104,8 +123,9 @@ def main_cli() -> int:
     ap.add_argument("--user", required=True, help="user_id to operate on")
     ap.add_argument("--limit", type=int, default=None, help="cap the number of entries probed")
     ap.add_argument("--json", dest="json_path", default=None, help="write full per-entry results to this path")
+    ap.add_argument("--write", action="store_true", help="backfill source_fetch_status for rows that failed the probe")
     args = ap.parse_args()
-    run(args.user, args.limit, args.json_path)
+    run(args.user, args.limit, args.json_path, args.write)
     return 0
 
 
