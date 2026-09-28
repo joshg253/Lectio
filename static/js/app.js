@@ -13496,7 +13496,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           // _dry_run_pattern) -- saying "(read + unread)" when the scan was
           // actually unread-only claimed a broader check than really happened.
           const scopeLabel = data.unread_only ? 'unread entries' : 'entries (read + unread)';
-          if (matches.length === 0) {
+          if (data.unread_only) {
+            // Unread = exactly what Run Now marks (every unread entry checked); the recent read sample shows how well the rule
+            // matches at all, which an unread-only preview right after a run can't.
+            const n = data.total_matches || 0;
+            const r = data.total_matches_read || 0;
+            summary.textContent = n + ' of ' + (data.total_scanned || 0) + ' unread would be marked read' +
+              (data.truncated ? ' (showing first 20)' : '') +
+              ' · ' + r + ' match' + (r === 1 ? '' : 'es') + ' (✓) in the last ' + (data.read_scanned || 0) + ' read' +
+              (data.read_truncated ? ' (showing first 20)' : '');
+          } else if (matches.length === 0) {
             summary.textContent = 'No matches in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;
           } else {
             summary.textContent = data.total_matches + ' match' + (data.total_matches === 1 ? '' : 'es') + (data.truncated ? ' (showing first 20)' : '') + ' in last ' + (data.total_scanned || 0) + ' ' + scopeLabel;

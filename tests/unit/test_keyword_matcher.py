@@ -212,6 +212,28 @@ def test_dry_run_unread_only_reaches_a_match_the_capped_scan_would_miss(isolated
     assert uncapped["unread_only"] is True
 
 
+def test_dry_run_unread_only_also_reports_recent_read_matches_apart(isolated_reader):
+    """Right after a Run Now nothing unread matches, which says nothing about the rule -- the preview also samples recent read
+    entries, counted separately so the unread figure stays exactly what Run Now would mark."""
+    feed = "https://example.test/read-sample-feed"
+    reader = main.get_reader()
+    try:
+        reader.add_feed(feed, allow_invalid_url=True)
+    except Exception:
+        pass
+    for eid, title in (("u1", "Apple news"), ("r1", "Apple old news"), ("r2", "unrelated")):
+        reader.add_entry({"feed_url": feed, "id": eid, "title": title, "link": f"https://example.test/{eid}"})
+    reader.mark_entry_as_read((feed, "r1"))
+    reader.mark_entry_as_read((feed, "r2"))
+
+    with main.get_meta_connection() as conn:
+        out = automation_routes._dry_run_pattern(conn, "feed", feed, "Apple", False, "title", max_entries=5, unread_only=True)
+
+    assert (out["total_matches"], out["total_scanned"]) == (1, 1)
+    assert (out["total_matches_read"], out["read_scanned"]) == (1, 2)
+    assert [(m["title"], m["read"]) for m in out["matches"]] == [("Apple news", False), ("Apple old news", True)]
+
+
 # --- curly punctuation folds, so a term matches either spelling ---------------
 
 
