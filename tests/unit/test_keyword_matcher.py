@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main  # must sort before routes.automation — see routes/__init__.py
 from routes import automation as automation_routes
@@ -25,12 +26,7 @@ def isolated_reader(tmp_path):
     test against that shared state (found 2026-09-02)."""
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     try:
         yield

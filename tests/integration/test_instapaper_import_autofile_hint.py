@@ -12,6 +12,7 @@ visible and nothing is pre-checked.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from routes import system as system_routes
@@ -36,12 +37,7 @@ def configured(tmp_path, monkeypatch):
     saved = tenancy._layout
     saved_store = main.user_store
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     main.user_store = None
     monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda feed_url, entry_id: None)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 from services import tenancy
 from services.starred_archive import StarredArchiveService
@@ -36,12 +37,7 @@ def _make_archive_db(path) -> None:
 @pytest.fixture
 def configured(tmp_path):
     saved = tenancy._layout
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "lectio_reader.sqlite",
-        legacy_meta=tmp_path / "lectio_meta.sqlite3",
-        legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         yield tmp_path
     finally:

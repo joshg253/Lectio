@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from _tenancy_helpers import TEST_USER_ID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -362,7 +363,7 @@ def test_run_in_user_context_binds_user_inside_worker():
     main._run_in_user_context("u_worker", lambda: seen.append(tenancy.current_user_id()))
     assert seen == ["u_worker"]
     # And it restores the prior binding afterward.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.current_user_id() == TEST_USER_ID
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import json
 from datetime import datetime, timezone
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import inoreader_import as inoreader_import_service
@@ -31,12 +32,7 @@ FEED_STORED_NONCANONICAL = "https://example.test/feed/"  # trailing slash
 def configured(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     try:
         yield

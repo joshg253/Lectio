@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,12 +22,7 @@ def _reset_pools():
 def env(tmp_path, monkeypatch):
     saved_layout = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
 
     auth_db = tmp_path / "lectio_auth.sqlite"
     from services.users import UserStore

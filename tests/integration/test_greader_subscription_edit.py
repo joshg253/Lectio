@@ -4,6 +4,7 @@ previously a no-op stub, so Capy's "move feed to folder" silently reverted."""
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main  # must sort before routes.compat_greader — see routes/__init__.py
 import routes.compat_greader as compat_greader
@@ -16,12 +17,7 @@ FEED = "http://skillport.example/rss.asp?eid=1"
 def configured(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)

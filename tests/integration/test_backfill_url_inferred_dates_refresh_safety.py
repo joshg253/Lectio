@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,12 +29,7 @@ FEED = "https://example.test/feed"
 def configured(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
@@ -86,14 +82,14 @@ def test_refresh_recomputes_only_rows_this_tool_wrote(configured):
     assert manual_before is not None and manual_before[1] == "manual"
 
     # This tool's own write, from a normal backfill pass.
-    changed = backfill.backfill_for_user(tenancy.DEFAULT_USER_ID, apply=True, feed_filter=FEED, refresh=False)
+    changed = backfill.backfill_for_user(TEST_USER_ID, apply=True, feed_filter=FEED, refresh=False)
     assert changed == 1
     inferred_before = _override_row("inferred-1")
     assert inferred_before is not None and inferred_before[1] == "inferred"
 
     # --refresh over the same feed must recompute the inferred row and leave
     # the manual one byte-for-byte untouched.
-    refreshed = backfill.backfill_for_user(tenancy.DEFAULT_USER_ID, apply=True, feed_filter=FEED, refresh=True)
+    refreshed = backfill.backfill_for_user(TEST_USER_ID, apply=True, feed_filter=FEED, refresh=True)
     assert refreshed == 1
 
     manual_after = _override_row("manual-1")

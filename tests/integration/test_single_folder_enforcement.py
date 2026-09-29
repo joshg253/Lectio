@@ -5,6 +5,7 @@ collapses feeds that drifted into several folders."""
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 import routes.feeds
@@ -21,12 +22,7 @@ def _reset_reader_pool():
 def configured(tmp_path):
     saved = tenancy._layout
     _reset_reader_pool()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_meta_connection() as conn:
         root_id = main.get_root_folder_id(conn)

@@ -33,6 +33,10 @@ The resolver and per-user connection pools live in `services/tenancy.py`;
 `main.py` resolve through it. The current user is a `contextvars.ContextVar` that
 defaults to `DEFAULT_USER_ID`.
 
+Tests run as a real user: an autouse conftest fixture binds `test`, and `configure_test_tenancy(tmp_path)` (in
+`tests/_tenancy_helpers.py`) points the legacy default-user paths at a directory that never exists, so an unbound resolution
+fails in tests instead of quietly using a stray DB. Tests about unbound behavior opt out with `unbound_tenancy()`.
+
 **The archive connection is the odd one out: it is not pooled.**
 `get_starred_archive_connection()` returns a *fresh* connection per call, so
 the caller owns closing it. `with conn:` does not — that is sqlite3's

@@ -15,11 +15,27 @@ so the spawned thread has nothing real to do.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import main
 import routes.saved
+from services import tenancy
+
+
+@pytest.fixture(autouse=True)
+def _isolated_meta(tmp_path):
+    # The route reads folders from the meta DB, so give it a schema'd one rather than whatever main's shared test-data dir holds.
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    configure_test_tenancy(tmp_path)
+    main.ensure_meta_schema()
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
 
 
 @pytest.fixture(autouse=True)

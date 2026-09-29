@@ -24,6 +24,7 @@ import time
 from typing import cast
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import Request
 
 import main
@@ -40,12 +41,7 @@ def _reset_pools() -> None:
 def env(tmp_path, monkeypatch):
     saved_layout = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     main.ensure_meta_schema()
     monkeypatch.setattr(yt_routes, "get_youtube_oauth_token", lambda: "test-token")

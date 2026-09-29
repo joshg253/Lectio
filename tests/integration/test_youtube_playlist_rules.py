@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main  # must sort before routes.automation — see routes/__init__.py
 from routes import automation as automation_routes
@@ -28,12 +29,7 @@ def _reset_pools():
 def env(tmp_path, monkeypatch):
     saved = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     # A connected account by default; tests can override.
     monkeypatch.setattr(automation_rules, "get_youtube_oauth_token", lambda: "tok")
@@ -101,12 +97,7 @@ def test_add_route_accepts_blank_keyword(tmp_path, monkeypatch):
     # main.META_DB_PATH alone doesn't redirect the tenancy resolver).
     saved = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "THUMB_DB_PATH", tmp_path / "thumb.sqlite")
     main.ensure_meta_schema()
     main.ensure_thumb_schema()

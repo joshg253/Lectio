@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import automation_rules, tenancy
@@ -20,12 +21,7 @@ def _reset_pools():
 def env(tmp_path, monkeypatch):
     saved = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_QUIRE_ACCESS_TOKEN, "qtok")

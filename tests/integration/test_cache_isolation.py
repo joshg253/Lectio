@@ -6,6 +6,8 @@ user's cached folder tree / settings / counts never show up for another.
 
 from __future__ import annotations
 
+from _tenancy_helpers import configure_test_tenancy
+
 import main
 from services import tenancy
 
@@ -57,12 +59,7 @@ def test_email_and_resend_are_instance_with_env_fallback(monkeypatch):
 def test_app_settings_cache_isolated_per_user(tmp_path, monkeypatch):
     # Point tenancy at a throwaway layout so we don't touch the shared test dir.
     saved = tenancy._layout
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "lectio_reader.sqlite",
-        legacy_meta=tmp_path / "lectio_meta.sqlite3",
-        legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     # Isolate the module cache so other tests aren't affected.
     monkeypatch.setattr(main, "_app_settings_cache", {})
     try:

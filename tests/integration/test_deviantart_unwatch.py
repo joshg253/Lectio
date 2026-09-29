@@ -10,6 +10,7 @@ import re
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -46,12 +47,7 @@ def _rss(posts) -> str:
 def watch_feed(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     deviantart_service.init(tmp_path)
     monkeypatch.setattr(deviantart_routes, "get_deviantart_user_token", lambda: "user-token")

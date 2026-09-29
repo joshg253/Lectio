@@ -7,6 +7,8 @@ are identified by their stable user_id.
 
 from __future__ import annotations
 
+from _tenancy_helpers import TEST_USER_ID
+
 import main
 from services import tenancy
 from services.users import UserStore
@@ -33,7 +35,7 @@ def test_scheduled_refresh_binds_each_user(monkeypatch, tmp_path):
     main._run_scheduled_refresh_for_all_users()
 
     assert set(seen) == {a, b}
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.current_user_id() == TEST_USER_ID
 
 
 def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
@@ -50,8 +52,8 @@ def test_daily_maintenance_per_user_then_global(monkeypatch, tmp_path):
     main._run_daily_maintenance()
 
     assert set(per_user) == {a, b}
-    assert global_runs == [tenancy.DEFAULT_USER_ID]  # global work runs once, unbound
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert global_runs == [TEST_USER_ID]  # global work runs once, in the caller's context rather than a per-user one
+    assert tenancy.current_user_id() == TEST_USER_ID
 
 
 def test_one_users_failure_does_not_stop_others(monkeypatch, tmp_path):
@@ -72,4 +74,4 @@ def test_one_users_failure_does_not_stop_others(monkeypatch, tmp_path):
     main._run_scheduled_refresh_for_all_users()
 
     assert set(seen) == {a, b}
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.current_user_id() == TEST_USER_ID

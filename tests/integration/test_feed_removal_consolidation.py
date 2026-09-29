@@ -22,6 +22,7 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 from fastapi import Request
 from fastapi.testclient import TestClient
 
@@ -52,12 +53,7 @@ def env(tmp_path, monkeypatch):
     """Minimal single-user env: reader + meta DB in tmp_path."""
     saved_layout = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     main.ensure_meta_schema()
     main.ensure_websub_schema()
@@ -127,7 +123,7 @@ class TestPurgeOrphanedFeed:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED, archive_pending=True)
         archive_mock.assert_called_once_with(FEED)
-        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, TEST_USER_ID)
         # Feed should be gone from reader.
         with main.get_reader() as reader:
             assert not any(True for _ in reader.get_feeds())
@@ -243,7 +239,7 @@ class TestUnsubscribeRoute:
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED, archive_pending=True)
-        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, TEST_USER_ID)
 
     def test_unsubscribe_via_remove_feed_from_folder_calls_websub(self, env, monkeypatch):
         """remove_feed_from_folder (used by the unsubscribe route helper) calls websub."""
@@ -253,7 +249,7 @@ class TestUnsubscribeRoute:
         monkeypatch.setattr(main, "websub_service", ws_mock)
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.remove_feed_from_folder(FEED, fid)
-        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, TEST_USER_ID)
 
     def test_unsubscribe_via_remove_feed_calls_da_delete(self, env, monkeypatch):
         """remove_feed_from_folder routes DA feeds through deviantart_service.delete_deviantart_feed."""
@@ -376,7 +372,7 @@ class TestDeleteFolder:
         monkeypatch.setattr(main, "websub_service", ws_mock)
         monkeypatch.setattr(main.starred_archive_service, "force_archive_pending_for_feed", MagicMock(return_value=0))
         main.delete_folder(fid)
-        ws_mock.unsubscribe.assert_called_once_with(FEED, tenancy.DEFAULT_USER_ID)
+        ws_mock.unsubscribe.assert_called_once_with(FEED, TEST_USER_ID)
 
     def test_delete_folder_force_archives_before_deletion(self, env, monkeypatch):
         fid = _make_child_folder("ToDelete2")
@@ -504,7 +500,7 @@ class TestDeduplicateWebSub:
         with main.get_reader() as reader:
             with main.get_meta_connection() as conn:
                 main.purge_orphaned_feed(reader, conn, FEED2, archive_pending=False, rescue_to=FEED)
-        ws_mock.unsubscribe.assert_called_once_with(FEED2, tenancy.DEFAULT_USER_ID)
+        ws_mock.unsubscribe.assert_called_once_with(FEED2, TEST_USER_ID)
 
     def test_dedup_purge_does_not_record_a_decline(self, env, monkeypatch):
         """A dedup/merge consolidation is not a user "I don't want this feed"

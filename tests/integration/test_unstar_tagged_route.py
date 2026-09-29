@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import Request
 
 import main
@@ -26,12 +27,7 @@ MTAG = main.MANUAL_TAG_KEY_PREFIX
 def configured(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)

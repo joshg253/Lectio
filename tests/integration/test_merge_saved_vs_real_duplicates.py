@@ -11,6 +11,7 @@ guessed at; dry-run touches nothing.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import saved_articles as saved_articles_service
@@ -31,12 +32,7 @@ def _reset_pools() -> None:
 def env(tmp_path, monkeypatch):
     saved_layout = tenancy._layout
     _reset_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     main.ensure_meta_schema()
     try:

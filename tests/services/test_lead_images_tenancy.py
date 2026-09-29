@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 from services import tenancy
 from services.lead_images import LeadImageService
@@ -58,12 +59,7 @@ def _make_meta(path):
 @pytest.fixture
 def configured(tmp_path):
     saved = tenancy._layout
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "lectio_reader.sqlite",
-        legacy_meta=tmp_path / "lectio_meta.sqlite3",
-        legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     # Pre-create every meta DB so reads/writes never auto-create at a wrong path.
     for p in (
         tenancy.meta_db_path(tenancy.DEFAULT_USER_ID),

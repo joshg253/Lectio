@@ -8,11 +8,12 @@ import importlib.util
 import pathlib
 
 import pytest
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 
 import main
 from services import tenancy
 
-UID = tenancy.DEFAULT_USER_ID
+UID = TEST_USER_ID
 _SCRIPT = pathlib.Path(main.BASE_DIR) / "scripts" / "probe_empty_archives.py"
 
 
@@ -20,12 +21,7 @@ _SCRIPT = pathlib.Path(main.BASE_DIR) / "scripts" / "probe_empty_archives.py"
 def probe(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     spec = importlib.util.spec_from_file_location("probe_empty_archives", _SCRIPT)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -18,12 +19,7 @@ from services import tenancy
 def fresh_meta(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     try:
         yield main.get_meta_connection()
@@ -59,12 +55,7 @@ def test_existing_db_missing_table_is_upgraded(tmp_path):
     schema migration that re-runs ensure_meta_schema for every tenant."""
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         # Seed a near-empty legacy meta DB with no feed_fetch_history table.
         legacy = sqlite3.connect(str(tenancy.meta_db_path()))
@@ -93,12 +84,7 @@ def test_existing_db_missing_columns_is_upgraded(tmp_path):
     by the idempotent ALTERs in ensure_meta_schema (not just fresh DBs)."""
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         # Seed a legacy schema: the two tables WITHOUT the later-added columns.
         legacy = sqlite3.connect(str(tenancy.meta_db_path()))
@@ -141,12 +127,7 @@ def test_existing_db_gains_entry_feed_tags(tmp_path):
     when the per-user startup migration re-runs ensure_meta_schema."""
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         legacy = sqlite3.connect(str(tenancy.meta_db_path()))
         legacy.execute("CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT)")
@@ -176,12 +157,7 @@ def test_archived_at_column_lifts_into_archived_entries(tmp_path):
     """
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         legacy = sqlite3.connect(str(tenancy.meta_db_path()))
         legacy.executescript(

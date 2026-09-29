@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -278,12 +279,7 @@ def test_eviction_still_drops_ordinary_stale_entries(monkeypatch):
 def tenant(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     try:
         yield

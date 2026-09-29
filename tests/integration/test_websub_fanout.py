@@ -12,6 +12,7 @@ import sqlite3
 import time
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from routes import system as system_routes
@@ -58,12 +59,7 @@ def fanout(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
     main._websub_conn_local.pool = None
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "lectio_websub.sqlite")
     monkeypatch.setattr(main, "_background_user_ids", lambda: ["alice", "bob"])
     for uid in ("alice", "bob"):

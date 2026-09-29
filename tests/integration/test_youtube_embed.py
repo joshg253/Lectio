@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -47,12 +48,7 @@ def _reset_reader_pool():
 def youtube_entry(tmp_path):
     saved = tenancy._layout
     _reset_reader_pool()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     main.ensure_yt_duration_schema()
     reader = main.get_reader()

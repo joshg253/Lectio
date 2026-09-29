@@ -7,6 +7,7 @@ selected; rows come from /tree/folder-feeds/{folder_id} on first expand.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from starlette.testclient import TestClient
 
 import main
@@ -20,12 +21,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "AUTH_ENABLED", False)
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)

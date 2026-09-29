@@ -8,6 +8,7 @@ Settings first in that session (reported 2026-08-29)."""
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
@@ -30,12 +31,7 @@ def _app():
 def tenant(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main._app_settings_cache_lock:
         main._app_settings_cache.clear()
