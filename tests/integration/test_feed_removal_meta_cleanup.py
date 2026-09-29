@@ -13,6 +13,7 @@ everything else goes.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -26,12 +27,7 @@ DEAD_ID = "https://gone.test/really-gone"
 def env(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "websub.sqlite")
     main.ensure_meta_schema()
     main.ensure_starred_archive_schema()

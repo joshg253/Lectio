@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 import httpx
+from _tenancy_helpers import TEST_USER_ID
 
 from services import flaresolverr, page_fetch, tenancy
 from services.lead_images import LeadImageService
@@ -118,10 +119,10 @@ def test_background_fetch_resolves_backends_for_the_queuing_user(tmp_path, monke
     assert seen_uids == ["u_alice"]
 
 
-def test_background_fetch_does_not_leak_into_other_threads_default_user(tmp_path, monkeypatch):
+def test_background_fetch_sees_the_callers_user_not_another_threads(tmp_path, monkeypatch):
     """Sanity check on the fixture above: without the user_context binding,
     the background thread (and thus the backends provider) sees the
-    unbound default, not 'u_alice' — confirming the previous test's
+    caller's user, not 'u_alice' — confirming the previous test's
     assertion is actually exercising the rebind, not a coincidence."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -142,4 +143,4 @@ def test_background_fetch_does_not_leak_into_other_threads_default_user(tmp_path
 
     svc.queue_source_html_fetch("https://example.com/post2")
     assert done.wait(timeout=3.0)
-    assert seen_uids == [tenancy.DEFAULT_USER_ID]
+    assert seen_uids == [TEST_USER_ID]

@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -28,12 +29,7 @@ F2 = "https://two.test/feed"
 def env(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "WEBSUB_DB_PATH", tmp_path / "websub.sqlite")
     main.ensure_meta_schema()
     try:

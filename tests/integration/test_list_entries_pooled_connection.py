@@ -18,6 +18,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -30,12 +31,7 @@ FEED_COUNT = 40  # past PER_FEED_QUERY_THRESHOLD (32), so the SQL fast path is t
 def seeded(tmp_path):
     saved_layout = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_reader() as reader:
         for f in range(FEED_COUNT):

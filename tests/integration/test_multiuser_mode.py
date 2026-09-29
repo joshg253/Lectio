@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
+
 import main
 from services import tenancy
 
@@ -110,17 +112,17 @@ def test_middleware_binds_authenticated_user_in_multi_mode(monkeypatch):
     uid = _drive_middleware({"authenticated": True, "user_id": "alice"})
     assert uid == "alice"
     # Context is restored after the request.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.current_user_id() == TEST_USER_ID
 
 
 def test_middleware_does_not_bind_unauthenticated(monkeypatch):
-    assert _drive_middleware({"user_id": "alice"}) == tenancy.DEFAULT_USER_ID
-    assert _drive_middleware({}) == tenancy.DEFAULT_USER_ID
+    assert _drive_middleware({"user_id": "alice"}) == TEST_USER_ID
+    assert _drive_middleware({}) == TEST_USER_ID
 
 
 def test_middleware_rejects_invalid_user_id(monkeypatch):
     uid = _drive_middleware({"authenticated": True, "user_id": "../evil"})
-    assert uid == tenancy.DEFAULT_USER_ID
+    assert uid == TEST_USER_ID
 
 
 class _FakeReq:
@@ -151,12 +153,7 @@ def test_bootstrap_admin_seeds_once(monkeypatch, tmp_path):
     # Provisioning resolves under a temp tenancy layout so we don't write into
     # the shared test data dir.
     saved = tenancy._layout
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "lectio_reader.sqlite",
-        legacy_meta=tmp_path / "lectio_meta.sqlite3",
-        legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     try:
         main.bootstrap_admin()
         assert store.count() == 1

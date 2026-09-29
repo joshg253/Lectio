@@ -11,6 +11,7 @@ Measured on the live library 2026-07-25, past combines had stranded 85 of them.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -24,12 +25,7 @@ SHARED_ID = "https://tush.ar/post/dunders/"
 def configured(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     main.ensure_starred_archive_schema()
     with main.get_reader() as reader:

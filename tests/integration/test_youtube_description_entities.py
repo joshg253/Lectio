@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -30,12 +31,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(main.url_guard, "is_safe_outbound_url", lambda *a, **kw: False)
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     reader = main.get_reader()
     reader.add_feed(FEED, allow_invalid_url=True)

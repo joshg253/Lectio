@@ -22,9 +22,12 @@ def configured(tmp_path):
         legacy_meta=tmp_path / "lectio_meta.sqlite3",
         legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
     )
+    # conftest binds every test to a user; these tests are about the unbound state, so drop back to the ContextVar's default.
+    token = tenancy._current_user.set(tenancy.DEFAULT_USER_ID)
     try:
         yield tmp_path
     finally:
+        tenancy._current_user.reset(token)
         tenancy._layout = saved
 
 

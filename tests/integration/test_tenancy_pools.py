@@ -12,6 +12,7 @@ import sqlite3
 import threading
 
 import pytest
+from _tenancy_helpers import TEST_USER_ID
 
 import main
 from services import tenancy
@@ -29,11 +30,11 @@ def _clean_thread_pools():
     yield
 
 
-def test_meta_connection_default_targets_legacy_path():
+def test_meta_connection_targets_current_user():
     conn = main.get_meta_connection()
-    # The connection's file should be the legacy meta DB for the default user.
+    # The connection's file should be the bound user's meta DB.
     db_files = {row[2] for row in conn.execute("PRAGMA database_list")}
-    assert str(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) in db_files
+    assert str(tenancy.meta_db_path(TEST_USER_ID)) in db_files
 
 
 def test_meta_connection_cached_per_user_same_thread():
@@ -82,7 +83,7 @@ def test_reader_pool_cached_per_user_and_distinct_dbs():
     assert b1 is not a1
     # The two proxies wrap readers pointed at different DB files.
     assert a1._reader._storage.factory.path != b1._reader._storage.factory.path
-    assert a1._reader._storage.factory.path == str(tenancy.reader_db_path(tenancy.DEFAULT_USER_ID))
+    assert a1._reader._storage.factory.path == str(tenancy.reader_db_path(TEST_USER_ID))
     assert b1._reader._storage.factory.path == str(tenancy.reader_db_path("alice"))
 
 

@@ -224,6 +224,19 @@ def _disable_yt_quota_sink():
 
 
 @pytest.fixture(autouse=True)
+def _bind_test_user():
+    """Run every test as a real user, as production requests and background passes are. Unbound resolution is a bug."""
+    from _tenancy_helpers import TEST_USER_ID
+
+    from services import tenancy
+
+    with tenancy.user_context(TEST_USER_ID):
+        if tenancy._layout is not None:  # tests that never configure their own layout run on main's shared test-data dir
+            tenancy.ensure_user_data_dir(TEST_USER_ID)
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _drain_lead_image_writes():
     """Opening an entry queues lead-image writes on the single ``leadimage-writer`` thread, which resolves the DB path when it runs.
     Left queued past teardown, one lands in the NEXT test's fresh meta DB while its fixture sets WAL mode, which fails at once with

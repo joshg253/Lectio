@@ -223,15 +223,16 @@ controls), speed presets.
 
 ### Single-user mode does not exist anymore — retire DEFAULT_USER
 
-`DEFAULT_USER_ID` still silently resolves any unbound code path to stale legacy top-level DBs
-instead of failing loudly — quietly-wrong answers, not an error. Fix: default the
-`lectio_current_user` ContextVar to `None`, raise on unbound resolution, then delete the legacy
-path branches and stale DB files. Re-counted 2026-09-22: down to 7 references outside
-`tenancy.py`/`tests/` (2 are comments), across 4 files — `main.py` (3), `services/users.py` (1),
-`services/starred_archive.py` (1), `scripts/screenshots/seed.py` (1 comment). Smaller than it used
-to be (previously scoped at 54); worth re-sizing at pickup time rather than trusting either number.
-Wants its own PR and a check of the per-user startup migration. Related: the bg-thread tenancy rule
-already in place (`_run_in_user_context`).
+`DEFAULT_USER_ID` still silently resolves any unbound code path to stale legacy top-level DBs instead of failing loudly.
+Step 1 (tests run bound to a `test` user; unbound resolution fails in tests) is done. Step 2, its own PR: default the
+`lectio_current_user` ContextVar to `None` and raise on unbound resolution; delete `DEFAULT_USER_ID` and the `legacy_*`
+layout; move the unbound startup work in `main.py` lifespan (`purge_lower_level_folders`, settings-cache preload,
+`app.state.auto_refresh_minutes`, WAL checkpoint of the raw `READER_DB_PATH`/`META_DB_PATH`) into `_for_each_background_user`
+or drop it; make `user_store` non-optional and delete its `is None` / no-auth branches (save API, bookmarklet); drop the
+default arg in `starred_archive.py` and the reserved `"default"` username; update `test_tenancy.py`,
+`test_lead_images_tenancy.py`, `test_starred_archive_tenancy.py`, and `unbound_tenancy()` (sets `None`). After deploy,
+watch the log for unbound errors, then move the legacy top-level DBs to `data/legacy-default-<date>/` — not
+`data/backups/`, which the nightly job ships to B2 and prunes by name.
 
 ### Add OIDC login
 

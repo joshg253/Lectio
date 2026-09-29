@@ -4,6 +4,7 @@ filter set at a broader level is visible from the post. Display-only: get_inheri
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 
 import main
 from services import tenancy
@@ -16,12 +17,7 @@ OTHER = "https://b.test/feed"
 def conn(tmp_path):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     with main.get_meta_connection() as c:
         c.execute("INSERT INTO folders (id, name) VALUES (7, 'Games'), (8, 'News')")

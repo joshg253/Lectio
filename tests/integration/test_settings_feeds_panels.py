@@ -16,6 +16,7 @@ lazy. Moved to this same on-demand pattern.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from starlette.testclient import TestClient
 
 import main
@@ -29,12 +30,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "AUTH_ENABLED", False)
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
     # main.page_fetcher's host memory is a process-global singleton — clear it
     # so another test's escalation state for a reused host doesn't leak into

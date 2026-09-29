@@ -11,6 +11,7 @@ scheduler, so nightly maintenance (YouTube sync, VACUUMs, pruning) never ran.
 from __future__ import annotations
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy, unbound_tenancy
 
 import main
 from services import tenancy
@@ -30,12 +31,7 @@ class _StubUserStore:
 def configured(tmp_path, monkeypatch):
     saved = tenancy._layout
     main.close_thread_db_pools()
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "reader.sqlite",
-        legacy_meta=tmp_path / "meta.sqlite3",
-        legacy_starred=tmp_path / "starred.sqlite",
-    )
+    configure_test_tenancy(tmp_path)
     # Stub the store before any schema init: seeding defaults resolves
     # instance settings, which iterates the (real) user store otherwise.
     monkeypatch.setattr(main, "user_store", _StubUserStore(ADMIN_ID))
@@ -91,10 +87,9 @@ def _set_admin_setting(key: str, value: str) -> None:
 def test_admin_saved_maintenance_hour_visible_from_default_context(configured):
     assert main.get_maintenance_hour() is None  # nothing configured anywhere
     _set_admin_setting(main.SETTING_MAINTENANCE_HOUR, "3")
-    # The maintenance loop runs with no user bound (default context) — it must
-    # still see the admin's Instance Config value.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-    assert main.get_maintenance_hour() == 3
+    # The maintenance loop runs with no user bound — it must still see the admin's Instance Config value.
+    with unbound_tenancy():
+        assert main.get_maintenance_hour() == 3
 
 
 def test_admin_lookup_reads_db_not_just_warm_cache(configured):
