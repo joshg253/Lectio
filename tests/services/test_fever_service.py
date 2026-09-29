@@ -104,16 +104,11 @@ def _build_service(db_path: Path, reader_mock=None) -> FeverService:
     def get_meta():
         return _make_meta(db_path)
 
-    # presync=False: no background pre-sync thread (the API methods call
-    # _ensure_synced() on demand anyway). This keeps tests deterministic AND fast:
-    # the previous "join every daemon thread at 0.5s" cleanup scaled with the number
-    # of daemon threads accumulated across the whole suite (~34 → 17s per test).
     svc = FeverService(
         get_meta_connection=get_meta,
         get_reader=lambda: reader_mock,
         fever_api_key=_FEVER_KEY,
         root_folder_name="All Feeds",
-        presync=False,
     )
     return svc
 

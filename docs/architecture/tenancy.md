@@ -30,12 +30,14 @@ tenancy.meta_db_for(user_id)
 
 The resolver and per-user connection pools live in `services/tenancy.py`;
 `get_reader()` / `get_meta_connection()` / `get_starred_archive_connection()` in
-`main.py` resolve through it. The current user is a `contextvars.ContextVar` that
-defaults to `DEFAULT_USER_ID`.
+`main.py` resolve through it. The current user is a `contextvars.ContextVar` with no default: resolving a per-user DB with
+no user bound raises `TenancyUnboundError` (there used to be a `DEFAULT_USER_ID` that silently mapped to stale top-level DBs).
+Code that legitimately runs either way (the settings cache read, `get_instance_setting`) checks `tenancy.bound_user_id()`.
+Startup and pre-auth requests run unbound, so they may touch only global state; the `preauth_unbound` scenario in
+`tests/integration/_multiuser_harness.py` boots the real app outside pytest's fixtures to prove it.
 
 Tests run as a real user: an autouse conftest fixture binds `test`, and `configure_test_tenancy(tmp_path)` (in
-`tests/_tenancy_helpers.py`) points the legacy default-user paths at a directory that never exists, so an unbound resolution
-fails in tests instead of quietly using a stray DB. Tests about unbound behavior opt out with `unbound_tenancy()`.
+`tests/_tenancy_helpers.py`) points the resolver at a temp dir. Tests about unbound behavior opt out with `unbound_tenancy()`.
 
 **The archive connection is the odd one out: it is not pooled.**
 `get_starred_archive_connection()` returns a *fresh* connection per call, so
@@ -76,18 +78,15 @@ as-is; Fever's entry-map sync is tracked per user. Background work spawned by a
 request (GReader mark-all-as-read; the per-entry mark-read writes fired off the
 entry pane and the async read toggle) must re-bind the captured user via
 `_run_in_user_context`, since threads don't inherit contextvars — otherwise the
-write lands in `DEFAULT_USER_ID`'s DB and the entry keeps showing as unread for
-the actual user. The same applies inside the service layer: `LeadImageService`'s
+write runs unbound and raises. The same applies inside the service layer: `LeadImageService`'s
 `queue_source_fetch` / `queue_source_html_fetch` resolve a lead image (or its
 alt/caption) in a daemon thread off the render path and persist it via the
 context-bound meta connection, so they capture `tenancy.current_user_id()` and
-re-wrap the worker in `tenancy.user_context` — otherwise a user browsing their
-feed silently writes lead images into the default tenant's `entry_lead_images`.
+re-wrap the worker in `tenancy.user_context`.
 The chunk-level visible-entry backfill (`backfill_entry_list`, spawned from the
 home route for entries missing a cached thumbnail) is a bare daemon thread for
 the same reason and must likewise be wrapped in `_run_in_user_context` at the
-call site — otherwise its thumbnails persist to the default tenant and appear to
-"not stick" for the real user across refreshes. Manual refresh (`/refresh`,
+call site. Manual refresh (`/refresh`,
 `/refresh/feed`) follows the same pattern: it ingests entries with
 `update_feeds(enhance=False)` and hands the network-heavy lead-image / YouTube-
 duration enhancement to `_spawn_feed_enhancement` (a daemon thread wrapped in
@@ -130,19 +129,15 @@ target, with per-user concurrency and fetch budgets deferred behind that seam. T
 the scraped-feed sync, auto-taggers, guid-churn dedup, and the YouTube /
 lead-image / starred-archive / read-history backfills all run once per enabled
 user via `_for_each_background_user` — a bare daemon thread inherits no
-contextvar, so running them unwrapped would resolve to `DEFAULT_USER_ID` and
-write the legacy top-level DBs instead of each user's. The starred-archive
+contextvar, so running them unwrapped would raise. The starred-archive
 worker (`StarredArchiveService`) is one long-lived global thread; each poll cycle
 it scans every background user's archive DB under that user's context (injected
-`background_user_ids`), so a single worker drains all users' queues without
-binding itself to the default tenant. Work that is genuinely global runs once in
+`background_user_ids`), so a single worker drains all users' queues. Work that is genuinely global runs once in
 `_run_global_maintenance` (thumb-cache VACUUM, YouTube sync — a single config).
 
-Remaining (see Plan.md): the WebSub push callback (a push carries only a feed URL
-and must fan out to its subscribers) still runs as the default user. (SSRF
-hardening of `/api/img` and `/thumb` has landed — see "Security posture". The
-WebSub discover-on-subscribe spawned when a feed is added now re-binds the
-requesting user via `_run_in_user_context`.)
+The WebSub push callback carries only a feed URL, so it fans out: each subscriber's
+refresh runs under that subscriber's context. The discover-on-subscribe spawned when
+a feed is added re-binds the requesting user via `_run_in_user_context`.
 
 ### Dating an entry
 
@@ -259,9 +254,8 @@ counts, tag counts, feed-title map, problematic feeds, has-manual-tags, and the
 `_PerUserDict` (and a `user_id`-keyed dict for `_app_settings_cache`). A global
 cache here leaks one user's data into another's view (the tree/avatar render from
 cache even though per-request DB reads are correct). Likewise, any code path that
-opens a DB by the raw `READER_DB_PATH`/`META_DB_PATH` constant instead of
-`tenancy.*_db_path()` reads the default user's data — per-request paths (unread
-counts, tag scans, takeout, `/stats` sizes) must use the resolver. Caches keyed
+opens a per-user DB must go through `tenancy.*_db_path()` — per-request paths (unread
+counts, tag scans, takeout, `/stats` sizes) included. Caches keyed
 purely by content (e.g. domain classification, source-HTML by URL) may stay
 global.
 
@@ -271,11 +265,11 @@ Instance config (Administration → Instance Config: maintenance hour,
 image-cache tunables, fetch-history retention, login lockout, default
 auto-refresh, shared OAuth creds) is *stored* in the saving admin's own
 `app_settings`, but *consumed* from arbitrary contexts — the daily-maintenance
-loop is a bare thread bound to the default user, login lockout checks run
+loop is a bare thread with no user bound, login lockout checks run
 pre-auth, image-cache eviction runs in maintenance. These values must
 therefore be read through `get_instance_setting()` (current context's setting
 → first enabled admin's setting → env fallback), never `get_runtime_setting()`
-directly — the latter silently reads the wrong user's (empty) settings and
+directly — unbound, the latter finds no user settings and falls to env, and
 the feature dies without an error, which is exactly how nightly maintenance
 sat disabled for three weeks in 2026-07. The admin tier reads through
 `get_setting` (DB-backed, not cache-only) so it works before the admin's

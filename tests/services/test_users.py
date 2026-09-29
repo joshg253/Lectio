@@ -7,7 +7,7 @@ import hashlib
 import pytest
 
 from services import passwords
-from services.users import ReservedUsernameError, UserExistsError, UserStore
+from services.users import UserExistsError, UserStore
 
 
 @pytest.fixture
@@ -64,16 +64,6 @@ def test_touch_last_seen(store):
     now = _t.time()
     store.touch_last_seen(uid, now)
     assert abs(store.list_users()[0]["last_seen_at"] - now) < 1.0
-
-
-def test_reserved_username_rejected(store):
-    with pytest.raises(ReservedUsernameError):
-        store.create("default", "pw")
-    with pytest.raises(ReservedUsernameError):
-        store.create("Default", "pw")  # reserved check is case-insensitive
-    uid = store.create("alice", "pw")
-    with pytest.raises(ReservedUsernameError):
-        store.rename_user(uid, "DEFAULT")
 
 
 @pytest.mark.parametrize("bad", ["../evil", "a/b", "has space", "", "x" * 65])

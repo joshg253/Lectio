@@ -402,8 +402,6 @@ _load_local_env()
 _data_dir_env = os.getenv("LECTIO_DATA_DIR")
 DATA_DIR = Path(os.path.expanduser(_data_dir_env) if _data_dir_env else BASE_DIR / "data").resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-META_DB_PATH = DATA_DIR / "lectio_meta.sqlite3"
-READER_DB_PATH = DATA_DIR / "lectio_reader.sqlite"
 THUMB_DB_PATH = DATA_DIR / "lectio_thumb_cache.sqlite"
 # Global, content-addressed (source-URL hash -> original image bytes) cache for the
 # /api/img proxy. Like the thumb cache, it holds no per-user data and is NOT routed
@@ -413,22 +411,15 @@ IMG_CACHE_DB_PATH = DATA_DIR / "lectio_img_cache.sqlite"
 # per-user, so it's shared — a user without a YouTube key still gets durations
 # another user's key already fetched. Like the thumb cache, NOT routed through tenancy.
 YT_DURATION_DB_PATH = DATA_DIR / "lectio_yt_durations.sqlite"
-STARRED_ARCHIVE_DB_PATH = DATA_DIR / "lectio_starred_archive.sqlite"
 # Global account registry (NOT per-user, NOT routed through tenancy): one users
-# table for the whole instance. Only used in multi-user (security) mode.
+# table for the whole instance.
 AUTH_DB_PATH = DATA_DIR / "lectio_auth.sqlite"
 THUMB_CACHE_DIR = DATA_DIR / "thumb_cache"  # legacy on-disk cache; entries migrate lazily on access
 
-# Bind the tenancy resolver. The DEFAULT_USER_ID resolves to these legacy paths,
-# so single-user behavior is unchanged and no migration is needed yet. The thumb
+# Bind the tenancy resolver: per-user DBs live under DATA_DIR/users/{uid}/. The thumb
 # cache (THUMB_DB_PATH) is intentionally NOT routed through tenancy — it is a
 # content-addressed global cache shared across all users. See services/tenancy.py.
-tenancy.configure(
-    data_dir=DATA_DIR,
-    legacy_reader=READER_DB_PATH,
-    legacy_meta=META_DB_PATH,
-    legacy_starred=STARRED_ARCHIVE_DB_PATH,
-)
+tenancy.configure(data_dir=DATA_DIR)
 
 ROOT_FOLDER_NAME = "All Feeds"
 _LECTIO_FOLDER_NAME = "_Lectio"
@@ -862,19 +853,19 @@ def is_instapaper_configured() -> bool:
 _ENV_YT_API_KEY = os.getenv("YOUTUBE_API_KEY", "").strip()
 _ENV_YT_CHANNEL_ID = os.getenv("YOUTUBE_CHANNEL_ID", "").strip()
 _ENV_YT_FOLDER_NAME = os.getenv("YOUTUBE_FOLDER_NAME", "").strip() or "YouTube Subscriptions"
-# DeviantArt API creds — per-user DB settings take precedence; env is single-user fallback.
+# DeviantArt API creds — per-user DB settings take precedence; env is the fallback.
 _ENV_DEVIANTART_CLIENT_ID = os.getenv("DEVIANTART_CLIENT_ID", "").strip()
 _ENV_DEVIANTART_CLIENT_SECRET = os.getenv("DEVIANTART_CLIENT_SECRET", "").strip()
 # YouTube OAuth client creds are app-level (one registered Google app), not
 # per-user — only the resulting tokens are per-user. So these are read straight
-# from env in both single and multi mode (sharing the app, never the tokens).
+# from env for every user (sharing the app, never the tokens).
 _ENV_YT_OAUTH_CLIENT_ID = os.getenv("YOUTUBE_OAUTH_CLIENT_ID", "").strip()
 _ENV_YT_OAUTH_CLIENT_SECRET = os.getenv("YOUTUBE_OAUTH_CLIENT_SECRET", "").strip()
 # Pinterest OAuth client creds are app-level (one registered Pinterest app), same
 # as YouTube above — only the resulting tokens are per-user.
 _ENV_PINTEREST_OAUTH_CLIENT_ID = os.getenv("PINTEREST_OAUTH_CLIENT_ID", "").strip()
 _ENV_PINTEREST_OAUTH_CLIENT_SECRET = os.getenv("PINTEREST_OAUTH_CLIENT_SECRET", "").strip()
-# Quire API creds — per-user DB settings take precedence; env is single-user fallback
+# Quire API creds — per-user DB settings take precedence; env is the fallback
 # (same pattern as DeviantArt). Only the resulting tokens are ever per-user.
 _ENV_QUIRE_CLIENT_ID = os.getenv("QUIRE_CLIENT_ID", "").strip()
 _ENV_QUIRE_CLIENT_SECRET = os.getenv("QUIRE_CLIENT_SECRET", "").strip()
@@ -1025,21 +1016,20 @@ def _get_admin_instance_setting(key: str) -> str:
         if hit and now - hit[0] < _INSTANCE_SETTING_TTL_SECONDS:
             return hit[1]
     val = ""
-    if user_store is not None:
-        # Never crash the caller (login lockout checks run pre-auth; a
-        # half-provisioned admin dir must degrade to the env fallback).
-        try:
-            for u in user_store.list_users():
-                if not u.get("is_admin") or u.get("disabled"):
-                    continue
-                with tenancy.user_context(u["user_id"]):
-                    with get_meta_connection() as conn:
-                        v = get_setting(conn, key)
-                if v:
-                    val = v
-                    break
-        except Exception:
-            LOGGER.debug("admin instance-setting lookup failed for %r", key, exc_info=True)
+    # Never crash the caller (login lockout checks run pre-auth; a
+    # half-provisioned admin dir must degrade to the env fallback).
+    try:
+        for u in user_store.list_users():
+            if not u.get("is_admin") or u.get("disabled"):
+                continue
+            with tenancy.user_context(u["user_id"]):
+                with get_meta_connection() as conn:
+                    v = get_setting(conn, key)
+            if v:
+                val = v
+                break
+    except Exception:
+        LOGGER.debug("admin instance-setting lookup failed for %r", key, exc_info=True)
     with _instance_setting_cache_lock:
         _instance_setting_cache[key] = (now, val)
     return val
@@ -1048,11 +1038,10 @@ def _get_admin_instance_setting(key: str) -> str:
 def get_instance_setting(key: str, env_fallback: str = "") -> str:
     """Resolve an instance-level (admin-managed) setting from any context.
 
-    Resolution: current context's own setting → first enabled admin's setting
-    → env fallback. The current-context tier keeps single-user installs (where
-    settings live under the default user) and legitimate per-user overrides
-    working; the admin tier is what makes Administration → Instance Config
-    authoritative for background threads and other users in multi mode.
+    Resolution: current context's own setting (when a user is bound) → first
+    enabled admin's setting → env fallback. The admin tier is what makes
+    Administration → Instance Config authoritative for background threads,
+    pre-auth checks, and other users.
     """
     val = get_cached_setting(key)
     if val:
@@ -2028,7 +2017,7 @@ BOOTSTRAP_ADMIN_USERNAME = os.getenv("LECTIO_ADMIN_USERNAME", "admin")
 BOOTSTRAP_ADMIN_PASSWORD = os.getenv("LECTIO_ADMIN_PASSWORD", _DEFAULT_ADMIN_PASSWORD)
 
 AUTH_ENABLED = True  # kept as a module-level bool so tests can monkeypatch it
-user_store: UserStore | None = UserStore(AUTH_DB_PATH)
+user_store: UserStore = UserStore(AUTH_DB_PATH)
 SESSION_SECRET_KEY = os.getenv("LECTIO_SECRET_KEY") or secrets.token_hex(32)
 if AUTH_ENABLED and not os.getenv("LECTIO_SECRET_KEY"):
     LOGGER.warning(
@@ -2135,17 +2124,13 @@ def is_async_action_request(request: Request, expected_header: str | None = None
 async def lifespan(app: FastAPI):
     # Startup
     _attach_pending_access_filter()
-    ensure_meta_schema()
     ensure_thumb_schema()
     ensure_img_cache_schema()
     ensure_yt_duration_schema()
-    ensure_starred_archive_schema()
     ensure_websub_schema()
-    ensure_reader_indexes()
     bootstrap_admin()
 
-    # Bring every existing user's meta/starred schema up to current.  The bare
-    # ensure_*_schema() calls above only touch the default tenant; per-user DBs
+    # Bring every existing user's meta/starred schema up to current. Per-user DBs
     # are otherwise schema-init'd only at provision time, so any table added
     # after a user was provisioned (e.g. feed_fetch_history) is missing from
     # their DB and surfaces as a "no such table" 500 (Feed Properties, etc.).
@@ -2180,28 +2165,26 @@ async def lifespan(app: FastAPI):
     if LECTIO_PUBLIC_URL:
         _migrate_websub_to_shared()
 
-    with get_meta_connection() as conn:
-        purge_lower_level_folders(conn)
-        app.state.auto_refresh_minutes = get_auto_refresh_minutes(conn)
-        # Pre-load the default user's settings cache (startup runs unbound).
-        with _app_settings_cache_lock:
-            _app_settings_cache[tenancy.current_user_id()] = _load_app_settings_cache(conn)
-    app.state.last_scheduled_refresh_started_at = time.monotonic()
-
-    # Checkpoint both WAL files at startup so the first user request does not
-    # have to rebuild the WAL index from a large file left over from the
-    # previous run.  Use direct connections so we're not racing the reader.
-    for _ckpt_path in (READER_DB_PATH, META_DB_PATH):
-        try:
-            _ckpt_conn = sqlite3.connect(str(_ckpt_path), timeout=5)
-            _ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            _ckpt_conn.close()
-        except Exception:
+    def _prepare_user_dbs() -> None:
+        # Checkpoint both WAL files so the first request does not have to rebuild
+        # the WAL index from a large file left over from the previous run. Use
+        # direct connections so we're not racing the reader.
+        for _ckpt_path in (tenancy.reader_db_path(), tenancy.meta_db_path()):
+            try:
+                _ckpt_conn = sqlite3.connect(str(_ckpt_path), timeout=5)
+                _ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                _ckpt_conn.close()
+            except Exception:
+                pass
+        with get_meta_connection() as conn:
+            purge_lower_level_folders(conn)
+            with _app_settings_cache_lock:
+                _app_settings_cache[tenancy.current_user_id()] = _load_app_settings_cache(conn)
+        with get_reader():  # creates the reader DB if missing
             pass
 
-    # Ensure reader db is created at startup.
-    with get_reader():
-        pass
+    _for_each_background_user("per-user DB prep", _prepare_user_dbs)
+    app.state.last_scheduled_refresh_started_at = time.monotonic()
 
     # Warm YouTube duration in-memory cache from DB so first renders are instant.
     youtube_duration_service.warm_cache_from_db()
@@ -2209,9 +2192,8 @@ async def lifespan(app: FastAPI):
     # Warm lead image cache from DB so thumbnails are available on first render.
     # Must run per-user: lead images live in each tenant's own meta DB, and the
     # render path (get_cached_entry_thumbnail) only consults the in-memory cache
-    # with no per-user DB fallback. Warming bare resolves to the default tenant,
-    # leaving every other user's thumbnails blank until the rate-limited
-    # background backfill catches up after each restart.
+    # with no per-user DB fallback, so every user's cache must be warmed or their
+    # thumbnails stay blank until the rate-limited background backfill catches up.
     _for_each_background_user("lead-image cache warm", lead_image_service.warm_cache_from_db)
 
     # Warm the per-user unread-counts cache so the first home load after a restart
@@ -2516,7 +2498,7 @@ class _AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if _session_logged_in(request):
             return await call_next(request)
-        if AUTO_LOGIN and user_store is not None:
+        if AUTO_LOGIN:
             # Auto-authenticate as the first non-disabled admin user without
             # showing the login form. Intended for local/private-network installs.
             for _u in user_store.list_users():
@@ -2572,8 +2554,6 @@ class _SecurityHeadersMiddleware:
 
 def _touch_user_last_seen(uid: str) -> None:
     """Record per-user activity time, throttled (this runs on every request)."""
-    if user_store is None:
-        return
     now = time.time()
     with _last_seen_touch_lock:
         if now - _last_seen_touch.get(uid, 0.0) < _LAST_SEEN_THROTTLE_SECONDS:
@@ -2586,7 +2566,7 @@ def _touch_user_last_seen(uid: str) -> None:
 
 
 class _TenancyMiddleware:
-    """Bind the request's user into the tenancy context (multi mode only).
+    """Bind the request's user into the tenancy context.
 
     Pure-ASGI and registered innermost (downstream of the auth gate), so the
     binding wraps the route handler. Sync handlers run via anyio's threadpool,
@@ -2594,9 +2574,9 @@ class _TenancyMiddleware:
     here is visible to get_reader() / get_meta_connection() deep in the call
     stack.
 
-    Requests without a valid authenticated session user (static assets, the
-    Fever/GReader APIs, unauthenticated hits) resolve to the default user; those
-    API protocols carry their own per-user identity in a later phase.
+    Requests without an authenticated session user or API token (static assets,
+    the login page, other unauthenticated hits) run unbound: anything they touch
+    must be global, and a per-user DB access raises TenancyUnboundError.
     """
 
     def __init__(self, app):
@@ -2606,8 +2586,6 @@ class _TenancyMiddleware:
     def _greader_user_from_scope(scope) -> str | None:
         """Resolve a /greader/ request's bearer token to a user, using only the
         Authorization header / query string (no body read needed)."""
-        if user_store is None:
-            return None
         token = ""
         for key, val in scope.get("headers", []):
             if key == b"authorization":
@@ -3559,15 +3537,12 @@ def provision_user_storage(user_id: str) -> None:
 
 def delete_user_storage(user_id: str) -> None:
     """Recursively remove a user's isolated data directory
-    (``DATA_DIR/users/<user_id>/`` and all its DBs). No-op for the default
-    (legacy top-level) user, whose files are never owned by a deletable account.
+    (``DATA_DIR/users/<user_id>/`` and all its DBs).
 
     Content-addressed caches (thumbnails, image proxy, lead-image/strategy
     results) are global and hold no per-user data, so they are intentionally
     left untouched.
     """
-    if user_id == tenancy.DEFAULT_USER_ID:
-        return
     data_dir = tenancy.user_data_dir(user_id)
     if data_dir.exists():
         shutil.rmtree(data_dir, ignore_errors=True)
@@ -3600,8 +3575,6 @@ def bootstrap_admin() -> None:
     No-op once any user exists. Provisions the new admin's isolated storage
     and warns loudly if the default password is still in use.
     """
-    if user_store is None:
-        return
     if user_store.count() > 0:
         return
     username = BOOTSTRAP_ADMIN_USERNAME
@@ -5003,8 +4976,11 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def get_cached_setting(key: str) -> str | None:
-    """Read the current user's cache without a DB connection. None if unloaded."""
-    uid = tenancy.current_user_id()
+    """Read the current user's cache without a DB connection. None if unloaded or no user is bound
+    (pre-auth pages, bare background threads), so callers fall through to their env/admin fallback."""
+    uid = tenancy.bound_user_id()
+    if uid is None:
+        return None
     with _app_settings_cache_lock:
         cache = _app_settings_cache.get(uid)
         if cache is None:
@@ -11701,7 +11677,6 @@ fever_service: FeverService | None = FeverService(
     fever_api_key="",
     root_folder_name=ROOT_FOLDER_NAME,
     current_user=tenancy.current_user_id,
-    presync=False,
 )
 
 greader_service: GReaderService | None = GReaderService(
@@ -19479,8 +19454,6 @@ def _background_user_ids() -> list[str]:
     """Users that background work (scheduled refresh, maintenance) should run for.
 
     Returns every enabled account; each is processed under its own tenancy context."""
-    if user_store is None:
-        return [tenancy.DEFAULT_USER_ID]
     return [u["user_id"] for u in user_store.list_users() if not u["disabled"]]
 
 
@@ -19489,8 +19462,7 @@ def _for_each_background_user(label: str, fn: Callable[[], None]) -> None:
 
     Startup backfills, syncs and one-off cleanups touch per-user DBs through the
     context-bound ``get_reader()`` / ``get_meta_connection()`` helpers. Run bare,
-    they resolve to :data:`tenancy.DEFAULT_USER_ID` and write the legacy
-    top-level DBs. Wrapping the call here binds each enabled user in turn.
+    they raise ``TenancyUnboundError``. Wrapping the call here binds each enabled user in turn.
     One user's failure is logged and does not abort the rest."""
     for uid in _background_user_ids():
         with tenancy.user_context(uid):
@@ -20325,8 +20297,8 @@ def _resolve_archived_readability_html(feed_url: str | None, entry_id: str | Non
 def _mark_entry_read_background(feed_url: str, entry_id: str, title: str, link: str, feed_title: str) -> None:
     """Mark an entry read off the request path. The daemon thread does not
     inherit the request's tenancy contextvars, so capture the current user now
-    and re-bind it via _run_in_user_context — otherwise the write lands in the
-    default user's DB and the post stays unread for the real user."""
+    and re-bind it via _run_in_user_context — otherwise the write has no user
+    and raises TenancyUnboundError."""
     _uid = tenancy.current_user_id()
 
     def _bg_mark_read() -> None:
@@ -21499,14 +21471,14 @@ def _current_web_user(request: Request) -> str | None:
 def _current_web_username(request: Request) -> str | None:
     """Display name (mutable username) for the current session user, or None."""
     uid = _current_web_user(request)
-    if not uid or user_store is None:
+    if not uid:
         return None
     row = user_store.get_by_id(uid)
     return row["username"] if row else None
 
 
 def _is_web_admin(user_id: str | None) -> bool:
-    if not user_id or user_store is None:
+    if not user_id:
         return False
     row = user_store.get_by_id(user_id)
     return bool(row and row["is_admin"] and not row["disabled"])
@@ -22192,8 +22164,7 @@ def _home_inner(
     if uncached_posts:
         # Re-bind the request's tenancy user inside the daemon thread; a bare
         # thread does not inherit contextvars, so backfill_entry_list would
-        # otherwise persist images to the default user's DB and the thumbnails
-        # would not stick for this user across refreshes.
+        # otherwise run unbound and raise TenancyUnboundError.
         _bf_uid = tenancy.current_user_id()
         threading.Thread(
             target=_run_in_user_context,
@@ -22370,7 +22341,7 @@ def _home_inner(
         "profile_avatar_url": profile_avatar_url,
         "current_user": _current_web_username(request),
         "is_admin": _is_web_admin(_current_web_user(request)),
-        "current_api_token": (user_store.get_api_token(_uid) if (user_store and (_uid := _current_web_user(request))) else ""),
+        "current_api_token": (user_store.get_api_token(_uid) if (_uid := _current_web_user(request)) else ""),
         # Uncategorized-only feeds count (e.g. a fresh install whose first feed
         # is a bookmarklet-created Saved Articles feed) — the toolbar must render.
         "no_feeds": len(all_feed_urls) == 0 and len(all_reader_feed_urls) == 0,
@@ -24129,7 +24100,7 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
             job["finished_at"] = time.monotonic()
 
     # Off-request so the star stays instant, and through the tenancy helper
-    # because a bare thread would run the fetch as the default user.
+    # because a bare thread has no user bound.
     threading.Thread(target=lambda: _run_in_user_context(_uid, _work), daemon=True).start()
     return True
 
@@ -24380,18 +24351,13 @@ async def api_save_article(request: Request):
         except Exception:  # noqa: BLE001
             pass
     url = params.get("url", "")
-    if user_store is not None:
-        uid = user_store.verify_api_token(params.get("username", ""), params.get("token", ""))
-        if not uid:
-            return JSONResponse({"ok": False, "error": "Authentication failed — check your API token."}, status_code=401)
-    else:
-        uid = None  # no-auth single-user install: default tenancy
+    uid = user_store.verify_api_token(params.get("username", ""), params.get("token", ""))
+    if not uid:
+        return JSONResponse({"ok": False, "error": "Authentication failed — check your API token."}, status_code=401)
 
     def _do_save() -> dict:
-        if uid:
-            with tenancy.user_context(uid):
-                return _save_article_for_current_user(url)
-        return _save_article_for_current_user(url)
+        with tenancy.user_context(uid):
+            return _save_article_for_current_user(url)
 
     result = await run_in_threadpool(_do_save)
     return JSONResponse(result, status_code=200 if result["ok"] else 400)
@@ -24530,16 +24496,13 @@ async def api_bookmarklet_save(request: Request):
     url = str(body.get("url") or "")
     page_html = body.get("html")
     page_title = str(body.get("title") or "").strip()
-    if user_store is not None:
-        uid = user_store.user_for_api_token(token)
-        if not uid:
-            return JSONResponse(
-                {"ok": False, "detail": "Invalid token — paste your Lectio API token (Settings → Account)."},
-                status_code=401,
-                headers=_BOOKMARKLET_CORS_HEADERS,
-            )
-    else:
-        uid = None  # no-auth single-user install: default tenancy
+    uid = user_store.user_for_api_token(token)
+    if not uid:
+        return JSONResponse(
+            {"ok": False, "detail": "Invalid token — paste your Lectio API token (Settings → Account)."},
+            status_code=401,
+            headers=_BOOKMARKLET_CORS_HEADERS,
+        )
     if not (isinstance(page_html, str) and page_html.strip()):
         page_html = None
     elif _MARKDOWN_URL_RE.search(urlparse(url).path):
@@ -24574,10 +24537,8 @@ async def api_bookmarklet_save(request: Request):
         return _save_article_for_current_user(url, extract, refresh_content=page_html is not None)
 
     def _do_save() -> dict:
-        if uid:
-            with tenancy.user_context(uid):
-                return _do_op()
-        return _do_op()
+        with tenancy.user_context(uid):
+            return _do_op()
 
     result = await run_in_threadpool(_do_save)
     if not result.get("ok") and result.get("error"):
@@ -25373,7 +25334,7 @@ def _run_in_user_context(uid: str, fn, *args, **kwargs) -> None:
 
     Manually-created threads do not inherit contextvars, so a request that
     captures its user and hands work to a daemon thread must re-bind the context
-    there or the work runs as the default user."""
+    there or the work raises TenancyUnboundError."""
     with tenancy.user_context(uid):
         fn(*args, **kwargs)
 

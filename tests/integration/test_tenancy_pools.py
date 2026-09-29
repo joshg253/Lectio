@@ -109,7 +109,8 @@ def test_pools_are_thread_local():
     other: dict[str, sqlite3.Connection] = {}
 
     def worker():
-        other["conn"] = main.get_meta_connection()
+        with tenancy.user_context(TEST_USER_ID):  # a bare thread has no user bound
+            other["conn"] = main.get_meta_connection()
 
     t = threading.Thread(target=worker)
     t.start()

@@ -37,7 +37,7 @@ async def _fever_handler(request: Request) -> Response:
     api_key = params.get("api_key", "")
     # Resolve the api_key (md5(username:api_token)) to a user_id and bind
     # the tenancy context so the dispatch reads that user's data.
-    uid = user_store.fever_user_for_key(api_key) if user_store else None
+    uid = user_store.fever_user_for_key(api_key)
     if not uid:
         return JSONResponse({"api_version": 3, "auth": 0})
     with tenancy.user_context(uid):

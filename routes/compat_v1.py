@@ -81,7 +81,6 @@ def miniflux_me(request: Request) -> Response:
     uid = _miniflux_ok(request)
     if not uid:
         return JSONResponse({"error_message": "Access Unauthorized."}, status_code=401)
-    assert user_store is not None  # _miniflux_ok only returns a uid when user_store is set
     with tenancy.user_context(uid):
         with user_store._connect() as conn:
             row = conn.execute("SELECT username, is_admin FROM users WHERE user_id=?", (uid,)).fetchone()

@@ -101,8 +101,6 @@ def _account_redirect(*, msg: str | None = None, error: str | None = None) -> Re
 
 @router.post("/account/password")
 async def account_change_password(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
         return RedirectResponse(url="/login", status_code=303)
@@ -127,8 +125,6 @@ async def account_change_password(request: Request):
 
 @router.post("/account/api-token/regenerate")
 async def account_regenerate_token(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
         return RedirectResponse(url="/login", status_code=303)
@@ -143,8 +139,6 @@ async def account_regenerate_token(request: Request):
 async def account_change_username(request: Request):
     """Self-service username change. Identity (user_id) is unchanged, so the
     session stays valid and data/tokens are unaffected."""
-    if user_store is None:
-        return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
         return RedirectResponse(url="/login", status_code=303)
@@ -164,8 +158,6 @@ async def account_change_username(request: Request):
 
 @router.post("/admin/users/create")
 async def admin_create_user(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -192,8 +184,6 @@ async def admin_create_user(request: Request):
 
 @router.post("/admin/users/disable")
 async def admin_disable_user(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -214,8 +204,6 @@ async def admin_delete_user(request: Request):
     """Permanently remove a user: drops the account row + GReader tokens and
     deletes the user's isolated data directory. Admin-only; cannot delete your
     own account or the last remaining admin."""
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -239,8 +227,6 @@ async def admin_delete_user(request: Request):
 
 @router.post("/admin/users/reset-password")
 async def admin_reset_password(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -259,8 +245,6 @@ async def admin_reset_password(request: Request):
 
 @router.post("/admin/users/rename")
 async def admin_rename_user(request: Request):
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -290,8 +274,6 @@ async def admin_vacuum_user(request: Request):
     Nightly maintenance vacuums meta/starred but skips the reader DB (the big
     one); this reclaims space after a large purge or unsubscribe spree. A DB
     busy with another writer just logs and skips — the nightly pass retries."""
-    if user_store is None:
-        return Response(status_code=404)
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)

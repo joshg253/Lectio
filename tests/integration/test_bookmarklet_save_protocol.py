@@ -6,7 +6,7 @@ server fetch — that's the whole point for paywalled pages)."""
 from __future__ import annotations
 
 import pytest
-from _tenancy_helpers import configure_test_tenancy
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,15 +25,18 @@ PAGE_HTML = (
     + "</article></body></html>"
 )
 
+TOKEN = "test-api-token"
+
 
 @pytest.fixture
-def configured(tmp_path):
+def configured(tmp_path, monkeypatch):
     saved = tenancy._layout
     saved_store = main.user_store
     main.close_thread_db_pools()
     configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
-    main.user_store = None  # no-auth single-user mode: default tenancy
+    # Saves land in the test user's DBs: TOKEN resolves to the bound test user.
+    monkeypatch.setattr(main.user_store, "user_for_api_token", lambda token: TEST_USER_ID if token == TOKEN else None)
     try:
         yield
     finally:
@@ -65,7 +68,7 @@ def test_save_extracts_from_captured_html_without_fetching(configured, monkeypat
         r = c.post(
             "/api/bookmarklet/save",
             json={
-                "token": "ignored-in-no-auth-mode",
+                "token": TOKEN,
                 "url": "https://example.com/paywalled",
                 "title": "Tab Title",
                 "html": PAGE_HTML,
@@ -89,7 +92,7 @@ def test_save_without_html_falls_back_to_server_fetch(configured, monkeypatch):
         r = c.post(
             "/api/bookmarklet/save",
             json={
-                "token": "x",
+                "token": TOKEN,
                 "url": "https://example.com/normal",
             },
         )
@@ -148,7 +151,7 @@ def test_lectio_page_capture_stars_the_wrapped_entry(configured):
         r = c.post(
             "/api/bookmarklet/save",
             json={
-                "token": "x",
+                "token": TOKEN,
                 "url": lectio_page,
                 "title": "Lectio",
                 "html": PAGE_HTML,
@@ -171,7 +174,7 @@ def test_lectio_capture_of_aged_out_entry_saves_its_url(configured, monkeypatch)
     monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Recovered", "<p>body</p>"))
     lectio_page = "http://testserver/?feed_url=https://gone.test/feed&entry_id=https://gone.test/article"
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={"token": "x", "url": lectio_page})
+        r = c.post("/api/bookmarklet/save", json={"token": TOKEN, "url": lectio_page})
     assert r.status_code == 200, r.text
     with main.get_reader() as reader:
         entry = reader.get_entry((SAVED_FEED_URL, "https://gone.test/article"))
@@ -184,7 +187,7 @@ def test_foreign_host_with_lectio_like_params_is_not_unwrapped(configured, monke
     monkeypatch.setattr(main, "fetch_readability_article", lambda u: ("Foreign", "<p>x</p>"))
     url = "https://other.example/?feed_url=a&entry_id=b"
     with _client() as c:
-        r = c.post("/api/bookmarklet/save", json={"token": "x", "url": url})
+        r = c.post("/api/bookmarklet/save", json={"token": TOKEN, "url": url})
     assert r.status_code == 200
     with main.get_reader() as reader:
         assert reader.get_entry((SAVED_FEED_URL, url), None) is not None
@@ -193,7 +196,7 @@ def test_foreign_host_with_lectio_like_params_is_not_unwrapped(configured, monke
 def test_invalid_body_and_bad_url(configured):
     with _client() as c:
         assert c.post("/api/bookmarklet/save", content=b"not json", headers={"Content-Type": "application/json"}).status_code == 400
-        r = c.post("/api/bookmarklet/save", json={"token": "x", "url": "ftp://nope"})
+        r = c.post("/api/bookmarklet/save", json={"token": TOKEN, "url": "ftp://nope"})
     assert r.status_code == 400
     assert r.json()["detail"]
 

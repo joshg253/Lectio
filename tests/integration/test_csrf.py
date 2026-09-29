@@ -16,10 +16,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _tenancy_helpers import configure_test_tenancy
 from fastapi.testclient import TestClient
 
 import main
 from routes import system as system_routes
+from services import tenancy
 
 
 @pytest.fixture(autouse=True)
@@ -30,13 +32,18 @@ def _isolate_dbs(monkeypatch, tmp_path: Path):
     confuse the running app (e.g., resurrected "saved" markers for fake
     test entries).
     """
-    monkeypatch.setattr(main, "META_DB_PATH", tmp_path / "meta.sqlite3")
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    configure_test_tenancy(tmp_path)
     monkeypatch.setattr(main, "THUMB_DB_PATH", tmp_path / "thumb.sqlite")
-    monkeypatch.setattr(main, "STARRED_ARCHIVE_DB_PATH", tmp_path / "archive.sqlite")
     main.ensure_meta_schema()
     main.ensure_thumb_schema()
     main.ensure_starred_archive_schema()
-    yield
+    try:
+        yield
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
 
 
 def test_post_without_token_is_rejected_with_403():

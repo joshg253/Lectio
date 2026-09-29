@@ -16,14 +16,9 @@ def configured(tmp_path):
     its configuration.
     """
     saved = tenancy._layout
-    tenancy.configure(
-        data_dir=tmp_path,
-        legacy_reader=tmp_path / "lectio_reader.sqlite",
-        legacy_meta=tmp_path / "lectio_meta.sqlite3",
-        legacy_starred=tmp_path / "lectio_starred_archive.sqlite",
-    )
-    # conftest binds every test to a user; these tests are about the unbound state, so drop back to the ContextVar's default.
-    token = tenancy._current_user.set(tenancy.DEFAULT_USER_ID)
+    tenancy.configure(data_dir=tmp_path)
+    # conftest binds every test to a user; these tests start from the unbound state a bare thread sees.
+    token = tenancy._current_user.set(None)
     try:
         yield tmp_path
     finally:
@@ -31,16 +26,24 @@ def configured(tmp_path):
         tenancy._layout = saved
 
 
-def test_default_user_resolves_to_legacy_paths(configured):
-    assert tenancy.reader_db_path() == configured / "lectio_reader.sqlite"
-    assert tenancy.meta_db_path() == configured / "lectio_meta.sqlite3"
-    assert tenancy.starred_archive_db_path() == configured / "lectio_starred_archive.sqlite"
+def test_unbound_resolution_raises(configured):
+    assert tenancy.bound_user_id() is None
+    with pytest.raises(tenancy.TenancyUnboundError):
+        tenancy.current_user_id()
+    with pytest.raises(tenancy.TenancyUnboundError):
+        tenancy.meta_db_path()
+    with pytest.raises(tenancy.TenancyUnboundError):
+        tenancy.reader_db_path()
+    with pytest.raises(tenancy.TenancyUnboundError):
+        tenancy.starred_archive_db_path()
 
 
-def test_default_user_is_the_implicit_context(configured):
-    # No context set → DEFAULT_USER_ID → legacy paths.
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
-    assert tenancy.meta_db_path(tenancy.DEFAULT_USER_ID) == tenancy.meta_db_path()
+def test_current_user_resolves_under_users_dir(configured):
+    with tenancy.user_context("alice"):
+        base = configured / "users" / "alice"
+        assert tenancy.reader_db_path() == base / "lectio_reader.sqlite"
+        assert tenancy.meta_db_path() == base / "lectio_meta.sqlite3"
+        assert tenancy.starred_archive_db_path() == base / "lectio_starred_archive.sqlite"
 
 
 def test_named_user_resolves_under_users_dir(configured):
@@ -52,7 +55,8 @@ def test_named_user_resolves_under_users_dir(configured):
 
 def test_distinct_users_get_distinct_paths(configured):
     assert tenancy.meta_db_path("alice") != tenancy.meta_db_path("bob")
-    assert tenancy.meta_db_path("alice") != tenancy.meta_db_path()
+    with tenancy.user_context("carol"):
+        assert tenancy.meta_db_path("alice") != tenancy.meta_db_path()
 
 
 @pytest.mark.parametrize(
@@ -65,7 +69,7 @@ def test_invalid_user_ids_are_rejected(configured, bad):
         tenancy.meta_db_path(bad)
 
 
-@pytest.mark.parametrize("good", ["alice", "user_1", "A-B_c", "default", "x" * 64])
+@pytest.mark.parametrize("good", ["alice", "user_1", "A-B_c", "x" * 64])
 def test_valid_user_ids_accepted(configured, good):
     assert tenancy.is_valid_user_id(good)
     # Should not raise.
@@ -73,22 +77,22 @@ def test_valid_user_ids_accepted(configured, good):
 
 
 def test_user_context_sets_and_restores(configured):
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.bound_user_id() is None
     with tenancy.user_context("alice"):
         assert tenancy.current_user_id() == "alice"
         assert tenancy.meta_db_path() == tenancy.meta_db_path("alice")
         with tenancy.user_context("bob"):
             assert tenancy.current_user_id() == "bob"
-        # Inner context restored to alice, not default.
+        # Inner context restored to alice.
         assert tenancy.current_user_id() == "alice"
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.bound_user_id() is None
 
 
 def test_user_context_restores_on_exception(configured):
     with pytest.raises(RuntimeError):
         with tenancy.user_context("alice"):
             raise RuntimeError("boom")
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.bound_user_id() is None
 
 
 def test_set_reset_current_user_token(configured):
@@ -97,7 +101,7 @@ def test_set_reset_current_user_token(configured):
         assert tenancy.current_user_id() == "alice"
     finally:
         tenancy.reset_current_user(token)
-    assert tenancy.current_user_id() == tenancy.DEFAULT_USER_ID
+    assert tenancy.bound_user_id() is None
 
 
 def test_set_current_user_rejects_invalid(configured):
@@ -111,12 +115,7 @@ def test_ensure_user_data_dir_creates_dir(configured):
     assert path == configured / "users" / "alice"
 
 
-def test_ensure_user_data_dir_rejects_default(configured):
-    with pytest.raises(ValueError):
-        tenancy.ensure_user_data_dir(tenancy.DEFAULT_USER_ID)
-
-
 def test_resolution_requires_configure(monkeypatch):
     monkeypatch.setattr(tenancy, "_layout", None)
     with pytest.raises(RuntimeError):
-        tenancy.meta_db_path()
+        tenancy.meta_db_path("alice")

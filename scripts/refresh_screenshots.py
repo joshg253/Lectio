@@ -140,10 +140,8 @@ def main() -> int:
         )
 
         # Auth is unconditional, so the browsing session is always a real user
-        # with its own per-user data dir. Seeding into the legacy top-level DBs
-        # (what happens when the seeder runs unbound) writes a library nothing
-        # ever serves — the capture then shoots an empty reader. So: boot once
-        # to provision the user, learn its id, seed bound to it, then serve.
+        # with its own per-user data dir. So: boot once to provision the user,
+        # learn its id, seed bound to it, then serve.
         serve_env = dict(
             env,
             LECTIO_DEBUG="0",

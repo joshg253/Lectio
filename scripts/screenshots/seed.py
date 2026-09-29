@@ -30,13 +30,12 @@ def main() -> int:
     import main as app  # imported after LECTIO_DATA_DIR is set
     from services import tenancy
 
-    # Bind to the account the capture instance actually browses as. Unbound, the
-    # resolver falls back to DEFAULT_USER_ID → the legacy top-level DBs, and the
-    # whole library is seeded somewhere the running app never reads: feeds and
-    # folders on disk, an empty reader on screen.
+    # Bind to the account the capture instance actually browses as; every DB the seed touches is per-user.
     user_id = os.environ.get("LECTIO_SEED_USER_ID")
-    if user_id:
-        tenancy.set_current_user(user_id)
+    if not user_id:
+        print("LECTIO_SEED_USER_ID is required", file=sys.stderr)
+        return 2
+    tenancy.set_current_user(user_id)
 
     app.ensure_meta_schema()
     app.ensure_starred_archive_schema()

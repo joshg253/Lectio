@@ -40,7 +40,7 @@ def _greader_token(request: Request) -> str:
 def _resolve_greader_user(request: Request) -> str | None:
     """Username authorized for this GReader request, or None."""
     token = _greader_token(request)
-    return user_store.resolve_greader_token(token) if user_store else None
+    return user_store.resolve_greader_token(token)
 
 
 def _greader_ok(request: Request) -> bool:
@@ -50,8 +50,6 @@ def _greader_ok(request: Request) -> bool:
 @router.post("/greader/accounts/ClientLogin")
 async def greader_login(request: Request) -> Response:
     """Authenticate and return a GReader auth token (username + API token)."""
-    if user_store is None:
-        return Response("Error=ServiceUnavailable\n", status_code=503)
     form = await request.form()
     email = str(form.get("Email") or form.get("email") or "")
     passwd = str(form.get("Passwd") or form.get("passwd") or "")
@@ -67,10 +65,8 @@ async def greader_login(request: Request) -> Response:
 def greader_user_info(request: Request) -> Response:
     if not _greader_ok(request):
         return Response(status_code=401)
-    display_name = None
-    if user_store is not None:
-        row = user_store.get_by_id(tenancy.current_user_id())
-        display_name = row["username"] if row else tenancy.current_user_id()
+    row = user_store.get_by_id(tenancy.current_user_id())
+    display_name = row["username"] if row else tenancy.current_user_id()
     return JSONResponse(greader_service.get_user_info(display_name))  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
 
 

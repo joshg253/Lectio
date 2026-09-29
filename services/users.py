@@ -35,14 +35,6 @@ _DUMMY_TOKEN = secrets.token_urlsafe(24)
 
 _GREADER_TOKEN_LIFETIME = 90 * 24 * 3600
 
-# Usernames are just login handles (identity is the stable user_id), so no real
-# blacklist is needed — only reserve the tenancy sentinel to avoid confusion.
-_RESERVED_USERNAMES = {tenancy.DEFAULT_USER_ID}
-
-
-class ReservedUsernameError(ValueError):
-    """Raised when a username collides with a reserved name."""
-
 
 def _generate_user_id() -> str:
     """An opaque, immutable, path-safe account id."""
@@ -201,8 +193,6 @@ class UserStore:
         an invalid username/password, UserExistsError if the username is taken."""
         if not tenancy.is_valid_user_id(username):
             raise ValueError(f"invalid username (must match {{A-Za-z0-9_-}}, 1-64 chars): {username!r}")
-        if username.lower() in _RESERVED_USERNAMES:
-            raise ReservedUsernameError(username)
         if not password:
             raise ValueError("password must not be empty")
         user_id = _generate_user_id()
@@ -223,8 +213,6 @@ class UserStore:
         and tokens) is unaffected. Raises if the new name is invalid or taken."""
         if not tenancy.is_valid_user_id(new_username):
             raise ValueError(f"invalid username: {new_username!r}")
-        if new_username.lower() in _RESERVED_USERNAMES:
-            raise ReservedUsernameError(new_username)
         try:
             with self._connect() as conn:
                 cur = conn.execute("UPDATE users SET username = ? WHERE user_id = ?", (new_username, user_id))

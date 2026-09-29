@@ -277,8 +277,8 @@ RULES: list[tuple[str, list[str]]] = [
 ]
 
 
-def _db_paths(data_dir: Path, user: str | None) -> tuple[Path, Path]:
-    base = data_dir / "users" / user if user else data_dir
+def _db_paths(data_dir: Path, user: str) -> tuple[Path, Path]:
+    base = data_dir / "users" / user
     return base / "lectio_reader.sqlite", base / "lectio_meta.sqlite3"
 
 
@@ -489,7 +489,7 @@ def cmd_apply(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--user", default=None, help="user id (multi-user); omit for single-user")
+    p.add_argument("--user", required=True, help="user id (u_xxx)")
     p.add_argument("--propose", action="store_true")
     p.add_argument("--review", dest="review_csv", default=None, help="fill blank rows in this proposal CSV via Claude")
     p.add_argument("--apply", dest="apply_csv", default=None)

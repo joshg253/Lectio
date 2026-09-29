@@ -143,10 +143,10 @@ class StarredArchiveService:
         # Which users the worker should scan each cycle. The archive DB is
         # resolved per-user through the context-bound get_archive_connection,
         # so the worker must bind each user in turn — a single global thread
-        # with no context would only ever touch the default tenant's DB and
-        # never archive other users' starred entries. Defaults to the single
-        # default user when not injected (single-user mode and tests).
-        self._background_user_ids = background_user_ids or (lambda: [tenancy.DEFAULT_USER_ID])
+        # with no context would raise TenancyUnboundError and
+        # never archive other users' starred entries. main injects every enabled
+        # user; without it (tests that never start the worker) there is no one to scan.
+        self._background_user_ids = background_user_ids or (lambda: [])
         # Guards the in-run extraction memory (see extraction_matches_sibling):
         # the archive worker thread and a foreground re-fetch both reach it.
         self._recent_extractions: dict[str, OrderedDict] = {}

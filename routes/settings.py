@@ -591,7 +591,6 @@ def update_auto_refresh_setting(
         normalized_minutes = normalize_auto_refresh_minutes(refresh_minutes)
         with get_meta_connection() as conn:
             set_setting(conn, AUTO_REFRESH_SETTING_KEY, str(normalized_minutes))
-        app.state.auto_refresh_minutes = normalized_minutes
         app.state.last_scheduled_refresh_started_at = time.monotonic()
         if normalized_minutes <= 0:
             message = "Auto-refresh disabled."
