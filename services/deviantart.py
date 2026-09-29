@@ -509,6 +509,9 @@ def _generate_rss_xml(feed_title: str, source_url: str, entries: list[dict]) -> 
     )
 
 
+_WATCH_PAGE_URL = "https://www.deviantart.com/notifications/watch/deviations"
+
+
 def _gallery_page_url(username: str) -> str:
     return f"https://www.deviantart.com/{username}/gallery/all"
 
@@ -534,7 +537,9 @@ def _write_feed_file(conn: sqlite3.Connection, feed_id: str) -> None:
         }
         for r in rows
     ]
-    xml = _generate_rss_xml(str(row["feed_title"]), _gallery_page_url(str(row["username"])), entries)
+    # The combined Watch feed's username is the placeholder "deviantsyouwatch" -- link DA's own Watch page, not a profile.
+    site_url = _WATCH_PAGE_URL if _feed_source(row) == "watch" else _gallery_page_url(str(row["username"]))
+    xml = _generate_rss_xml(str(row["feed_title"]), site_url, entries)
     (_dir() / f"{feed_id}.xml").write_text(xml, encoding="utf-8")
 
 
@@ -914,6 +919,24 @@ def watch_user(access_token: str, username: str) -> tuple[bool, str]:
     if resp.status_code == 200 and (resp.json().get("success") if is_json else False):
         return True, "ok"
     return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
+
+
+def unwatch_user(access_token: str, username: str) -> tuple[bool, str]:
+    """Remove `username` from the authenticated user's Watch list. Returns (ok, message)."""
+    resp = _request("GET", f"{_API_BASE}/user/friends/unwatch/{username}", headers=_user_headers(access_token))
+    is_json = resp.headers.get("content-type", "").startswith("application/json")
+    if resp.status_code == 200 and (resp.json().get("success") if is_json else False):
+        return True, "ok"
+    return False, f"HTTP {resp.status_code}: {resp.text[:160]}"
+
+
+def is_watching(access_token: str, username: str) -> bool | None:
+    """Whether the authenticated user Watches `username`; None when DA doesn't say."""
+    resp = _request("GET", f"{_API_BASE}/user/friends/watching/{username}", headers=_user_headers(access_token))
+    if resp.status_code != 200 or not resp.headers.get("content-type", "").startswith("application/json"):
+        return None
+    watching = resp.json().get("watching")
+    return watching if isinstance(watching, bool) else None
 
 
 # --- Expiring image URLs (mature deviations) ---------------------------------

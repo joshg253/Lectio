@@ -60,7 +60,19 @@
         >{% if selected_entry.feed_url in unsubscribed_feed_urls %}<span class="feed-unsubscribed-tag" title="No longer subscribed — this is a kept copy">(unsubscribed)</span>{% endif %}
         {% if selected_entry.author %}
         <span class="entry-meta-separator" aria-hidden="true">·</span>
-        <span class="entry-author-inline">by {{ selected_entry.author }}{% if selected_entry.author_filter_token %}
+        <span class="entry-author-inline">by {% if selected_entry.da_watch_artist %}<a
+          class="entry-author-link"
+          title="Show {{ selected_entry.da_watch_artist }}'s posts in this feed"
+          href="/?folder_id={{ entry_feed_folder_id }}&list_feed_url={{ selected_entry.feed_url | urlencode }}&sort_by={{ selected_sort_by }}&sort_dir={{ selected_sort_dir }}&read_filter={{ selected_read_filter }}{% if selected_star_only %}&star_only=1{% else %}&star_only=0{% endif %}&resume_read_filter={{ selected_resume_read_filter }}&q={{ ('deviantart.com/' ~ (selected_entry.da_watch_artist | lower) ~ '/') | urlencode }}"
+          >{{ selected_entry.author }}</a>{% else %}{{ selected_entry.author }}{% endif %}{% if selected_entry.da_watch_artist %}
+        <button
+          type="button"
+          class="feed-tag-filter-sign da-unwatch"
+          data-da-unwatch="{{ selected_entry.da_watch_artist }}"
+          title="Unwatch {{ selected_entry.da_watch_artist }} on DeviantArt"
+          aria-label="Unwatch {{ selected_entry.da_watch_artist }} on DeviantArt"
+        >✕</button>
+        {% elif selected_entry.author_filter_token %}
         {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
         {% set author_inherited = (selected_entry.feed_tag_inherited_signs or {}).get(selected_entry.author_filter_token) if not author_sign else none %}
         {% set author_inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}

@@ -106,6 +106,33 @@
     </div>
   </div>
 
+  <div id="da-unwatch-modal" class="action-modal" hidden>
+    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="da-unwatch-title">
+      <div class="modal-header-row">
+        <h3 id="da-unwatch-title" class="action-modal-title">Unwatch on DeviantArt</h3>
+        <button type="button" class="modal-close" data-close-modal="da-unwatch-modal" aria-label="Close"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
+      </div>
+      <div class="action-modal-body">
+        <p>Unwatch <strong id="da-unwatch-name"></strong> on DeviantArt. What should happen to their posts already here?</p>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem">
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="da-unwatch-posts" value="keep" checked> Keep them as they are
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="da-unwatch-posts" value="read"> Mark them read and keep
+          </label>
+          <label style="display:flex;align-items:center;gap:0.5rem">
+            <input type="radio" name="da-unwatch-posts" value="purge"> Delete them all (starred and tagged posts are kept)
+          </label>
+        </div>
+      </div>
+      <div class="action-modal-footer">
+        <button type="button" class="btn-secondary" data-close-modal="da-unwatch-modal">Cancel</button>
+        <button type="button" id="da-unwatch-confirm" class="btn-primary danger">Unwatch</button>
+      </div>
+    </div>
+  </div>
+
   <div id="tag-rename-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="tag-rename-title">
       <div class="modal-header-row">

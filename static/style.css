@@ -3480,13 +3480,15 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
   margin-bottom: 0;
 }
 
-.entry-feed-link {
+.entry-feed-link,
+.entry-author-link {
   color: inherit;
   text-decoration: none;
   border-radius: 3px;
 }
 
-.entry-feed-link:hover {
+.entry-feed-link:hover,
+.entry-author-link:hover {
   text-decoration: underline;
 }
 

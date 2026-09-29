@@ -9,7 +9,7 @@ import threading
 import time
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from main import (
@@ -29,6 +29,7 @@ from main import (
     _humanize_da_add_error,
     _load_da_sync_detail,
     _run_in_user_context,
+    apply_deviantart_unwatch_posts_action,
     delete_setting,
     get_deviantart_credentials,
     get_deviantart_user_token,
@@ -186,6 +187,38 @@ def deviantart_unsubscribe_unwatched_route(request: Request):
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_SYNC_DETAIL, json.dumps(detail))
     return JSONResponse({"ok": True, "count": len(feed_urls)})
+
+
+_UNWATCH_POST_ACTIONS = {"keep", "read", "purge"}
+
+
+@router.post("/deviantart/unwatch")
+def deviantart_unwatch_route(username: str = Form(""), posts: str = Form("keep")):
+    """Un-Watch an artist on DeviantArt (the ✕ on a Watch-feed byline), then keep, mark read, or
+    purge their posts already in the Watch feed."""
+    username = username.strip()
+    if not username or posts not in _UNWATCH_POST_ACTIONS:
+        return JSONResponse({"ok": False, "error": "Bad request."}, status_code=400)
+    token = get_deviantart_user_token()
+    if not token:
+        return JSONResponse({"ok": False, "error": "DeviantArt account not connected."}, status_code=400)
+    try:
+        ok, detail = deviantart_service.unwatch_user(token, username)
+    except deviantart_service.DeviantArtRateLimited:
+        return JSONResponse({"ok": False, "error": "DeviantArt rate limit — try again in a bit."}, status_code=429)
+    was_watching = True
+    if not ok:
+        # DA answers {"success": false} for someone you don't Watch (old posts outlive the Watch) -- that's already done.
+        try:
+            was_watching = deviantart_service.is_watching(token, username) is not False
+        except deviantart_service.DeviantArtRateLimited:
+            pass
+        if was_watching:
+            LOGGER.warning("[deviantart] unwatch %s failed: %s", username, detail)
+            # 4xx, not 5xx: the reverse proxy swaps 5xx bodies for its own HTML error page.
+            return JSONResponse({"ok": False, "error": f"DeviantArt refused to unwatch {username}."}, status_code=409)
+    count = apply_deviantart_unwatch_posts_action(username, posts)
+    return JSONResponse({"ok": True, "username": username, "posts": posts, "count": count, "was_watching": was_watching})
 
 
 @router.post("/deviantart/unwatched-viewed")

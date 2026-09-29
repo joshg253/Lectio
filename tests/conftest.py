@@ -33,6 +33,7 @@ import socket  # noqa: E402
 import sqlite3  # noqa: E402
 import sys as _sys  # noqa: E402
 import threading  # noqa: E402
+import time  # noqa: E402
 import traceback  # noqa: E402
 
 import pytest  # noqa: E402
@@ -220,3 +221,18 @@ def _disable_yt_quota_sink():
     except Exception:
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _drain_lead_image_writes():
+    """Opening an entry queues lead-image writes on the single ``leadimage-writer`` thread, which resolves the DB path when it runs.
+    Left queued past teardown, one lands in the NEXT test's fresh meta DB while its fixture sets WAL mode, which fails at once with
+    "database is locked" (CI, 2026-09-28). Wait for the queue to empty while this test's tenancy is still the configured one."""
+    yield
+    main = sys.modules.get("main")
+    queue = getattr(getattr(main, "lead_image_service", None), "_write_queue", None)
+    if queue is None:
+        return
+    deadline = time.monotonic() + 10
+    while queue.unfinished_tasks and time.monotonic() < deadline:
+        time.sleep(0.01)
