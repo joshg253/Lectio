@@ -303,6 +303,10 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   but not dedup. Cosmetic until something else needs to touch them.
 - **`ensure_meta_schema`** (main.py:3626, ~1,332 lines) — long but linear (CREATE + idempotent
   ALTERs), low churn. A by-area split is cosmetic.
+- **Stack updates: tag-only base image pin** — `python:3.14-slim` and `uv:latest` are floating tags, so a cached base layer can go stale
+  between rebuilds. Either `--pull` in `make rebuild` or a digest pin bumped in the weekly sweep. Checked 2026-09-30: both current.
+- **Stack updates: sibling containers** (searxng, traefik, tailscale, browserless, redis, gluetun) run `:latest` from separate compose
+  projects and were behind the registry on 2026-09-30. Pull and recreate by hand (restarts the VPN, tailscale, and traefik).
 - **Backfill Sphinx-math height on already-stored entries** — the ingest-time fix doesn't
   retroactively help entries stored before it; low value (few math articles), do on demand. Note:
   `entries.content` is reader's JSON structure, not raw HTML — a backfill must respect that shape.
@@ -351,6 +355,9 @@ Re-checked 2026-09-22, after all 10 route-split stages: 48 open alerts total (28
 individually re-verified per-file the way PR #329/#340 were) — no reason to expect otherwise, since
 every stage used the same mechanical move. Still left open for the same reason: a real fix is one
 pass picking a useful message per call site, across the whole app, not scoped to any one refactor.
+
+Re-checked 2026-09-30: still the same 48 (28 `py/url-redirection`, 20 `py/stack-trace-exposure`), none new since 2026-09-23 and none from
+the stack update. Next up: the dedicated fix pass, once the "Update Stack" PR merges.
 
 ### Feed-tag suggestion suppression — do not attempt a third heuristic
 
