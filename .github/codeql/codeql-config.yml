@@ -28,3 +28,6 @@ query-filters:
 # extraction behavior it exists to pin.
 paths-ignore:
   - tests/fixtures
+  # Local-only caches: `make codeql` runs from a working tree that has these, CI's checkout doesn't.
+  - .uvcache
+  - .tools
