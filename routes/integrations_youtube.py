@@ -79,7 +79,7 @@ def youtube_oauth_callback(request: Request, code: str | None = None, state: str
     try:
         data = youtube_oauth_service.exchange_code(cid, secret, code, _youtube_oauth_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "YouTube connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN, data["access_token"])
         if data.get("refresh_token"):

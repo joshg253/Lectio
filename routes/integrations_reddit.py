@@ -59,7 +59,7 @@ def reddit_oauth_callback(request: Request, code: str | None = None, state: str 
     try:
         data = reddit_service.exchange_code(cid, secret, code, _reddit_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Reddit connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "Reddit connect")), status_code=303)
     username = ""
     try:
         me = reddit_service.get_me(data["access_token"])

@@ -88,9 +88,9 @@ codeql:
 	$(CODEQL) database analyze $(CODEQL_DB) --format=sarif-latest --output=$(CODEQL_SARIF) $(CODEQL_FLAGS)
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run scripts/codeql_summary.py $(CODEQL_SARIF)
 
-# Just our custom queries plus the stock URL-redirection and stack-trace queries (the ones the guard-aware copies stand in for).
+# Just our custom queries plus the stock stack-trace query. The stock URL-redirection query is deliberately absent: CI excludes it (the
+# guard-aware copy in .github/codeql/queries/ replaces it), and naming it here would bypass that exclusion and report the old alerts.
 codeql-fast:
-	$(CODEQL) database analyze $(CODEQL_DB) .github/codeql/queries \
-		codeql/python-queries:Security/CWE-601/UrlRedirect.ql codeql/python-queries:Security/CWE-209/StackTraceExposure.ql \
+	$(CODEQL) database analyze $(CODEQL_DB) .github/codeql/queries codeql/python-queries:Security/CWE-209/StackTraceExposure.ql \
 		--format=sarif-latest --output=$(CODEQL_SARIF) $(CODEQL_FLAGS)
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run scripts/codeql_summary.py $(CODEQL_SARIF)

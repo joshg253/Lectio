@@ -70,7 +70,7 @@ def quire_callback(request: Request, code: str | None = None, state: str | None 
         except Exception:
             username = ""
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Quire connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "Quire connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_QUIRE_ACCESS_TOKEN, token)
         if data.get("refresh_token"):

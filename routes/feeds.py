@@ -721,7 +721,7 @@ def create_feed(
             msg = "dev.to rate limit — try again in a bit."
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[devto] add failed for %s: %s", url, exc)
-            msg = f"dev.to add failed: {exc}"
+            msg = public_error(exc, "dev.to add")
         return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
 
     # DeviantArt: when connected, "adding" an artist just Watches them on DeviantArt
@@ -741,7 +741,7 @@ def create_feed(
             except deviantart_service.DeviantArtRateLimited:
                 msg = "DeviantArt rate limit — try again in a bit."
             except Exception as exc:  # noqa: BLE001
-                msg = f"DeviantArt watch failed: {exc}"
+                msg = public_error(exc, "DeviantArt watch")
             return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
         # Not connected → standalone gallery feed (best effort with app creds).
         cid, secret = get_deviantart_credentials()
@@ -763,7 +763,7 @@ def create_feed(
             msg = f"DeviantArt gallery added ({da_username})."
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[deviantart] add failed for %s: %s", da_username, exc)
-            msg = f"DeviantArt add failed: {exc}"
+            msg = public_error(exc, "DeviantArt add")
         return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
 
     # For non-YouTube URLs, probe whether the URL is a feed and run
@@ -852,7 +852,7 @@ def create_feed(
             daemon=True,
         ).start()
     except Exception as exc:
-        message = f"Feed add failed: {exc}"
+        message = public_error(exc, "Feed add")
         return RedirectResponse(
             url=local_url(f"/?folder_id={folder_id}&message={quote_plus(message)}"),
             status_code=303,
@@ -954,7 +954,7 @@ def create_scraped_feed_route(
     except Exception as exc:
         LOGGER.warning("[scraper] create failed for %s: %s", source_url, exc)
         return RedirectResponse(
-            url=local_url(f"/?folder_id={target_folder_id}&message={quote_plus(f'Page feed failed: {exc}')}"),
+            url=local_url(f"/?folder_id={target_folder_id}&message={quote_plus(public_error(exc, 'Page feed'))}"),
             status_code=303,
         )
 

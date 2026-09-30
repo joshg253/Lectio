@@ -68,7 +68,7 @@ def pinterest_oauth_callback(request: Request, code: str | None = None, state: s
     try:
         data = pinterest_oauth_service.exchange_code(cid, secret, code, _pinterest_oauth_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Pinterest connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "Pinterest connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_PINTEREST_OAUTH_ACCESS_TOKEN, data["access_token"])
         if data.get("refresh_token"):
