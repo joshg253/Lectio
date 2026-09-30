@@ -46,7 +46,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
-from services import tenancy  # noqa: E402
+from services import automation_rules, tenancy  # noqa: E402
 
 
 def _rule_scope_feed_urls(conn: sqlite3.Connection, rule: dict) -> set[str]:
@@ -193,8 +193,8 @@ def run_for_user(uid: str, args: argparse.Namespace, cutoff: datetime) -> None:
         trigger="backfill",
     )
     print(f"[{uid}] added {added} video(s)")
-    if added >= main._YT_PLAYLIST_AUTO_PER_RUN_CAP:
-        print(f"[{uid}] hit the per-run cap ({main._YT_PLAYLIST_AUTO_PER_RUN_CAP}) -- re-run to continue")
+    if added >= automation_rules._YT_PLAYLIST_AUTO_PER_RUN_CAP:
+        print(f"[{uid}] hit the per-run cap ({automation_rules._YT_PLAYLIST_AUTO_PER_RUN_CAP}) -- re-run to continue")
 
 
 def main_cli() -> None:
