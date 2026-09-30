@@ -45,6 +45,14 @@ on more investigation. Once answered, each drops into Tier 2 or 3.
   (or first creates, disabled) the feed's own rule. Open: should it edit the shared rule instead, or keep forking a feed-level
   override? Once decided: a lookup-order change to `get_feed_tag_filter_rule` plus one branch in `toggle_feed_tag_filter`.
 
+### Gate Sourcery reviews on green CI — undecided
+
+Sourcery is a GitHub App, not an Actions job, so `needs:` can't order it after CI; every push spends review budget even when
+CI fails. Workaround: in the Sourcery dashboard, set the Labels allowlist to a never-applied label (disables auto-review),
+then a `workflow_run` job on CI success comments `@sourcery-ai review` via a fine-grained PAT (Sourcery ignores bot
+comments). Unverified: that the allowlist also stops push re-reviews and that the comment still works outside it; test on
+a throwaway PR. Needs Josh: dashboard setting + PAT secret.
+
 ### `/api/*` cluster split — undecided
 
 Deferred out of the route split rather than decided: `/api/entry-thumb`, `/api/feed-thumb`,
