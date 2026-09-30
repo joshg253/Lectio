@@ -20861,7 +20861,7 @@ def build_reader_page(
         # Same vendored KaTeX as the main app's entry pane (see
         # docs/architecture/views.md "Inline LaTeX math (KaTeX)") -- Read Mode
         # has no app.js, so it needs its own copy of the CSS/font link.
-        "<link rel='stylesheet' href='/static/vendor/katex-0.18.6/katex.min.css'>"
+        "<link rel='stylesheet' href='/static/vendor/katex-0.18.9/katex.min.css'>"
         f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
         "</head><body>"
         "<header class='reader-bar'>"
@@ -20890,8 +20890,8 @@ def build_reader_page(
         f"<script>window.__READER_NAV__={nav_json};</script>"
         # Before reader.js, which calls renderMathInElement synchronously before
         # its first pagination measurement (see reader.js).
-        "<script src='/static/vendor/katex-0.18.6/katex.min.js'></script>"
-        "<script src='/static/vendor/katex-0.18.6/auto-render.min.js'></script>"
+        "<script src='/static/vendor/katex-0.18.9/katex.min.js'></script>"
+        "<script src='/static/vendor/katex-0.18.9/auto-render.min.js'></script>"
         f"<script src='/static/outbox.js?v={STATIC_ASSET_VERSION}'></script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"

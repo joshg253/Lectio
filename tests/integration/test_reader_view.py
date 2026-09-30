@@ -100,9 +100,9 @@ def test_reader_page_always_loads_katex_assets(monkeypatch):
     _patch_read(monkeypatch, backlog=[_rec(1)], article="<p>\\(x^2\\)</p>")
     with TestClient(_app()) as client:
         body = client.get("/read", params={"feed_url": "feed1", "entry_id": "e1"}).text
-    assert "vendor/katex-0.18.6/katex.min.css" in body
-    assert "vendor/katex-0.18.6/katex.min.js" in body
-    assert "vendor/katex-0.18.6/auto-render.min.js" in body
+    assert "vendor/katex-0.18.9/katex.min.css" in body
+    assert "vendor/katex-0.18.9/katex.min.js" in body
+    assert "vendor/katex-0.18.9/auto-render.min.js" in body
     # Comes before reader.js, which calls renderMathInElement synchronously.
     assert body.index("katex.min.js") < body.index("reader.js")
 

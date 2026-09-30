@@ -98,8 +98,7 @@ def _images_from_post(post: dict) -> list[str]:
     out: list[str] = []
     _images_from_embed(post.get("embed"), out)
     # De-dupe while preserving order.
-    seen: set[str] = set()
-    return [u for u in out if not (u in seen or seen.add(u))]
+    return list(dict.fromkeys(out))
 
 
 def _video_from_embed(embed: object) -> dict[str, str] | None:

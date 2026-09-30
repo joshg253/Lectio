@@ -882,11 +882,8 @@ def test_xkcd_end_to_end_alt_on_inline_image():
     image_title_text = _extract_image_title_text(XKCD_CONTENT)
     assert image_title_text == XKCD_EXPECTED_TITLE_TEXT
 
-    # Simulate main.py: inject only when no separate lead_image_url
-    lead_image_url = None  # xkcd: image is inline, never promoted separately
-    content_html = XKCD_CONTENT
-    if image_title_text and not lead_image_url:
-        content_html = _inject_image_title_as_alt(content_html, image_title_text)
+    # main.py injects only when there is no separate lead_image_url; xkcd's image is inline, never promoted separately.
+    content_html = _inject_image_title_as_alt(XKCD_CONTENT, image_title_text)
 
     # The inline <img> now carries the correct alt text so screen-readers and
     # the hover tooltip both show the punchline.
