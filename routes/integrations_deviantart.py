@@ -52,6 +52,7 @@ from main import (
 from routes.feeds import bulk_feed_action
 from services import deviantart as deviantart_service
 from services import tenancy
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -103,7 +104,7 @@ def deviantart_callback(request: Request, code: str | None = None, state: str | 
         token = data["access_token"]
         username = deviantart_service.whoami(token)
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"DeviantArt connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "DeviantArt connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_DEVIANTART_ACCESS_TOKEN, token)
         if data.get("refresh_token"):
@@ -267,4 +268,4 @@ def deviantart_add_watch_feed_route():
     except deviantart_service.DeviantArtRateLimited:
         return JSONResponse({"ok": False, "error": "DeviantArt rate limit — try again in a bit."}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "DeviantArt request")}, status_code=500)

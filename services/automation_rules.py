@@ -228,7 +228,7 @@ def _run_now_pattern(
     try:
         match_fn = build_keyword_matcher(keyword, is_regex)
     except re.error as e:
-        return {"error": f"Invalid regex: {e}"}
+        return {"error": f"Invalid regex: {e.msg}"}
 
     if scope == "folder":
         try:

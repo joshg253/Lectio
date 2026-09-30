@@ -25,6 +25,7 @@ from main import (
     set_setting,
 )
 from services import reddit as reddit_service
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -126,5 +127,5 @@ async def reddit_submit_route(request: Request):
     try:
         result = reddit_service.submit_link(token, subreddit, title, url)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Submitting to Reddit")}, status_code=400)
     return JSONResponse({"ok": True, "post_url": result.get("url", "")})

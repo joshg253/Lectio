@@ -350,8 +350,8 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
     try:
         raw = await file.read()
         data = json.loads(raw)
-    except Exception as exc:
-        return JSONResponse({"ok": False, "error": f"Invalid JSON: {exc}"}, status_code=400)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
 
     items = inoreader_service.parse_export_json(data if isinstance(data, list) else data.get("items", []))
 

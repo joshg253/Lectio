@@ -121,6 +121,7 @@ from main import (
 )
 from services import instapaper_import as instapaper_import_service
 from services import takeout_service
+from services.errors import public_error
 from services.redirects import local_url
 
 router = APIRouter()
@@ -626,7 +627,7 @@ def dev_flush_email_batch():
         _flush_all_email_batches()
         return JSONResponse({"ok": True})
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Request")}, status_code=500)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,8 +1046,8 @@ def add_email_contact_route(label: str = Form(...), address: str = Form(...)):
         with get_meta_connection() as conn:
             contact = add_email_contact(conn, label, address)
         return JSONResponse({"ok": True, "contact": contact})
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    except ValueError:
+        return JSONResponse({"error": "Invalid label or address"}, status_code=400)
 
 
 @router.post("/email-contacts/remove")
@@ -1540,4 +1541,4 @@ def internal_warm_lead_image_cache():
         sample_keys = list(cached.keys())[:5]
         return JSONResponse({"status": "ok", "cached": len(cached), "sample": sample_keys})
     except Exception as exc:
-        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+        return JSONResponse({"status": "error", "error": public_error(exc, "Cache check")}, status_code=500)

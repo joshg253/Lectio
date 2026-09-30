@@ -373,6 +373,7 @@ from main import (
     url_guard,
     youtube_hide_shorts_global,
 )
+from services.errors import public_error
 from services.feed_refresh import FeedRefreshService
 from services.redirects import local_url
 
@@ -1538,8 +1539,7 @@ def reparse_feed_route(feed_url: str = Form(...)):
                 else:
                     raise
     except Exception as exc:  # FeedNotFoundError, network/parse errors
-        LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Reparse")}, status_code=400)
     modified = int(getattr(updated, "modified", 0)) if updated else 0
     new = int(getattr(updated, "new", 0)) if updated else 0
     return JSONResponse({"ok": True, "modified": modified, "new": new})
@@ -1654,7 +1654,7 @@ def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
             disable_feed(feed_url)
         return JSONResponse({"ok": True, "updates_enabled": want_enabled})
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Updating the feed")}, status_code=500)
 
 
 @router.post("/feeds/change-url")
@@ -1754,7 +1754,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
             status_code=409,
         )
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Changing the feed URL")}, status_code=500)
 
     # Migrate all meta DB tables that reference the old feed_url.
     _feed_url_tables = [
@@ -1967,7 +1967,7 @@ def unsubscribe_feed(
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
-        message = f"Unsubscribe failed: {exc}"
+        message = public_error(exc, "Unsubscribe")
 
     # AJAX caller (e.g. problematic-feeds modal trash button) wants a JSON
     # response so it can update the DOM in place instead of navigating away.

@@ -31,6 +31,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from services import assert_safe_feed_id
+from services.errors import public_error
 
 LOGGER = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ def verify_credentials(client_id: str, client_secret: str) -> tuple[bool, str]:
             return False, (
                 "Saved. Key validation isn't available for public-client apps — just click “Connect DeviantArt account” to authorize."
             )
-        return False, msg
+        return False, public_error(exc, "Verifying the DeviantArt credentials")
 
 
 def fetch_gallery(

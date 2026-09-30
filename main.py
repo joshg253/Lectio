@@ -62,6 +62,7 @@ from services import flaresolverr as flaresolverr_service
 from services import page_fetch
 from services import full_content_fetch
 from services import page_topics
+from services.errors import public_error
 from services.redirects import local_url
 from services import site_content_plugins
 from services import publish_date as publish_date_service
@@ -11706,7 +11707,7 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
         response.raise_for_status()
     except Exception as exc:
         escaped_url = html.escape(source_url)
-        escaped_error = html.escape(str(exc))
+        escaped_error = html.escape(public_error(exc, "Fetching the source"))
         return HTMLResponse(
             (
                 "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Source unavailable</title>"
@@ -12908,7 +12909,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         title, article_html = fetch_readability_article(source_url)
     except Exception as exc:
         escaped_url = html.escape(source_url)
-        escaped_error = html.escape(str(exc))
+        escaped_error = html.escape(public_error(exc, "Fetching the article"))
         return HTMLResponse(
             (
                 "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Readability unavailable</title>"

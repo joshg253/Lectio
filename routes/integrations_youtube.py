@@ -36,6 +36,7 @@ from main import (
 )
 from services import tenancy
 from services import youtube_oauth as youtube_oauth_service
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -113,7 +114,7 @@ def youtube_playlists_route():
         mark_yt_quota_exhausted()
         return JSONResponse({"connected": True, "error": "quota", "playlists": []}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"connected": True, "error": str(exc), "playlists": []}, status_code=502)
+        return JSONResponse({"connected": True, "error": public_error(exc, "Loading YouTube playlists"), "playlists": []}, status_code=502)
     return JSONResponse({"connected": True, "playlists": playlists})
 
 
@@ -138,7 +139,7 @@ async def youtube_playlist_add_route(request: Request):
         mark_yt_quota_exhausted()
         return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Adding to the YouTube playlist")}, status_code=502)
     return JSONResponse({"ok": True, "playlist_id": playlist_id})
 
 
