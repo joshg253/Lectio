@@ -224,6 +224,7 @@ from main import (
     url_guard,
 )
 from services import tenancy
+from services.redirects import local_url
 
 router = APIRouter()
 
@@ -1572,8 +1573,10 @@ def set_entry_manual_tags(
 
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
-            f"&message={quote_plus(message)}"
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
+                f"&message={quote_plus(message)}"
+            )
         ),
         status_code=303,
     )
@@ -1786,7 +1789,9 @@ def mark_entry_read(
     entry_query = _entry_query_suffix(feed_url, entry_id, include=bool(select_entry))
 
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
+        url=local_url(
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
+        ),
         status_code=303,
     )
 
@@ -1874,7 +1879,9 @@ def toggle_entry_saved(
     entry_query = _entry_query_suffix(feed_url, entry_id, include=bool(select_entry))
 
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}",
+        url=local_url(
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
+        ),
         status_code=303,
     )
 
@@ -2213,8 +2220,10 @@ def mark_entries_range_read(
 
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
-            f"&message={quote_plus(message)}"
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}{entry_query}"
+                f"&message={quote_plus(message)}"
+            )
         ),
         status_code=303,
     )
@@ -2271,7 +2280,9 @@ def mark_entries_older_than_read(
             }
         )
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
+        url=local_url(
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 
@@ -2516,7 +2527,9 @@ def mark_entries_newer_than_unread(
             {"ok": True, "unmarked": unmarked_count, "min_age_days": min_age_days, "message": message, "undo_token": undo_token}
         )
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
+        url=local_url(
+            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 

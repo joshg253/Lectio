@@ -62,6 +62,7 @@ from services import flaresolverr as flaresolverr_service
 from services import page_fetch
 from services import full_content_fetch
 from services import page_topics
+from services.redirects import local_url
 from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
@@ -23669,8 +23670,10 @@ def refresh(
     if retry_after_seconds > 0:
         return RedirectResponse(
             url=(
-                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
-                f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                local_url(
+                    f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                    f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                )
             ),
             status_code=303,
         )
@@ -23700,7 +23703,11 @@ def refresh(
     # so the redirect (and updated "new" badges) returns promptly.
     _spawn_feed_enhancement(feed_urls)
     return RedirectResponse(
-        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"),
+        url=(
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"
+            )
+        ),
         status_code=303,
     )
 
@@ -23733,8 +23740,10 @@ def refresh_feed(
     if retry_after_seconds > 0:
         return RedirectResponse(
             url=(
-                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
-                f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                local_url(
+                    f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                    f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                )
             ),
             status_code=303,
         )
@@ -23760,7 +23769,10 @@ def refresh_feed(
     _spawn_feed_enhancement([feed_url])
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Feed refresh complete.')}"
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}"
+                f"&message={quote_plus('Feed refresh complete.')}"
+            )
         ),
         status_code=303,
     )

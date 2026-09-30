@@ -121,6 +121,7 @@ from main import (
 )
 from services import instapaper_import as instapaper_import_service
 from services import takeout_service
+from services.redirects import local_url
 
 router = APIRouter()
 
@@ -308,17 +309,8 @@ def _clear_login_failures(ip: str) -> None:
 
 
 def _safe_next(next_url: str | None) -> str:
-    """Return ``next_url`` only if it is a safe same-origin path, else ``/``.
-
-    Prevents post-login open redirects: rejects off-site absolute URLs and the
-    protocol-relative (``//evil.com``) / backslash (``/\\evil.com``) forms that
-    browsers normalise to an external authority.
-    """
-    if not next_url or not next_url.startswith("/"):
-        return "/"
-    if next_url.startswith("//") or next_url.startswith("/\\"):
-        return "/"
-    return next_url
+    """Return ``next_url`` only if it is a safe same-origin path, else ``/`` (post-login open-redirect guard)."""
+    return local_url(next_url)
 
 
 @router.post("/login")
@@ -991,7 +983,7 @@ def youtube_sync_route(folder_id: int = Form(...)):
         message = f"YouTube sync error: {result['error']}"
     else:
         message = f"YouTube sync: +{result['added']} / -{result['removed']} ({result['total']} subs)"
-    return RedirectResponse(url=f"/?folder_id={folder_id}&message={message}", status_code=303)
+    return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(message)}"), status_code=303)
 
 
 @router.post("/devto-feeds/{feed_id}/config")

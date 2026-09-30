@@ -217,6 +217,7 @@ from main import (
     youtube_hide_unpremiered_global,
     youtube_quota_cap,
 )
+from services.redirects import local_url
 
 router = APIRouter()
 
@@ -600,7 +601,7 @@ def update_auto_refresh_setting(
     list_feed_query = f"&list_feed_url={quote_plus(list_feed_url)}" if list_feed_url else ""
     tag_query = f"&tag={quote_plus(normalized_tag)}" if normalized_tag else ""
     return RedirectResponse(
-        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}"),
+        url=(local_url(f"/?folder_id={folder_id}{list_feed_query}{tag_query}&message={quote_plus(message)}")),
         status_code=303,
     )
 
@@ -656,11 +657,13 @@ def update_global_note_setting(
             target_folder_id = get_root_folder_id(conn)
     return RedirectResponse(
         url=(
-            f"/?folder_id={target_folder_id}{list_feed_query}{tag_query}"
-            f"{build_sort_query(sort_by, sort_dir)}"
-            f"{build_read_filter_query(read_filter)}"
-            f"{star_only_query}{resume_read_filter_query}{q_query}"
-            f"&message={quote_plus('Note saved.')}"
+            local_url(
+                f"/?folder_id={target_folder_id}{list_feed_query}{tag_query}"
+                f"{build_sort_query(sort_by, sort_dir)}"
+                f"{build_read_filter_query(read_filter)}"
+                f"{star_only_query}{resume_read_filter_query}{q_query}"
+                f"&message={quote_plus('Note saved.')}"
+            )
         ),
         status_code=303,
     )
