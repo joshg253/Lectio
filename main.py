@@ -2171,9 +2171,8 @@ async def lifespan(app: FastAPI):
         # direct connections so we're not racing the reader.
         for _ckpt_path in (tenancy.reader_db_path(), tenancy.meta_db_path()):
             try:
-                _ckpt_conn = sqlite3.connect(str(_ckpt_path), timeout=5)
-                _ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                _ckpt_conn.close()
+                with contextlib.closing(sqlite3.connect(str(_ckpt_path), timeout=5)) as _ckpt_conn:
+                    _ckpt_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception:
                 pass
         with get_meta_connection() as conn:
