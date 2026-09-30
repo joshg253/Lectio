@@ -31,7 +31,6 @@ def configured(tmp_path, monkeypatch):
     main.close_thread_db_pools()
     configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
-    main.user_store = None
     with main.get_reader() as reader:
         reader.add_feed(FEED, exist_ok=True)
         reader.add_entry({"feed_url": FEED, "id": "bad", "title": "Malicious", "link": BAD})

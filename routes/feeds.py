@@ -1183,8 +1183,7 @@ def set_feed_image_strategy(feed_url: str = Form(...), strategy: str = Form(...)
                 pass
 
         # Capture the request's tenancy user; a raw daemon thread does not
-        # inherit contextvars and would otherwise re-fetch as the default user,
-        # writing to the wrong DB and leaving this user's cache empty.
+        # inherit contextvars and would otherwise re-fetch with no user bound.
         _uid = tenancy.current_user_id()
         threading.Thread(target=_run_in_user_context, args=(_uid, _refetch, feed_url), daemon=True).start()
     return JSONResponse({"ok": True, "strategy": strategy})
@@ -1340,7 +1339,7 @@ def set_feed_thumb_strategy_route(
                 pass
 
         # Re-bind the request's tenancy user inside the daemon thread; otherwise
-        # the backfill runs as the default user and writes to the wrong DB.
+        # the backfill runs with no user bound.
         _uid = tenancy.current_user_id()
         threading.Thread(target=_run_in_user_context, args=(_uid, _backfill, feed_url), daemon=True).start()
     return JSONResponse({"ok": True})

@@ -340,7 +340,7 @@ async def login_submit(request: Request, next: str = "/"):
     form = await request.form()
     username = str(form.get("username") or "")
     password = str(form.get("password") or "")
-    resolved = user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME) if user_store is not None else None
+    resolved = user_store.verify_login(username, password, default_scheme=PASSWORD_HASH_SCHEME)
     if resolved is not None:
         _clear_login_failures(ip)
         request.session.clear()  # rotate session on login (anti-fixation)
@@ -391,7 +391,6 @@ def _admin_user_rows() -> list[dict]:
     """User list for the Administration page, enriched with per-user stats
     (feed count, personal DB size, last-active). Each user's stats are read under
     its own tenancy context."""
-    assert user_store is not None  # only called from administration_page, which already checked
     rows: list[dict] = []
     for u in user_store.list_users():
         uid = u["user_id"]
@@ -422,8 +421,6 @@ def _admin_user_rows() -> list[dict]:
 @router.get("/administration")
 def administration_page(request: Request, msg: str | None = None, error: str | None = None):
     """Admin page: user management + instance configuration. Admin-only."""
-    if user_store is None:
-        return Response(status_code=404)
     uid = _current_web_user(request)
     if not uid:
         return RedirectResponse(url="/login?next=/administration", status_code=303)

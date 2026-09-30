@@ -39,7 +39,6 @@ def configured(tmp_path, monkeypatch):
     main.close_thread_db_pools()
     configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
-    main.user_store = None
     monkeypatch.setattr(main.starred_archive_service, "enqueue_archive", lambda feed_url, entry_id: None)
     # A well-stocked subscribed feed on blog.example.test: enough supporting
     # entries to clear MIN_SUPPORT, so its host matches confidently.

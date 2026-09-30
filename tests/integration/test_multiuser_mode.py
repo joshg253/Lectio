@@ -84,6 +84,12 @@ def test_account_ui_e2e(tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_startup_and_preauth_endpoints_run_unbound_e2e(tmp_path):
+    proc = _run_harness("preauth_unbound", tmp_path / "data", {"LECTIO_ADMIN_USERNAME": "adminuser", "LECTIO_ADMIN_PASSWORD": "admin-pw"})
+    assert "HARNESS PASS" in proc.stdout, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    assert proc.returncode == 0, proc.stderr
+
+
 # --- in-process unit tests for _TenancyMiddleware binding logic --------------
 
 

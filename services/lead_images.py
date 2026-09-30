@@ -4312,7 +4312,7 @@ class LeadImageService:
         is_wc = self._is_feed_webcomic(feed_url)
         # store_entry_lead_image writes through the context-bound meta connection;
         # this bare thread won't inherit the request's tenancy user, so capture it
-        # and re-bind inside _bg or the image lands in the default tenant's DB.
+        # and re-bind inside _bg or the write raises TenancyUnboundError.
         uid = tenancy.current_user_id()
 
         def _bg() -> None:
@@ -4387,7 +4387,7 @@ class LeadImageService:
         self._source_html_fetch_events[entry_link] = event
         # store_entry_image_alt writes through the context-bound meta connection;
         # capture the request's tenancy user so this bare thread re-binds it
-        # rather than persisting alt text to the default tenant's DB.
+        # rather than running unbound.
         uid = tenancy.current_user_id()
 
         def _bg() -> None:

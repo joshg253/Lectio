@@ -14,25 +14,15 @@ TEST_USER_ID = "test"
 
 
 def configure_test_tenancy(data_dir: Path) -> None:
-    """Point the resolver at ``data_dir`` for a test and create the test user's directory, as provisioning does.
-
-    The legacy default-user paths point into a directory that is never created, so any code path that resolves a DB without
-    a bound user fails with "unable to open database file" instead of quietly using a stray DB.
-    """
-    unbound = Path(data_dir) / "_unbound-default-user-must-not-be-used"
-    tenancy.configure(
-        data_dir=data_dir,
-        legacy_reader=unbound / "reader.sqlite",
-        legacy_meta=unbound / "meta.sqlite3",
-        legacy_starred=unbound / "starred.sqlite",
-    )
+    """Point the resolver at ``data_dir`` for a test and create the test user's directory, as provisioning does."""
+    tenancy.configure(data_dir=data_dir)
     tenancy.ensure_user_data_dir(TEST_USER_ID)
 
 
 @contextlib.contextmanager
 def unbound_tenancy() -> Iterator[None]:
     """Run a block with no user bound, like a bare background thread, overriding the autouse test-user binding."""
-    token = tenancy._current_user.set(tenancy.DEFAULT_USER_ID)
+    token = tenancy._current_user.set(None)
     try:
         yield
     finally:

@@ -1,15 +1,15 @@
 """The background source-image fetch (`queue_source_fetch`) is spawned from a
 render request but runs in a bare thread, which does not inherit the request's
 tenancy contextvar. It must capture and re-bind the user, or the resolved image
-is persisted to the default tenant's meta DB instead of the requesting user's —
-the bug that left real users' lead images accumulating under DEFAULT_USER_ID."""
+is persisted somewhere other than the requesting user's meta DB — the bug that
+left real users' lead images accumulating under the old default tenant."""
 
 from __future__ import annotations
 
 import sqlite3
 
 import pytest
-from _tenancy_helpers import configure_test_tenancy
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 
 from services import tenancy
 from services.lead_images import LeadImageService
@@ -62,7 +62,7 @@ def configured(tmp_path):
     configure_test_tenancy(tmp_path)
     # Pre-create every meta DB so reads/writes never auto-create at a wrong path.
     for p in (
-        tenancy.meta_db_path(tenancy.DEFAULT_USER_ID),
+        tenancy.meta_db_path(TEST_USER_ID),
         tenancy.meta_db_path("alice"),
     ):
         _make_meta(p).close()
@@ -102,8 +102,8 @@ def test_queued_source_fetch_persists_under_the_requesting_user(configured):
     # The image landed in alice's DB...
     alice_rows = _rows(tenancy.meta_db_path("alice"))
     assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [(feed, entry, "https://cdn.example/hero.jpg")]
-    # ...and NOT in the default tenant's DB (the regression).
-    assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []
+    # ...and NOT in another user's DB (the regression).
+    assert _rows(tenancy.meta_db_path(TEST_USER_ID)) == []
 
 
 def test_queued_source_fetch_does_not_persist_a_none_result(configured):
@@ -162,4 +162,4 @@ def test_chunk_backfill_persists_under_the_active_user(configured):
 
     alice_rows = _rows(tenancy.meta_db_path("alice"))
     assert [(r["feed_url"], r["entry_id"], r["image_url"]) for r in alice_rows] == [(feed, entry, "https://cdn.example/hero.jpg")]
-    assert _rows(tenancy.meta_db_path(tenancy.DEFAULT_USER_ID)) == []
+    assert _rows(tenancy.meta_db_path(TEST_USER_ID)) == []

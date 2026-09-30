@@ -229,18 +229,12 @@ controls), speed presets.
 
 **Architecture**
 
-### Single-user mode does not exist anymore — retire DEFAULT_USER
+### Park the legacy top-level default-user DBs
 
-`DEFAULT_USER_ID` still silently resolves any unbound code path to stale legacy top-level DBs instead of failing loudly.
-Step 1 (tests run bound to a `test` user; unbound resolution fails in tests) is done. Step 2, its own PR: default the
-`lectio_current_user` ContextVar to `None` and raise on unbound resolution; delete `DEFAULT_USER_ID` and the `legacy_*`
-layout; move the unbound startup work in `main.py` lifespan (`purge_lower_level_folders`, settings-cache preload,
-`app.state.auto_refresh_minutes`, WAL checkpoint of the raw `READER_DB_PATH`/`META_DB_PATH`) into `_for_each_background_user`
-or drop it; make `user_store` non-optional and delete its `is None` / no-auth branches (save API, bookmarklet); drop the
-default arg in `starred_archive.py` and the reserved `"default"` username; update `test_tenancy.py`,
-`test_lead_images_tenancy.py`, `test_starred_archive_tenancy.py`, and `unbound_tenancy()` (sets `None`). After deploy,
-watch the log for unbound errors, then move the legacy top-level DBs to `data/legacy-default-<date>/` — not
-`data/backups/`, which the nightly job ships to B2 and prunes by name.
+`DEFAULT_USER_ID` is retired (unbound resolution now raises). Once the deploy has run clean through a scheduler cycle and
+nightly maintenance, move `data/lectio_reader.sqlite*`, `data/lectio_meta.sqlite3*`, `data/lectio_starred_archive.sqlite`
+and the stray `data/lectio.sqlite3*` to `data/legacy-default-<date>/` — not `data/backups/`, which the nightly job ships to
+B2 and prunes by name.
 
 ### Add OIDC login
 

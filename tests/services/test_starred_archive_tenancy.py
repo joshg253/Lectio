@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from _tenancy_helpers import configure_test_tenancy
+from _tenancy_helpers import TEST_USER_ID, configure_test_tenancy
 
 from services import tenancy
 from services.starred_archive import StarredArchiveService
@@ -93,8 +93,8 @@ def test_worker_processes_each_users_own_db(configured):
     ]
 
 
-def test_pending_row_is_invisible_to_the_default_tenant(configured):
-    # alice has a pending row; the default tenant's DB has none.
+def test_pending_row_is_invisible_to_another_user(configured):
+    # alice has a pending row; another user's DB has none.
     _make_archive_db(tenancy.starred_archive_db_path("alice"))
     conn = sqlite3.connect(str(tenancy.starred_archive_db_path("alice")))
     conn.execute(
@@ -102,13 +102,13 @@ def test_pending_row_is_invisible_to_the_default_tenant(configured):
     )
     conn.commit()
     conn.close()
-    _make_archive_db(tenancy.starred_archive_db_path(tenancy.DEFAULT_USER_ID))
+    _make_archive_db(tenancy.starred_archive_db_path(TEST_USER_ID))
 
-    svc, seen = _service(lambda: [tenancy.DEFAULT_USER_ID])
+    svc, seen = _service(lambda: [TEST_USER_ID])
 
-    # A worker that only ever scanned the default tenant (the old behavior)
-    # finds nothing — alice's entry would never be archived.
-    with tenancy.user_context(tenancy.DEFAULT_USER_ID):
+    # A worker that only ever scanned one fixed tenant (the old default-tenant
+    # behavior) finds nothing — alice's entry would never be archived.
+    with tenancy.user_context(TEST_USER_ID):
         assert svc._process_one_pending() is False
     assert seen == []
 
@@ -118,9 +118,9 @@ def test_pending_row_is_invisible_to_the_default_tenant(configured):
     assert seen == [("alice", "https://alice.example/feed")]
 
 
-def test_default_background_user_ids_when_not_injected(configured):
+def test_no_background_users_when_not_injected(configured):
     svc, _ = _service(None)
-    assert svc._background_user_ids() == [tenancy.DEFAULT_USER_ID]
+    assert svc._background_user_ids() == []
 
 
 def test_reclaim_resets_stale_in_progress_rows(configured):

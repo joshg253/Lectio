@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 from starlette.testclient import TestClient
 
@@ -248,6 +249,33 @@ def _scenario_account_ui() -> None:
         assert main.user_store.get("dave") is None
 
 
+def _scenario_preauth_unbound() -> None:
+    """Startup and every auth-exempt endpoint run with no tenancy user bound (this harness never binds one, unlike pytest's
+    autouse fixture). None of them may touch a per-user DB: that raises TenancyUnboundError, which surfaces here as a 5xx."""
+    assert tenancy.bound_user_id() is None
+    with TestClient(main.app, raise_server_exceptions=False) as client:  # lifespan startup, unbound
+        requests: list[tuple[str, str, dict[str, Any]]] = [
+            ("GET", "/login", {}),
+            ("POST", "/login", {"data": {"username": "nobody", "password": "wrong"}}),
+            ("GET", "/healthz", {}),
+            ("GET", "/static/style.css", {}),
+            ("GET", "/sw.js", {}),
+            ("GET", "/api/img", {}),
+            ("GET", "/api/favicon", {}),
+            ("POST", "/api/save", {"data": {"url": "https://example.test/a", "username": "x", "token": "bad"}}),
+            ("POST", "/api/bookmarklet/save", {"json": {"url": "https://example.test/a", "token": "bad"}}),
+            ("POST", "/fever/", {"data": {"api_key": "bad"}}),
+            ("POST", "/greader/accounts/ClientLogin", {"data": {"Email": "x", "Passwd": "bad"}}),
+            ("GET", "/greader/reader/api/0/user-info", {}),
+            ("GET", "/v1/me", {}),
+            ("GET", "/", {}),
+        ]
+        for method, path, kwargs in requests:
+            r = client.request(method, path, follow_redirects=False, **kwargs)
+            assert r.status_code < 500, f"{method} {path} -> {r.status_code}: {r.text[:300]}"
+    assert tenancy.bound_user_id() is None
+
+
 def main_entry() -> None:
     scenario = os.environ.get("SCENARIO", "")
     if scenario == "multi":
@@ -256,6 +284,8 @@ def main_entry() -> None:
         _scenario_multi_api()
     elif scenario == "account_ui":
         _scenario_account_ui()
+    elif scenario == "preauth_unbound":
+        _scenario_preauth_unbound()
     else:
         raise SystemExit(f"unknown SCENARIO: {scenario!r}")
     print("HARNESS PASS")

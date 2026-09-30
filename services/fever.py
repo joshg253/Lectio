@@ -8,6 +8,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from services import tenancy
+
 
 class FeverService:
     """Implements the Fever RSS API protocol for third-party client compatibility."""
@@ -23,23 +25,17 @@ class FeverService:
         fever_api_key: str,  # precomputed md5(username:fever_password).hexdigest()
         root_folder_name: str = "All Feeds",
         current_user: Callable[[], str] | None = None,
-        presync: bool = True,
     ) -> None:
         self._get_meta = get_meta_connection
         self._get_reader = get_reader
         self._api_key = (fever_api_key or "").lower()
         self._root_folder_name = root_folder_name
-        # In multi-user mode each user's meta DB has its own entry-ID map, so the
-        # "already synced" flag is tracked per user. current_user() yields the
-        # tenancy user bound to the current request (a constant in single mode).
-        self._current_user = current_user or (lambda: "default")
+        # Each user's meta DB has its own entry-ID map, so the "already synced"
+        # flag is tracked per user; each is synced lazily on their first request.
+        # current_user() yields the tenancy user bound to the current request.
+        self._current_user = current_user or tenancy.current_user_id
         self._synced_users: set[str] = set()
         self._sync_lock = threading.Lock()
-        # Pre-sync in background so the first request isn't slow. Skipped in
-        # multi-user mode, where the pre-sync would run as the (unbound) default
-        # user; each user is instead synced lazily on their first request.
-        if presync:
-            threading.Thread(target=self._ensure_synced, daemon=True).start()
 
     # ------------------------------------------------------------------ auth
 

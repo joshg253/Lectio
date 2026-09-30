@@ -160,7 +160,7 @@ that gets persisted for next time anyway.
 
 The in-memory cache is warmed at startup **per enabled user**: lead images live in
 each tenant's own table while the render path consults only the shared cache, so
-warming against the default tenant alone leaves every other user blank until
+warming only one user's leaves every other user blank until
 backfill catches up.
 
 ### Caption auto-suppress vs. hover-text-as-attribute

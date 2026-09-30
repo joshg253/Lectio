@@ -34,7 +34,6 @@ def configured(tmp_path, monkeypatch):
     main.close_thread_db_pools()
     configure_test_tenancy(tmp_path)
     main.ensure_meta_schema()
-    main.user_store = None
     # Fetching real pages is the archive worker's job; record the enqueue
     # instead of doing network I/O in the test.
     enqueued: list[tuple[str, str]] = []
