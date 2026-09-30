@@ -229,13 +229,6 @@ controls), speed presets.
 
 **Architecture**
 
-### Park the legacy top-level default-user DBs
-
-`DEFAULT_USER_ID` is retired (unbound resolution now raises). Once the deploy has run clean through a scheduler cycle and
-nightly maintenance, move `data/lectio_reader.sqlite*`, `data/lectio_meta.sqlite3*`, `data/lectio_starred_archive.sqlite`
-and the stray `data/lectio.sqlite3*` to `data/legacy-default-<date>/` — not `data/backups/`, which the nightly job ships to
-B2 and prunes by name.
-
 ### Add OIDC login
 
 No SSO/OIDC exists today (username/password only). Architecture-level addition — new login flow,
