@@ -1665,6 +1665,10 @@ class LeadImageService:
             bsky_imgs = bluesky.fetch_post_images(str(getattr(entry, "id", "") or ""))
             if bsky_imgs:
                 return bsky_imgs[0]
+            # No attached images: fall back to the link card's thumbnail so the list isn't blank.
+            card = bluesky.fetch_post_card(str(getattr(entry, "id", "") or ""))
+            if card and card.get("thumb"):
+                return card["thumb"]
 
         # Respect manual 'none' strategy — skip lead images entirely for this feed.
         if feed_url and self._is_feed_none_strategy(feed_url):

@@ -169,6 +169,37 @@ def fetch_post_images(at_uri: str | None) -> list[str]:
     return _images_from_post(post) if post else []
 
 
+def _card_from_embed(embed: object) -> dict[str, str] | None:
+    """Return {"uri", "title", "description", "thumb"} for an external link-card embed (recursing into recordWithMedia)."""
+    if not isinstance(embed, dict):
+        return None
+    etype = str(embed.get("$type") or "")
+    if etype.startswith("app.bsky.embed.external"):
+        ext = embed.get("external")
+        if isinstance(ext, dict) and ext.get("uri"):
+            card = {k: str(ext.get(k) or "") for k in ("uri", "title", "description", "thumb")}
+            # The card is author-controlled: only http(s) may become a link or image src (no javascript:/data:).
+            if not card["uri"].lower().startswith(("http://", "https://")):
+                return None
+            if not card["thumb"].lower().startswith(("http://", "https://")):
+                card["thumb"] = ""
+            return card
+        return None
+    if etype.startswith("app.bsky.embed.recordWithMedia"):
+        return _card_from_embed(embed.get("media"))
+    return None
+
+
+def fetch_post_card(at_uri: str | None) -> dict[str, str] | None:
+    """Return the link card (uri/title/description/thumb) for a post with an external embed, or None.
+
+    Shares the cached fetch with ``fetch_post_images``."""
+    if not at_uri or not at_uri.startswith("at://"):
+        return None
+    post = _fetch_post(at_uri)
+    return _card_from_embed(post.get("embed")) if post else None
+
+
 def fetch_post_video(at_uri: str | None) -> dict[str, str] | None:
     """Return {"thumbnail", "playlist"} for a Bluesky video post given its
     ``at://`` URI, or None if the post isn't a video (or on any error).

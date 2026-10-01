@@ -204,3 +204,17 @@ def test_fetch_post_images_and_video_share_one_fetch(monkeypatch):
         "playlist": "https://video.bsky.app/watch/did%3Aplc%3Aabc/z/playlist.m3u8",
     }
     assert calls == [at_uri, at_uri]  # each public function calls _fetch_post once; caching itself is _fetch_post's job
+
+
+def test_card_from_external_embed():
+    embed = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://x.test/a", "title": "T", "thumb": "https://cdn/x"}}
+    assert bluesky._card_from_embed(embed) == {"uri": "https://x.test/a", "title": "T", "description": "", "thumb": "https://cdn/x"}
+    assert bluesky._card_from_embed({"$type": "app.bsky.embed.images#view"}) is None
+
+
+def test_card_rejects_unsafe_schemes():
+    bad = {"$type": "app.bsky.embed.external#view", "external": {"uri": "javascript:alert(1)", "title": "T"}}
+    assert bluesky._card_from_embed(bad) is None
+    odd_thumb = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://x.test/a", "thumb": "data:image/png;base64,AA"}}
+    card = bluesky._card_from_embed(odd_thumb)
+    assert card is not None and card["thumb"] == ""
