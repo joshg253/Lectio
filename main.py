@@ -16801,6 +16801,9 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
             # Except a video's poster: the <video> already shows that frame, so a hero of it is the clip twice.
             if any(lead_image_url in t for t in re.findall(r"<video\b[^>]*>", html.unescape(content_html), re.IGNORECASE)):
                 lead_image_url = None
+            # Likewise a link card's thumb: the card in the body already shows it.
+            elif "data-bsky-card" in content_html:
+                lead_image_url = None
         else:
             # Lead URL is buried mid-article (author placed it there) — show it in
             # its natural position, not as a separate top lead.
@@ -17290,6 +17293,10 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # The list thumbnail is handled separately in extract_entry_thumbnail_url.
         if bluesky.is_bsky_feed(str(entry.feed_url)):
             _existing = content_html or ""
+            if _existing and "<" not in _existing:
+                # The RSS body is plain text with real newlines; HTML collapses them to one line.
+                _existing = _promote_plaintext_summary(_existing) or html.escape(_existing).replace("\n", "<br>")
+                content_html = _existing
             _bsky_video = bluesky.fetch_post_video(str(entry.id))
             if _bsky_video:
                 # A real <video> instead of a static thumb: data-bsky-hls-src is
@@ -17325,6 +17332,19 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                         if u not in _existing
                     )
                     content_html = _existing + _add
+                else:
+                    _card = bluesky.fetch_post_card(str(entry.id))
+                    if _card:
+                        _thumb = (
+                            f'<img src="{html.escape(_card["thumb"], quote=True)}" loading="lazy"'
+                            f' referrerpolicy="no-referrer" data-bsky-card="1" style="max-width:100%;height:auto;"><br>'
+                            if _card["thumb"]
+                            else ""
+                        )
+                        content_html = _existing + (
+                            f'<p><a href="{html.escape(_card["uri"], quote=True)}" target="_blank" rel="noopener noreferrer">'
+                            f"{_thumb}{html.escape(_card['title'] or _card['uri'])}</a></p>"
+                        )
 
         # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
         # the UI, and suppresses the embed recovery below — re-adding an embed
