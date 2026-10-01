@@ -18795,15 +18795,27 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     // and went unnoticed until 2026-09-04.
     function captureSuggestedTagsExpanded() {
       const wrap = document.querySelector('.entry-tag-suggestions');
-      return !!wrap && !wrap.querySelector('[data-feed-tag-more]');
+      const form = document.querySelector('.entry-tags-form');
+      return {
+        more: !!wrap && !wrap.querySelector('[data-feed-tag-more]'),
+        // The re-render also rebuilds the add-tags form closed, so a chevron
+        // click would otherwise shut the Tags menu mid-task.
+        formOpen: !!form && !form.hasAttribute('hidden'),
+      };
     }
-    function restoreSuggestedTagsExpanded(wasExpanded) {
-      if (!wasExpanded) return;
-      const wrap = document.querySelector('.entry-tag-suggestions');
-      const moreBtn = wrap?.querySelector('[data-feed-tag-more]');
-      if (wrap && moreBtn) {
-        wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
-        moreBtn.remove();
+    function restoreSuggestedTagsExpanded(was) {
+      if (was.more) {
+        const wrap = document.querySelector('.entry-tag-suggestions');
+        const moreBtn = wrap?.querySelector('[data-feed-tag-more]');
+        if (wrap && moreBtn) {
+          wrap.querySelectorAll('.is-extra-feed-tag').forEach((c) => { c.hidden = false; });
+          moreBtn.remove();
+        }
+      }
+      if (was.formOpen) {
+        refreshEntryTagRefs();
+        entryTagsForm?.removeAttribute('hidden');
+        setEntryTagsExpandedState(true);
       }
     }
 
