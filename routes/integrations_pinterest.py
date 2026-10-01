@@ -25,6 +25,7 @@ from main import (
     set_setting,
 )
 from services import pinterest_oauth as pinterest_oauth_service
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -67,7 +68,7 @@ def pinterest_oauth_callback(request: Request, code: str | None = None, state: s
     try:
         data = pinterest_oauth_service.exchange_code(cid, secret, code, _pinterest_oauth_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Pinterest connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "Pinterest connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_PINTEREST_OAUTH_ACCESS_TOKEN, data["access_token"])
         if data.get("refresh_token"):
@@ -99,7 +100,7 @@ def pinterest_boards_route():
     try:
         boards = pinterest_oauth_service.list_boards(token)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"connected": True, "error": str(exc), "boards": []}, status_code=502)
+        return JSONResponse({"connected": True, "error": public_error(exc, "Loading Pinterest boards"), "boards": []}, status_code=502)
     return JSONResponse({"connected": True, "boards": boards})
 
 
@@ -133,5 +134,5 @@ async def pinterest_pin_route(request: Request):
     try:
         pin = pinterest_oauth_service.create_pin(token, board_id, image_url, link, title=title)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": str(exc)}, status_code=502)
+        return JSONResponse({"error": public_error(exc, "Creating the pin")}, status_code=502)
     return JSONResponse({"ok": True, "pin_id": pin.get("id", "")})

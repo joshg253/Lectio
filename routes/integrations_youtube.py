@@ -36,6 +36,7 @@ from main import (
 )
 from services import tenancy
 from services import youtube_oauth as youtube_oauth_service
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -78,7 +79,7 @@ def youtube_oauth_callback(request: Request, code: str | None = None, state: str
     try:
         data = youtube_oauth_service.exchange_code(cid, secret, code, _youtube_oauth_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"YouTube connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "YouTube connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_YT_OAUTH_ACCESS_TOKEN, data["access_token"])
         if data.get("refresh_token"):
@@ -113,7 +114,7 @@ def youtube_playlists_route():
         mark_yt_quota_exhausted()
         return JSONResponse({"connected": True, "error": "quota", "playlists": []}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"connected": True, "error": str(exc), "playlists": []}, status_code=502)
+        return JSONResponse({"connected": True, "error": public_error(exc, "Loading YouTube playlists"), "playlists": []}, status_code=502)
     return JSONResponse({"connected": True, "playlists": playlists})
 
 
@@ -138,7 +139,7 @@ async def youtube_playlist_add_route(request: Request):
         mark_yt_quota_exhausted()
         return JSONResponse({"ok": False, "error": "quota"}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Adding to the YouTube playlist")}, status_code=502)
     return JSONResponse({"ok": True, "playlist_id": playlist_id})
 
 

@@ -74,7 +74,7 @@ def test_reparse_unchanged_feed_returns_zero(monkeypatch):
     assert resp.json() == {"ok": True, "modified": 0, "new": 0}
 
 
-def test_reparse_error_is_reported(monkeypatch):
+def test_reparse_error_is_reported(monkeypatch, caplog):
     class _BoomReader(_FakeReader):
         def update_feed(self, url):
             raise RuntimeError("boom")
@@ -86,4 +86,7 @@ def test_reparse_error_is_reported(monkeypatch):
 
     assert resp.status_code == 400
     assert resp.json()["ok"] is False
-    assert "boom" in resp.json()["error"]
+    # The client gets a fixed message; the exception text stays in the server log.
+    assert "boom" not in resp.json()["error"]
+    assert "Reparse failed" in resp.json()["error"]
+    assert any("boom" in str(r.exc_info[1]) for r in caplog.records if r.exc_info)

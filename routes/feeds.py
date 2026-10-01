@@ -373,7 +373,9 @@ from main import (
     url_guard,
     youtube_hide_shorts_global,
 )
+from services.errors import public_error
 from services.feed_refresh import FeedRefreshService
+from services.redirects import local_url
 
 router = APIRouter()
 
@@ -423,7 +425,7 @@ def rename_folder_route(folder_id: int = Form(...), name: str = Form(...)):
             (name.strip(), folder_id),
         )
     invalidate_meta_structure_cache()
-    return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+    return RedirectResponse(url=local_url(f"/?folder_id={folder_id}"), status_code=303)
 
 
 @router.post("/folders/delete")
@@ -553,7 +555,9 @@ def mark_folder_as_read(
     if is_async_action_request(request, "lectio-mark-read"):
         return JSONResponse({"ok": True, "marked": marked_count, "message": message, "undo_token": undo_token})
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}",
+        url=local_url(
+            f"/?folder_id={folder_id}{tag_query}{sort_query}{read_filter_query}{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+        ),
         status_code=303,
     )
 
@@ -717,8 +721,8 @@ def create_feed(
             msg = "dev.to rate limit — try again in a bit."
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[devto] add failed for %s: %s", url, exc)
-            msg = f"dev.to add failed: {exc}"
-        return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
+            msg = public_error(exc, "dev.to add")
+        return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
 
     # DeviantArt: when connected, "adding" an artist just Watches them on DeviantArt
     # — their posts arrive via the single combined Watch feed, so we don't create a
@@ -737,13 +741,13 @@ def create_feed(
             except deviantart_service.DeviantArtRateLimited:
                 msg = "DeviantArt rate limit — try again in a bit."
             except Exception as exc:  # noqa: BLE001
-                msg = f"DeviantArt watch failed: {exc}"
-            return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
+                msg = public_error(exc, "DeviantArt watch")
+            return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
         # Not connected → standalone gallery feed (best effort with app creds).
         cid, secret = get_deviantart_credentials()
         if not cid or not secret:
             return RedirectResponse(
-                url=(f"/?folder_id={folder_id}&message={quote_plus('Connect your DeviantArt account in Settings first.')}"),
+                url=(local_url(f"/?folder_id={folder_id}&message={quote_plus('Connect your DeviantArt account in Settings first.')}")),
                 status_code=303,
             )
         try:
@@ -759,8 +763,8 @@ def create_feed(
             msg = f"DeviantArt gallery added ({da_username})."
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("[deviantart] add failed for %s: %s", da_username, exc)
-            msg = f"DeviantArt add failed: {exc}"
-        return RedirectResponse(url=f"/?folder_id={folder_id}&message={quote_plus(msg)}", status_code=303)
+            msg = public_error(exc, "DeviantArt add")
+        return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
 
     # For non-YouTube URLs, probe whether the URL is a feed and run
     # auto-discovery if it looks like a webpage instead.
@@ -812,9 +816,11 @@ def create_feed(
             note = "That address could not be read (the site refused us)." if refused else "No RSS/Atom feed found at that URL."
             return RedirectResponse(
                 url=(
-                    f"/?folder_id={folder_id}"
-                    f"&message={quote_plus(note)}"
-                    f"&no_rss_url={quote_plus(url)}" + (f"&force_url={quote_plus(url)}" if refused else "")
+                    local_url(
+                        f"/?folder_id={folder_id}"
+                        f"&message={quote_plus(note)}"
+                        f"&no_rss_url={quote_plus(url)}" + (f"&force_url={quote_plus(url)}" if refused else "")
+                    )
                 ),
                 status_code=303,
             )
@@ -846,9 +852,9 @@ def create_feed(
             daemon=True,
         ).start()
     except Exception as exc:
-        message = f"Feed add failed: {exc}"
+        message = public_error(exc, "Feed add")
         return RedirectResponse(
-            url=f"/?folder_id={folder_id}&message={quote_plus(message)}",
+            url=local_url(f"/?folder_id={folder_id}&message={quote_plus(message)}"),
             status_code=303,
         )
     # Open the newly-added feed so its identity is obvious immediately (catching
@@ -857,7 +863,7 @@ def create_feed(
     # since a brand-new feed's posts are unread anyway and the user wants to see
     # what landed.
     return RedirectResponse(
-        url=(f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}&read_filter=all&message={quote_plus(message)}"),
+        url=(local_url(f"/?folder_id={folder_id}&list_feed_url={quote_plus(target_url)}&read_filter=all&message={quote_plus(message)}")),
         status_code=303,
     )
 
@@ -948,7 +954,7 @@ def create_scraped_feed_route(
     except Exception as exc:
         LOGGER.warning("[scraper] create failed for %s: %s", source_url, exc)
         return RedirectResponse(
-            url=f"/?folder_id={target_folder_id}&message={quote_plus(f'Page feed failed: {exc}')}",
+            url=local_url(f"/?folder_id={target_folder_id}&message={quote_plus(public_error(exc, 'Page feed'))}"),
             status_code=303,
         )
 
@@ -958,8 +964,10 @@ def create_scraped_feed_route(
     # fresh feed's items are unread and the user wants to see what it scraped.
     return RedirectResponse(
         url=(
-            f"/?folder_id={target_folder_id}&list_feed_url={quote_plus(file_url)}"
-            f"&read_filter=all&message={quote_plus('Page feed created.')}"
+            local_url(
+                f"/?folder_id={target_folder_id}&list_feed_url={quote_plus(file_url)}"
+                f"&read_filter=all&message={quote_plus('Page feed created.')}"
+            )
         ),
         status_code=303,
     )
@@ -977,7 +985,7 @@ def delete_scraped_feed_route(
             scraper_service.delete_scraped_feed(conn, reader, feed_id)
     invalidate_meta_structure_cache()
     return RedirectResponse(
-        url=f"/?folder_id={folder_id}&message={quote_plus('Page feed removed.')}",
+        url=local_url(f"/?folder_id={folder_id}&message={quote_plus('Page feed removed.')}"),
         status_code=303,
     )
 
@@ -1531,8 +1539,7 @@ def reparse_feed_route(feed_url: str = Form(...)):
                 else:
                     raise
     except Exception as exc:  # FeedNotFoundError, network/parse errors
-        LOGGER.warning("[reparse] failed for %s: %s", feed_url, exc)
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Reparse")}, status_code=400)
     modified = int(getattr(updated, "modified", 0)) if updated else 0
     new = int(getattr(updated, "new", 0)) if updated else 0
     return JSONResponse({"ok": True, "modified": modified, "new": new})
@@ -1593,7 +1600,7 @@ def move_feed(
                 },
                 status_code=200 if ok else 500,
             )
-        return RedirectResponse(url=_dest(message), status_code=303)
+        return RedirectResponse(url=local_url(_dest(message)), status_code=303)
 
     if from_folder_id == to_folder_id:
         return _respond("Feed is already in that folder.")
@@ -1621,7 +1628,7 @@ def disable_feed_route(request: Request, folder_id: int = Form(...), feed_url: s
     requested_with = request.headers.get("x-requested-with", "").lower()
     if "lectio" in requested_with or requested_with == "xmlhttprequest":
         return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
-    return RedirectResponse(url=f"/?folder_id={folder_id}", status_code=303)
+    return RedirectResponse(url=local_url(f"/?folder_id={folder_id}"), status_code=303)
 
 
 @router.post("/feeds/enable")
@@ -1631,7 +1638,7 @@ def enable_feed_route(request: Request, folder_id: int | None = Form(default=Non
     if "lectio" in requested_with or requested_with == "xmlhttprequest":
         return JSONResponse({"ok": True, "feed_url": feed_url}, status_code=200)
     dest = f"/?folder_id={folder_id}" if folder_id else "/"
-    return RedirectResponse(url=dest, status_code=303)
+    return RedirectResponse(url=local_url(dest), status_code=303)
 
 
 @router.post("/feeds/toggle-updates")
@@ -1647,7 +1654,7 @@ def toggle_feed_updates(feed_url: str = Form(...), enabled: str = Form(...)):
             disable_feed(feed_url)
         return JSONResponse({"ok": True, "updates_enabled": want_enabled})
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Updating the feed")}, status_code=500)
 
 
 @router.post("/feeds/change-url")
@@ -1747,7 +1754,7 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
             status_code=409,
         )
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Changing the feed URL")}, status_code=500)
 
     # Migrate all meta DB tables that reference the old feed_url.
     _feed_url_tables = [
@@ -1960,7 +1967,7 @@ def unsubscribe_feed(
         invalidate_meta_structure_cache()
     except Exception as exc:
         ok = False
-        message = f"Unsubscribe failed: {exc}"
+        message = public_error(exc, "Unsubscribe")
 
     # AJAX caller (e.g. problematic-feeds modal trash button) wants a JSON
     # response so it can update the DOM in place instead of navigating away.
@@ -1970,12 +1977,14 @@ def unsubscribe_feed(
 
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}"
-            f"{sort_query_s}"
-            f"{read_filter_query_s}"
-            f"{star_only_query}"
-            f"{resume_read_filter_query}"
-            f"&message={quote_plus(message)}"
+            local_url(
+                f"/?folder_id={folder_id}"
+                f"{sort_query_s}"
+                f"{read_filter_query_s}"
+                f"{star_only_query}"
+                f"{resume_read_filter_query}"
+                f"&message={quote_plus(message)}"
+            )
         ),
         status_code=303,
     )
@@ -2955,8 +2964,10 @@ def mark_feed_as_read(
         return JSONResponse({"ok": True, "marked": marked_count, "feed_url": feed_url, "message": message, "undo_token": undo_token})
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
-            f"{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{read_filter_query}"
+                f"{star_only_query}{resume_read_filter_query}&message={quote_plus(message)}"
+            )
         ),
         status_code=303,
     )

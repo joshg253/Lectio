@@ -44,6 +44,7 @@ from main import (
 )
 from services import inoreader as inoreader_service
 from services import tenancy
+from services.errors import public_error
 from services.inoreader_import import _inoreader_drip_step, _inoreader_local_import_worker
 from services.migration_common import _canonical_feed_url_lookup, _canonicalize_item_feed_urls, _resolve_feed_url
 
@@ -107,7 +108,7 @@ def inoreader_oauth_callback(
         data = inoreader_service.exchange_code(cid, secret, code, _inoreader_redirect_uri(request))
     except Exception as exc:  # noqa: BLE001
         return RedirectResponse(
-            url="/?message=" + quote_plus(f"Inoreader connect failed: {exc}"),
+            url="/?message=" + quote_plus(public_error(exc, "Inoreader connect")),
             status_code=303,
         )
     with get_meta_connection() as conn:
@@ -350,8 +351,8 @@ async def inoreader_import_json(request: Request, file: UploadFile = File(...)):
     try:
         raw = await file.read()
         data = json.loads(raw)
-    except Exception as exc:
-        return JSONResponse({"ok": False, "error": f"Invalid JSON: {exc}"}, status_code=400)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
 
     items = inoreader_service.parse_export_json(data if isinstance(data, list) else data.get("items", []))
 

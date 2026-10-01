@@ -148,7 +148,7 @@ def test_get_token_caches():
     assert client.post.call_count == 1
 
 
-def test_verify_credentials_ok_and_fail():
+def test_verify_credentials_ok_and_fail(caplog):
     ok_client = _mock_client([(200, {"access_token": "T", "expires_in": 3600})])
     with patch("httpx.Client", return_value=ok_client):
         ok, _ = da.verify_credentials("cid", "sec")
@@ -160,11 +160,12 @@ def test_verify_credentials_ok_and_fail():
         ok, msg = da.verify_credentials("cid", "bad")
     assert not ok and "Connect" in msg
 
-    # A non-auth error still surfaces its detail.
+    # A non-auth error returns a fixed message; the detail goes to the server log, not the client.
     err_client = _mock_client([(500, {"error": "server_error"})])
     with patch("httpx.Client", return_value=err_client):
         ok, msg = da.verify_credentials("cid", "x")
-    assert not ok and "500" in msg
+    assert not ok and "failed" in msg and "500" not in msg
+    assert any("500" in str(r.exc_info[1]) for r in caplog.records if r.exc_info)
 
 
 def test_verify_credentials_requires_both():

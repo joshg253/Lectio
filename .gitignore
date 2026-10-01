@@ -23,3 +23,4 @@ data/
 deviantart-feeds/
 scraped-feeds/
 tmp/
+.tools/

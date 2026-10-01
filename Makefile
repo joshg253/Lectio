@@ -6,7 +6,7 @@ UV_CACHE_DIR=.uvcache
 # layers still make rebuilds fast.
 BUILD_CACHE_MAX=2GB
 
-.PHONY: lint types run test audit screenshots clear-scratch rebuild
+.PHONY: lint types run test audit screenshots clear-scratch rebuild codeql-install codeql-db codeql codeql-fast
 
 lint:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff check .
@@ -62,3 +62,35 @@ audit:
 # screenshots extra: `uv sync --extra screenshots && uv run playwright install chromium`.
 screenshots:
 	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/refresh_screenshots.py
+
+# Local CodeQL, pinned to the bundle version CI's github/codeql-action uses so results match. Everything lives in .tools/ (gitignored, ~1.4GB
+# for the CLI plus a few hundred MB per database). Not /tmp: that's a 3.8G tmpfs. --ram stays under the free memory next to the live app; the
+# default heap (530MB here) OOMs the stock queries.
+CODEQL_VERSION=2.27.1
+CODEQL=.tools/codeql/codeql
+CODEQL_DB=.tools/codeql-db
+CODEQL_SARIF=.tools/codeql.sarif
+CODEQL_FLAGS=--threads=2 --ram=2500
+
+codeql-install:
+	@test -x $(CODEQL) || { mkdir -p .tools && \
+		curl -fsSL -o .tools/codeql-bundle.tar.gz https://github.com/github/codeql-action/releases/download/codeql-bundle-v$(CODEQL_VERSION)/codeql-bundle-linux64.tar.gz && \
+		tar -xzf .tools/codeql-bundle.tar.gz -C .tools && rm .tools/codeql-bundle.tar.gz; }
+	$(CODEQL) version | head -1
+
+# ~10 minutes. Rebuild after code changes; the analysis below reads whatever this last captured.
+codeql-db: codeql-install
+	$(CODEQL) database create $(CODEQL_DB) --language=python --source-root=. --overwrite $(CODEQL_FLAGS) \
+		--codescanning-config=.github/codeql/codeql-config.yml
+
+# Full code-scanning run against the existing database, same query set as CI (~30 minutes).
+codeql:
+	$(CODEQL) database analyze $(CODEQL_DB) --format=sarif-latest --output=$(CODEQL_SARIF) $(CODEQL_FLAGS)
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run scripts/codeql_summary.py $(CODEQL_SARIF)
+
+# Just our custom queries plus the stock stack-trace query. The stock URL-redirection query is deliberately absent: CI excludes it (the
+# guard-aware copy in .github/codeql/queries/ replaces it), and naming it here would bypass that exclusion and report the old alerts.
+codeql-fast:
+	$(CODEQL) database analyze $(CODEQL_DB) .github/codeql/queries codeql/python-queries:Security/CWE-209/StackTraceExposure.ql \
+		--format=sarif-latest --output=$(CODEQL_SARIF) $(CODEQL_FLAGS)
+	UV_CACHE_DIR=$(UV_CACHE_DIR) uv run scripts/codeql_summary.py $(CODEQL_SARIF)

@@ -62,6 +62,8 @@ from services import flaresolverr as flaresolverr_service
 from services import page_fetch
 from services import full_content_fetch
 from services import page_topics
+from services.errors import public_error
+from services.redirects import local_url
 from services import site_content_plugins
 from services import publish_date as publish_date_service
 from services import deviantart as deviantart_service
@@ -11705,7 +11707,7 @@ def build_source_proxy_response(source_url: str, picker: bool = False) -> HTMLRe
         response.raise_for_status()
     except Exception as exc:
         escaped_url = html.escape(source_url)
-        escaped_error = html.escape(str(exc))
+        escaped_error = html.escape(public_error(exc, "Fetching the source"))
         return HTMLResponse(
             (
                 "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Source unavailable</title>"
@@ -12907,7 +12909,7 @@ def build_readability_response(source_url: str) -> HTMLResponse:
         title, article_html = fetch_readability_article(source_url)
     except Exception as exc:
         escaped_url = html.escape(source_url)
-        escaped_error = html.escape(str(exc))
+        escaped_error = html.escape(public_error(exc, "Fetching the article"))
         return HTMLResponse(
             (
                 "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Readability unavailable</title>"
@@ -23669,8 +23671,10 @@ def refresh(
     if retry_after_seconds > 0:
         return RedirectResponse(
             url=(
-                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
-                f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                local_url(
+                    f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                    f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                )
             ),
             status_code=303,
         )
@@ -23700,7 +23704,11 @@ def refresh(
     # so the redirect (and updated "new" badges) returns promptly.
     _spawn_feed_enhancement(feed_urls)
     return RedirectResponse(
-        url=(f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"),
+        url=(
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"
+            )
+        ),
         status_code=303,
     )
 
@@ -23733,8 +23741,10 @@ def refresh_feed(
     if retry_after_seconds > 0:
         return RedirectResponse(
             url=(
-                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
-                f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                local_url(
+                    f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                    f"{quote_plus(f'Refresh throttled. Try again in {retry_after_seconds}s.')}"
+                )
             ),
             status_code=303,
         )
@@ -23760,7 +23770,10 @@ def refresh_feed(
     _spawn_feed_enhancement([feed_url])
     return RedirectResponse(
         url=(
-            f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Feed refresh complete.')}"
+            local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}"
+                f"&message={quote_plus('Feed refresh complete.')}"
+            )
         ),
         status_code=303,
     )

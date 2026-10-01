@@ -317,47 +317,22 @@ Nothing here is scheduled — just what to check if a related symptom recurs.
 
 ### CodeQL board
 
-9 open alerts from PR #329 (the main.py/index.html breakup, Step 1): "information exposure through
-an exception" on `return JSONResponse({"error": str(exc)}, ...)` in the moved
-`routes/integrations_*.py` files. Not new — the same pattern (`"error": str(exc)` in an exception
-handler) already exists 15+ times in main.py; CodeQL flags them because the lines are new *files*,
-not new *code*. Left open rather than dismissed or fixed inline (decided when triaging the PR); a
-real fix means picking a message for each call site that's still useful in the UI (several surface
-the caught exception directly, e.g. "Sync failed: {result['error']}"), so it's its own pass across
-every instance — including the ones still in main.py, not just the 9 CodeQL happened to flag — not
-scope for this refactor. Notes for next time on other alert classes:
+The 48 route-split alerts (28 `py/url-redirection`, 20 `py/stack-trace-exposure`) were fixed 2026-09-30, not dismissed: redirect targets go
+through `services.redirects.local_url` (modeled as a barrier in `.github/codeql/queries/`, with the stock query excluded the same way as
+SSRF and path-injection), and catch-all handlers answer with `services.errors.public_error` and log the traceback. Reproduce with
+`make codeql-db && make codeql-fast` (see README); local results matched CI's before the fix. If alerts return, check a new
+`RedirectResponse(url=...)` or `str(exc)` response first. Notes for next time:
 
 - A negative lookahead will not clear a ReDoS alert — CodeQL's regex model ignores lookaheads.
   Write the loop lookahead-free or move the scan into Python.
 - Committed page fixtures are excluded from analysis (`paths-ignore: tests/fixtures`) — a captured
   page is byte-for-byte what a site served, so analyzing it reports the remote site's choices as
   ours.
+- Stock `py/url-redirection` clears `"/x?y=" + tainted` (right side of a `+`) but not f-strings, which is why every f-string redirect was
+  flagged; `local_url` is the fix rather than rewriting them as concatenation.
 - If the reflective-XSS class keeps recurring, `.github/codeql/queries/` already has the pattern
-  for a guard-aware custom query (see the SSRF/path-injection ones modeling our sanitizers as
+  for a guard-aware custom query (see the SSRF/path-injection/URL-redirection ones modeling our sanitizers as
   barriers).
-
-25 more alerts (3 flagged "high") surfaced on PR #340 (route-split Stage 8, `routes/feeds.py`) —
-same "new file, not new code" attribution as above, verified individually rather than assumed:
-the polynomial-regex pair (`services/saved_articles.py:221/224`) and the reflected-XSS one
-(`main.py:20916`) are both years-old code untouched by this PR (confirmed via `git log -S`/`-L`),
-just re-attributed because a large file-restructuring diff shifts line numbers CodeQL's PR-diff
-heuristic uses to associate an alert with "changed" code. The other 22 (`routes/feeds.py`'s own
-"URL redirection from remote source"/"information exposure through an exception") are the same
-`RedirectResponse(url=f"/?...")`-with-query-params and `str(exc)` patterns used everywhere else in
-this app, newly visible because they're now in a new file. Not fixed as part of the route split
-for the same reason as the PR #329 batch — left open.
-
-Re-checked 2026-09-22, after all 10 route-split stages: 48 open alerts total (28 `py/url-redirection`,
-20 `py/stack-trace-exposure`), now spread across every stage's output file, not just the two above —
-`routes/feeds.py` (19), `routes/integrations_*.py` (8, one dismissed/fixed since the PR #329 count of
-9), `routes/entries.py` (6), `routes/system.py` (6), `routes/automation.py` (4), `routes/settings.py`
-(2). Same "new file, not new code" attribution expected to hold for the later stages too (not
-individually re-verified per-file the way PR #329/#340 were) — no reason to expect otherwise, since
-every stage used the same mechanical move. Still left open for the same reason: a real fix is one
-pass picking a useful message per call site, across the whole app, not scoped to any one refactor.
-
-Re-checked 2026-09-30: still the same 48 (28 `py/url-redirection`, 20 `py/stack-trace-exposure`), none new since 2026-09-23 and none from
-the stack update. Next up: the dedicated fix pass, once the "Update Stack" PR merges.
 
 ### Feed-tag suggestion suppression — do not attempt a third heuristic
 

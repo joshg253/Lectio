@@ -217,7 +217,7 @@ def _dry_run_pattern(
             # Same module object the matcher compiles with — `_re` is an alias
             # some of these functions import locally, and mixing the two names
             # made it look like the handler might not catch.
-            return {"error": f"Invalid regex: {e}"}
+            return {"error": f"Invalid regex: {e.msg}"}
 
     if scope == "folder":
         try:

@@ -11,7 +11,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from main import (
-    LOGGER,
     SETTING_QUIRE_ACCESS_TOKEN,
     SETTING_QUIRE_OAUTH_STATE,
     SETTING_QUIRE_PROJECT_NAME,
@@ -27,6 +26,7 @@ from main import (
     set_setting,
 )
 from services import quire as quire_service
+from services.errors import public_error
 
 router = APIRouter()
 
@@ -70,7 +70,7 @@ def quire_callback(request: Request, code: str | None = None, state: str | None 
         except Exception:
             username = ""
     except Exception as exc:  # noqa: BLE001
-        return RedirectResponse(url="/?message=" + quote_plus(f"Quire connect failed: {exc}"), status_code=303)
+        return RedirectResponse(url="/?message=" + quote_plus(public_error(exc, "Quire connect")), status_code=303)
     with get_meta_connection() as conn:
         set_setting(conn, SETTING_QUIRE_ACCESS_TOKEN, token)
         if data.get("refresh_token"):
@@ -108,6 +108,5 @@ def quire_projects_route():
     except quire_service.QuireRateLimited:
         return JSONResponse({"ok": False, "error": "Quire rate limit hit — try again shortly."}, status_code=429)
     except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[quire] project list failed: %s", exc)
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Loading Quire projects")}, status_code=502)
     return JSONResponse({"ok": True, "projects": projects})

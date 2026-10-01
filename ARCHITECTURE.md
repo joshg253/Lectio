@@ -68,3 +68,5 @@ Use plugin/adapter style for non-native behavior instead of hardwired branching.
 ## Security direction
 
 Keep the local-first path simple. Add auth only when exposing the app beyond trusted local use. The multi-user phase makes per-user identity, per-user API tokens, route-level authorization, and SSRF hardening mandatory — see "Multi-user tenancy → Security posture".
+
+Every redirect built from request data goes through `services.redirects.local_url` (same-origin paths only), and a catch-all `except` that answers the client uses `services.errors.public_error` (fixed message, traceback logged) rather than echoing `str(exc)`. CodeQL treats both as sanitizers via the guard-aware queries in `.github/codeql/queries/`.
