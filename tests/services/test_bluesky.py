@@ -210,3 +210,11 @@ def test_card_from_external_embed():
     embed = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://x.test/a", "title": "T", "thumb": "https://cdn/x"}}
     assert bluesky._card_from_embed(embed) == {"uri": "https://x.test/a", "title": "T", "description": "", "thumb": "https://cdn/x"}
     assert bluesky._card_from_embed({"$type": "app.bsky.embed.images#view"}) is None
+
+
+def test_card_rejects_unsafe_schemes():
+    bad = {"$type": "app.bsky.embed.external#view", "external": {"uri": "javascript:alert(1)", "title": "T"}}
+    assert bluesky._card_from_embed(bad) is None
+    odd_thumb = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://x.test/a", "thumb": "data:image/png;base64,AA"}}
+    card = bluesky._card_from_embed(odd_thumb)
+    assert card is not None and card["thumb"] == ""

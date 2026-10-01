@@ -177,7 +177,13 @@ def _card_from_embed(embed: object) -> dict[str, str] | None:
     if etype.startswith("app.bsky.embed.external"):
         ext = embed.get("external")
         if isinstance(ext, dict) and ext.get("uri"):
-            return {k: str(ext.get(k) or "") for k in ("uri", "title", "description", "thumb")}
+            card = {k: str(ext.get(k) or "") for k in ("uri", "title", "description", "thumb")}
+            # The card is author-controlled: only http(s) may become a link or image src (no javascript:/data:).
+            if not card["uri"].lower().startswith(("http://", "https://")):
+                return None
+            if not card["thumb"].lower().startswith(("http://", "https://")):
+                card["thumb"] = ""
+            return card
         return None
     if etype.startswith("app.bsky.embed.recordWithMedia"):
         return _card_from_embed(embed.get("media"))

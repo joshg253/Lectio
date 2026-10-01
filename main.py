@@ -17293,7 +17293,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # The list thumbnail is handled separately in extract_entry_thumbnail_url.
         if bluesky.is_bsky_feed(str(entry.feed_url)):
             _existing = content_html or ""
-            if _existing and "<" not in _existing:
+            if _existing and not re.search(r"</?[a-zA-Z!]", _existing):
                 # The RSS body is plain text with real newlines; HTML collapses them to one line.
                 _existing = _promote_plaintext_summary(_existing) or html.escape(_existing).replace("\n", "<br>")
                 content_html = _existing
