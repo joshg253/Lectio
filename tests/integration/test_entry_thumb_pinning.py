@@ -117,7 +117,7 @@ def test_sink_is_wired_into_the_service():
 
 def test_render_prefers_the_pinned_copy():
     assert "/api/entry-thumb?feed_url=" in MAIN
-    assert "_url_is_signed(_thumb) and has_pinned_entry_thumbnail(feed_url_str, _entry_id)" in MAIN
+    assert "_url_is_signed(_thumb) and has_pinned_entry_thumbnail(feed_url_str, _entry_id, usable_only=True)" in MAIN
 
 
 def test_pinned_entry_thumbnails_are_never_evicted():
@@ -166,6 +166,26 @@ def test_pin_downscales_a_large_image(monkeypatch):
     assert hit is not None
     body, _ = hit
     assert max(Image.open(io.BytesIO(body)).size) <= main._ENTRY_THUMB_MAX_DIM
+
+
+def test_pin_refuses_a_body_still_oversized_after_downscaling(monkeypatch):
+    """An animated GIF can't be downscaled, and /api/entry-thumb serves the stored bytes as-is, so storing one meant sending
+    tens of MB to the browser for a list thumbnail. Unpinned entries fall back to /thumb, which renders a static one."""
+    gif = b"GIF89a" + b"\x00" * (main._ENTRY_THUMB_MAX_STORE_BYTES + 10)
+    _stub_safe_get(monkeypatch, gif, content_type="image/gif")
+    ok = main._pin_entry_thumbnail_bytes(FEED, ENTRY, SIGNED_URL)
+    assert ok is False
+    assert main.has_pinned_entry_thumbnail(FEED, ENTRY) is False
+
+
+def test_downscale_reduces_a_jpeg_over_the_decode_pixel_cap(monkeypatch):
+    """Too many pixels to decode in full used to mean the original bytes were kept; a JPEG can be decoded at reduced scale."""
+    monkeypatch.setattr(main, "_IMG_MAX_DECODE_PIXELS", 1_000_000)
+    buf = io.BytesIO()
+    Image.new("RGB", (2400, 2400), (200, 30, 30)).save(buf, format="JPEG")
+    out, content_type = main._maybe_downscale_image(buf.getvalue(), 400)
+    assert content_type == "image/jpeg"
+    assert max(Image.open(io.BytesIO(out)).size) <= 400
 
 
 def test_pin_fails_gracefully_on_non_image_response(monkeypatch):
@@ -315,3 +335,11 @@ def test_a_sink_failure_does_not_break_the_write(tenant, monkeypatch):
     monkeypatch.setattr(url_guard, "safe_get", _boom)
     main.lead_image_service.store_entry_lead_image(FEED, ENTRY, SIGNED_URL)
     assert main.lead_image_service.get_cached_lead_image_url(FEED, ENTRY) == SIGNED_URL
+
+
+def test_usable_only_ignores_a_pinned_copy_over_the_cap():
+    """Rows pinned before the cap (up to 77 MB) stay in the cache but the list must not point at them."""
+    key = main._entry_thumb_cache_key(FEED, ENTRY)
+    main._img_cache_store(key, b"x" * (main._ENTRY_THUMB_MAX_STORE_BYTES + 1), "image/gif")
+    assert main.has_pinned_entry_thumbnail(FEED, ENTRY) is True
+    assert main.has_pinned_entry_thumbnail(FEED, ENTRY, usable_only=True) is False
