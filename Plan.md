@@ -216,6 +216,10 @@ Rule engine + on-star fan-out + shared destination senders are shipped (Instapap
 playlist, email, Quire, Pinterest). Build more only if actually wanted: save-to-tag/starred-archive
 as a rule action, Readwise/Reader, Wallabag. Each is small, reusing the existing engine.
 
+Instapaper API v2 (announced 2026-09-29): we only *save* via the Simple API (`/api/add`, username + password), which the post doesn't
+mention, so nothing is forced. xAuth shuts off 2027-09-30. If the Simple API is ever deprecated, or we want tags sent with a save,
+switch the sender to v2 with a personal access token (no password stored). Revisit if Instapaper announces anything about the Simple API.
+
 Readit (wereadit.com): send-to-Readit is blocked — their save endpoint is unreachable outside
 their own extension (Cloudflare). Import is blocked until they expose an export/API. The reverse
 direction (Lectio receiving from the Readit extension's save protocol) already works today.
