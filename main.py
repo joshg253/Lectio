@@ -208,6 +208,14 @@ BASE_DIR = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("lectio")
 LOGGER.setLevel(logging.INFO)
 
+# Refresh and page-fetch threads keep this one process's GIL busy, and a request makes many short DB calls that each
+# have to win it back (5ms per turn by default) -- measured 2026-10-02 as the same steps taking ~50ms at rest and 1-4s
+# during a refresh burst. A shorter interval hands it back sooner; throughput cost is small.
+try:
+    sys.setswitchinterval(float(os.getenv("LECTIO_GIL_SWITCH_INTERVAL", "0.001")))
+except ValueError:
+    pass
+
 
 class _ReaderNonFatalParseWarningFilter(logging.Filter):
     """Filter known non-fatal feed parsing warnings from `reader` logs."""
