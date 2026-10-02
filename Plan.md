@@ -19,7 +19,18 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
-Empty.
+### Folder-switch speed — what's left (2026-10-02)
+
+Shipped: no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s
+tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1 MB. Left:
+- Saved badges are still recomputed per request (~100ms). A cache keyed on the unread generation plus a saved generation bumped by
+  star/tag/archive writes, with a background refresh, would take it to ~0 without going stale.
+- A partial index on `entry_lead_images(feed_url) WHERE locked_until IS NOT NULL` makes the locked-comics lookup free; today it scans
+  150k rows (~55ms). Needs the per-user schema migration.
+- Confirm the GIL-starvation theory with `py-spy` from the host during a refresh burst (see Methodology below). If it holds and the
+  1ms interval isn't enough, run refresh in its own process.
+- `_has_manual_tags_cache` is keyed per user but not per DB; the tagged-key entry is path-checked, the `"any"` entry is not.
+- `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it.
 
 ## Tier 3 — sized, no open decision, ready to build
 
