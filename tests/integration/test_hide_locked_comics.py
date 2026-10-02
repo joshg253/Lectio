@@ -483,3 +483,55 @@ def test_entry_pane_normal_entry_unaffected(configured):
         html = client.get("/entries/pane", params={"folder_id": root, "feed_url": FEED, "entry_id": "normal"}).text
 
     assert "entry-lead-image-locked" not in html
+
+
+def test_underfill_retry_is_skipped_when_the_raw_fetch_was_already_short_of_its_window(configured, monkeypatch):
+    """A small folder always returns fewer than `limit`. With hide_locked_comics on anywhere in scope that used to
+    re-run the whole fetch three more times, though a raw fetch short of its window proves nothing older exists."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED, entry_id="normal", published=OLD)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    calls: list[int] = []
+    real_fetch = main._list_entries_for_feeds_fetch
+
+    def _counting_fetch(*args, **kwargs):
+        calls.append(int(kwargs["limit"]))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(main, "_list_entries_for_feeds_fetch", _counting_fetch)
+
+    ids = [e["id"] for e in main.list_entries_for_feeds({FEED}, limit=100, sort_dir="desc")]
+
+    assert ids == ["normal"]
+    assert len(calls) == 1, "a raw fetch short of its window must not be retried"
+
+
+def test_min_fill_accepts_a_slightly_short_page_without_retrying(configured, monkeypatch):
+    """One locked row among a full window left the page 1 short, which used to re-run the whole fetch."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED, allow_invalid_url=True, exist_ok=True)
+        for i in range(10):
+            _seed_entry(reader, feed_url=FEED, entry_id=f"e{i}", published=OLD + timedelta(days=i))
+        _seed_entry(reader, feed_url=FEED, entry_id="locked", published=OLD + timedelta(days=99))
+    _seed_locked_until(FEED, "locked", time.time() + 86400 * 30)
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, "hide_locked_comics", 1)
+
+    calls: list[int] = []
+    real_fetch = main._list_entries_for_feeds_fetch
+
+    def _counting_fetch(*args, **kwargs):
+        calls.append(int(kwargs["limit"]))
+        return real_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(main, "_list_entries_for_feeds_fetch", _counting_fetch)
+
+    strict = main.list_entries_for_feeds({FEED}, limit=10, sort_dir="desc")
+    assert len(strict) == 10 and len(calls) > 1, "default stays strict: the retry backfills the page"
+
+    calls.clear()
+    relaxed = main.list_entries_for_feeds({FEED}, limit=10, sort_dir="desc", min_fill=0.9)
+    assert len(relaxed) == 9 and len(calls) == 1

@@ -8068,6 +8068,7 @@ def get_reader():
         pool.move_to_end(uid)  # mark most-recently-used
         return proxy
 
+    _open_start = time.perf_counter()
     proxy = _PersistentReaderProxy(
         ReaderApi(
             tenancy.reader_db_path(uid),
@@ -8079,6 +8080,11 @@ def get_reader():
         ).client()
     )
     pool[uid] = proxy
+    _open_ms = int((time.perf_counter() - _open_start) * 1000)
+    if _open_ms > 200:
+        # A cold per-thread open is a suspect for multi-second folder switches (get_tagged_entry_keys
+        # stalls with progress_steps=0, i.e. before any SQL runs); logged so that's confirmed or cleared.
+        LOGGER.info("[perf] get_reader cold_open=%dms thread=%s", _open_ms, threading.current_thread().name)
     # Evict + close the least-recently-used handles beyond the per-thread cap.
     # Safe because the pool is thread-local and a thread serves one request at a
     # time, so an evicted handle is never mid-use on another thread.
@@ -9310,6 +9316,12 @@ def invalidate_has_manual_tags_cache() -> None:
         _has_manual_tags_cache.clear()
 
 
+# The library-wide tagged-key set, cached briefly: the home route asks for it twice per request (unread badge and
+# per-folder counts) and the full read is ~17k rows. Shares _has_manual_tags_cache, so every tag write that
+# invalidates that also drops this; the short TTL covers write paths that don't (imports, merges).
+_TAGGED_KEYS_CACHE_TTL_SECONDS = 15
+
+
 def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, str]]:
     """(feed_url, entry_id) of every manually-tagged entry — the "tag" half of the
     Kept view's star-OR-tag set. When *feed_urls* is given, restrict to those feeds
@@ -9327,6 +9339,16 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     slow so a live stall pins the blame here or clears it. Shared by the Kept
     view list, per-folder counts, and the sidebar badge so the three stay
     consistent."""
+    with _has_manual_tags_lock:
+        cached = _has_manual_tags_cache.get("tagged_keys")
+    db_path = str(tenancy.reader_db_path())
+    if cached and cached[2] == db_path and time.time() - cached[0] < _TAGGED_KEYS_CACHE_TTL_SECONDS:
+        all_keys = cached[1]
+        return set(all_keys) if feed_urls is None else {k for k in all_keys if k[0] in feed_urls}
+    if feed_urls is not None:
+        # Fill the cache from the full read, then narrow: one scan serves every scope.
+        all_keys = get_tagged_entry_keys(None)
+        return {k for k in all_keys if k[0] in feed_urls}
     keys: set[tuple[str, str]] = set()
     like = f"{MANUAL_TAG_KEY_PREFIX}%"
     _start = time.perf_counter()
@@ -9346,33 +9368,22 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     try:
         with get_reader() as reader:
             db = reader._storage.get_db()
-            if feed_urls is None:
-                for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
-                    keys.add((str(row[0]), str(row[1])))
-                _progress_steps += getattr(db, "_lectio_progress_steps", 0)
-            else:
-                feed_list = list(feed_urls)
-                for i in range(0, len(feed_list), 900):
-                    chunk = feed_list[i : i + 900]
-                    ph = ",".join("?" for _ in chunk)
-                    for row in db.execute(
-                        f"SELECT feed, id FROM entry_tags WHERE key LIKE ? AND feed IN ({ph})",
-                        [like, *chunk],
-                    ):
-                        keys.add((str(row[0]), str(row[1])))
-                    _progress_steps += getattr(db, "_lectio_progress_steps", 0)
+            for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
+                keys.add((str(row[0]), str(row[1])))
+            _progress_steps += getattr(db, "_lectio_progress_steps", 0)
+        with _has_manual_tags_lock:
+            _has_manual_tags_cache["tagged_keys"] = (time.time(), keys, db_path)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
     elapsed_ms = int((time.perf_counter() - _start) * 1000)
     if elapsed_ms > 200:
         LOGGER.info(
-            "[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
+            "[perf] get_tagged_entry_keys=%dms rows=%d progress_steps=%d",
             elapsed_ms,
             len(keys),
-            feed_urls is not None,
             _progress_steps,
         )
-    return keys
+    return set(keys)
 
 
 def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
@@ -13483,6 +13494,7 @@ def list_entries_for_feeds(
     kept_scope: str = "kept",
     archived: bool | None = None,
     enrich: bool = True,
+    min_fill: float = 1.0,
 ) -> list[dict]:
     """Thin retry wrapper around `_list_entries_for_feeds_fetch`.
 
@@ -13516,6 +13528,7 @@ def list_entries_for_feeds(
     fetch cost each attempt, for a fetch that was never actually window-bound
     to begin with -- see that constant's own comment.
     """
+    _stats: dict = {}
     result = _list_entries_for_feeds_fetch(
         feed_urls,
         limit=limit,
@@ -13529,8 +13542,17 @@ def list_entries_for_feeds(
         kept_scope=kept_scope,
         archived=archived,
         enrich=enrich,
+        _stats=_stats,
     )
-    if len(result) >= limit or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
+    # min_fill < 1 accepts a slightly short page without the retry: a hide filter dropping one row of 250 otherwise
+    # re-ran the whole fetch (~1.5s on a big folder) to backfill a row nobody sees. Only callers that never depend
+    # on a full page opt in -- a delta chunk fetch must not, or it could come back with nothing new.
+    if len(result) >= limit * min_fill or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
+        return result
+    if _stats.get("exhausted"):
+        # The raw fetch came back short of its window, so nothing older exists to backfill with. Without this,
+        # any folder with fewer matches than `limit` (every small unread folder) re-ran the whole fetch up to
+        # three more times whenever a hide filter was on anywhere in scope.
         return result
 
     with get_meta_connection() as _prefs_conn:
@@ -13588,6 +13610,7 @@ def _list_entries_for_feeds_fetch(
     kept_scope: str = "kept",
     archived: bool | None = None,
     enrich: bool = True,
+    _stats: dict | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -13971,6 +13994,9 @@ def _list_entries_for_feeds_fetch(
             len(all_feed_entries),
             fetch_ms,
         )
+        if _stats is not None:
+            # Fewer raw rows than the window means the source is exhausted: a bigger window cannot add any.
+            _stats["exhausted"] = len(all_feed_entries) < fetch_limit
 
         # Two-phase processing: build a lightweight per-entry record that has
         # *only* what filter/sort/dedupe needs, then enrich the surviving top-N
@@ -14703,34 +14729,21 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
 
 def get_saved_unread_count() -> int:
     """Unread count across all kept (starred OR tagged) entries, for the sidebar's
-    Saved Articles badge. Batched into (feed, id) chunks rather than one query per
-    feed: kept sets are small in total but commonly span hundreds of distinct feeds
-    (529 on the live library), so a per-feed loop meant hundreds of sequential
-    round-trips on every home-route request — cheap at rest, but each round-trip
-    pays a bit more under concurrent refresh writes, and that compounds across
-    hundreds of them (see the home-route gap_block investigation, 2026-09-01)."""
-    saved_by_feed: dict[str, set[str]] = {}
+    Saved Articles badge. Kept sets span hundreds of feeds, so this is a single
+    set intersection rather than a per-feed or per-chunk query loop, which got
+    slower under concurrent refresh writes (home-route gap_block, 2026-09-01)."""
+    kept: set[tuple[str, str]] = set()
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
-            saved_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
-    for feed, eid in get_tagged_entry_keys():  # union the tag axis in
-        saved_by_feed.setdefault(feed, set()).add(eid)
-    if not saved_by_feed:
+            kept.add((str(row["feed_url"]), str(row["entry_id"])))
+    kept |= get_tagged_entry_keys()  # union the tag axis in
+    if not kept:
         return 0
-    pairs = [(feed_url, eid) for feed_url, ids in saved_by_feed.items() for eid in ids]
-    count = 0
+    # One scan of the unread keys intersected with the kept set, rather than ~30 chunked (feed, id) IN (VALUES ...)
+    # probes against a 25k-pair kept set: same count, ~50ms instead of ~250ms on the live library.
     with get_reader() as reader:
         db = reader._storage.get_db()
-        for i in range(0, len(pairs), 900):
-            chunk = pairs[i : i + 900]
-            values_sql = ",".join("(?,?)" for _ in chunk)
-            params = [v for pair in chunk for v in pair]
-            row = db.execute(
-                f"SELECT COUNT(*) FROM entries WHERE read = 0 AND (feed, id) IN (VALUES {values_sql})",
-                params,
-            ).fetchone()
-            count += int(row[0] or 0)
-    return count
+        return sum(1 for row in db.execute("SELECT feed, id FROM entries WHERE read = 0") if (str(row[0]), str(row[1])) in kept)
 
 
 def get_starred_inbox_total() -> int:
@@ -22072,6 +22085,8 @@ def _home_inner(
         # spans the whole kept set (starred OR tagged), because a tag is filing
         # and filing something is not a to-do.
         kept_scope=("starred" if inbox_view else "kept"),
+        # The initial load's client reveals ~20 rows at a time and pages by offset, so a page a few rows short is fine.
+        min_fill=0.9 if offset is None else 1.0,
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
