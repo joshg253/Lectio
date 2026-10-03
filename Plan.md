@@ -27,8 +27,11 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
   star/tag/archive writes, with a background refresh, would take it to ~0 without going stale.
 - A partial index on `entry_lead_images(feed_url) WHERE locked_until IS NOT NULL` makes the locked-comics lookup free; today it scans
   150k rows (~55ms). Needs the per-user schema migration.
-- Confirm the GIL-starvation theory with `py-spy` from the host during a refresh burst (see Methodology below). If it holds and the
-  1ms interval isn't enough, run refresh in its own process.
+- GIL starvation was confirmed with `py-spy` (78% of GIL time in `purge_tombstoned_entries`, fixed). The 1ms switch interval is a
+  belt-and-braces measure; revert it to the 5ms default if it ever shows a throughput cost. Re-profile before considering a
+  separate refresh process.
+- `lectio:saved` has ~4.7k tombstones and no publisher window, so the nightly sweep never removes them. Harmless now that the purge
+  is one query per feed.
 - `_has_manual_tags_cache` is keyed per user but not per DB; the tagged-key entry is path-checked, the `"any"` entry is not.
 - `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it.
 
@@ -376,7 +379,9 @@ does; nothing else blocks it.
 ### Methodology: diagnosing refresh-contention/latency stalls
 
 Elapsed-time SQL timing can't distinguish SQLite lock-wait from GIL starvation — live `py-spy`
-sampling during a real stall settles it faster. Reach for this first, not last.
+sampling during a real stall settles it faster. Reach for this first, not last. Run it as
+`sudo env "PATH=$PATH" py-spy record --pid <python pid from docker top> --gil --nonblocking ...`: without `--nonblocking` it
+pauses the process for every sample and freezes the live app.
 
 ### Parked, deliberately
 
