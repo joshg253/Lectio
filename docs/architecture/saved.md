@@ -50,6 +50,15 @@ arguments so tests can assert on delays instead of stubbing them out.
   Clearing it per batch made the status pill blink out between queued scopes.
 - **A refusal is not a failure** — only real failures count toward dropping a
   host.
+- **A hand-picked selection uses the same job.** `POST /saved/refetch-entries`
+  queues explicit rows (any entry with a link, not just kept ones); the queue item
+  carries its `rows`, so nothing re-resolves a scope for it.
+- **The batch passes `ignore_cooldown=True`.** The page ladder's 6h host cooldown is
+  tripped by one URL exhausting every tier, and the batch then counted each skip as
+  a failure and dropped the host after four. The batch has its own pacing and
+  `HOST_FAILURE_LIMIT`, so a host that really refuses still stops the run.
+- **A re-fetch never swaps a thumbnail for none.** The cached lead image is cleared
+  so the new body can supply one, but restored when that body holds no image.
 
 Progress lives in a fixed pill (`#refetch-pill`), not a toast: a job measured in
 quarter-hours needs a surface that does not fade. Time remaining comes from the
