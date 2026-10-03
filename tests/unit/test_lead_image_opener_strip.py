@@ -189,3 +189,30 @@ def test_a_br_nested_in_inline_wrappers_between_two_spans_survives():
     <i>/<span> wrappers."""
     html = "<p><span><strong>Magnavox Odyssey</strong></span><i><span><br/></span></i><span>The console that started it all.</span></p>"
     assert main._collapse_block_spacers(html) == html
+
+
+def test_same_picture_at_another_size_is_deduped_as_the_opener():
+    """guitarworld: lead is …-1280-80.jpg, the extracted body opens with …-1200-80.jpg — the hero showed twice."""
+    lead = "https://cdn.mos.cms.futurecdn.net/abc123XYZ-1280-80.jpg"
+    body = '<div><figure><img src="https://cdn.mos.cms.futurecdn.net/abc123XYZ-1200-80.jpg"></figure></div><p>text</p>'
+    content, _ = _strip(body, lead=lead)
+    assert "abc123XYZ" not in content
+    assert "text" in content
+
+
+def test_variant_key_separates_different_pictures():
+    a = main._img_variant_key("https://cdn.test/abc123XYZ-1280-80.jpg")
+    assert a == main._img_variant_key("https://cdn.test/abc123XYZ-1200-80.jpg")
+    assert a != main._img_variant_key("https://cdn.test/other999-1280-80.jpg")
+    assert a != main._img_variant_key("https://other.test/abc123XYZ-1280-80.jpg")
+
+
+def test_youtube_facade_becomes_a_bare_watch_link_before_extraction():
+    facade = (
+        '<p>Intro</p><div class="youtube-video youtube-facade"><div class="video-aspect-box">'
+        '<img src="https://img.youtube.com/vi/hIsHUwJZa_o/maxresdefault.jpg"></div>'
+        '<a href="https://youtu.be/hIsHUwJZa_o">Watch On</a></div>'
+    )
+    out = main._replace_youtube_facades(facade)
+    assert "youtube-facade" not in out and "Watch On" not in out
+    assert 'href="https://www.youtube.com/watch?v=hIsHUwJZa_o"' in out

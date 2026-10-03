@@ -337,3 +337,5 @@ Records carry both forms. `title_html` is used where the title is visible text (
 rows, the entry-pane headline, Read Mode rows and the reader headline);
 `title_plain` — the same string with those tags stripped — is used everywhere that
 cannot render markup: `title=` attributes, `<title>`, exports, email.
+
+**Re-fetch swaps a YouTube facade for a bare watch link** (`_replace_youtube_facades`, before extraction). Extraction used to keep the facade's thumbnail, title and "Watch On" logo as a dead image; the bare link is what `_place_recovered_embeds` pass 1 turns into a real player.

@@ -11334,6 +11334,39 @@ def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
     return summary_html + block
 
 
+def _replace_youtube_facades(raw_html: str) -> str:
+    """Swap a publisher's YouTube click-to-play facade for a bare watch link, before extraction.
+
+    guitarworld's facade is a thumbnail, a title, a play glyph and a "Watch On YouTube" logo link. Extraction kept all of it, so a
+    re-fetch turned the playable video into a dead thumbnail. A bare link to the video is what the pane's embed placement already
+    swaps for a real player (_place_recovered_embeds pass 1), and it stays a working link when no player can be recovered.
+    """
+    if "youtube-facade" not in raw_html:
+        return raw_html
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(raw_html, "html.parser")
+        changed = False
+        for facade in soup.find_all(class_="youtube-facade"):
+            if facade.parent is None:
+                continue
+            ids = youtube_embeds._video_ids(str(facade))
+            if not ids:
+                continue
+            url = f"https://www.youtube.com/watch?v={ids[0]}"
+            link = soup.new_tag("a", href=url)
+            link.string = url
+            para = soup.new_tag("p")
+            para.append(link)
+            facade.replace_with(para)
+            changed = True
+        return str(soup) if changed else raw_html
+    except Exception:  # noqa: BLE001 — never fail an extraction over cosmetics
+        LOGGER.debug("youtube facade swap failed", exc_info=True)
+        return raw_html
+
+
 def _strip_site_chrome(raw_html: str, source_url: str) -> str:
     """Remove chrome a per-site plugin named, before extraction.
 
@@ -12300,6 +12333,23 @@ def _bbcode_to_html(text: str) -> str:
     return out
 
 
+# Future plc's CDN spells a resize as -WIDTH-QUALITY (…/abc123-1280-80.jpg).
+_FUTURE_SIZE_SUFFIX_RE = re.compile(r"-\d{3,5}-\d{2,3}(?=\.[A-Za-z0-9]+$)")
+
+
+def _img_variant_key(url: str) -> str | None:
+    """Host + folder + basename with a resize suffix removed, so two sizes of one picture compare equal."""
+    try:
+        parts = urlparse(html.unescape(url or ""))
+    except ValueError:
+        return None
+    folder, _, name = parts.path.rpartition("/")
+    stem = _FUTURE_SIZE_SUFFIX_RE.sub("", _IMG_SIZE_SUFFIX_RE.sub("", name))
+    if not parts.netloc or not stem:
+        return None
+    return f"{parts.netloc.lower()}{folder}/{stem}".lower()
+
+
 def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
     """Remove the lead-image opener from content HTML using BeautifulSoup.
 
@@ -12350,6 +12400,15 @@ def _bs4_strip_opener(content_html: str, lead_image_url: str) -> str | None:
                     src = str(img.get("src") or "")
                     _src_m = _BLOGGER_CDN_RE.match(src)
                     if _src_m and _src_m.group(1) == _lead_base and _src_m.group(2) == _lead_file:
+                        target_img = img
+                        break
+        if target_img is None:
+            # Same picture at another size on the same host/folder: WordPress -WxH and Future's -WIDTH-QUALITY
+            # (guitarworld lead …-1280-80.jpg vs body …-1200-80.jpg) — without this the hero showed twice.
+            _lead_key = _img_variant_key(lead_image_url)
+            if _lead_key:
+                for img in soup.find_all("img"):
+                    if _img_variant_key(str(img.get("src") or "")) == _lead_key:
                         target_img = img
                         break
         if target_img is None:
@@ -12630,6 +12689,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
     raw_html = _strip_site_chrome(raw_html, source_url)
+    raw_html = _replace_youtube_facades(raw_html)
     raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     # Strip comment threads first — otherwise readability scores a big comments
@@ -12852,6 +12912,7 @@ def extract_full_page_article(raw_html: str, source_url: str) -> tuple[str, str]
     ``<header>``/``<footer>`` are removed, as obvious non-content that is never
     the article even on a document page."""
     raw_html = _strip_site_chrome(raw_html, source_url)
+    raw_html = _replace_youtube_facades(raw_html)
     raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
     img_sizes = html_sanitize.collect_img_sizes(raw_html, base_url=source_url)

@@ -1047,3 +1047,5 @@ pinned before its token can die unread.
   `_pin_entry_thumbnail_bytes` now refuses anything still over `_ENTRY_THUMB_MAX_STORE_BYTES` after downscaling, and the list
   ignores older oversized pins (`has_pinned_entry_thumbnail(..., usable_only=True)`), falling back to `/thumb`. Oversized JPEGs
   are decoded at reduced scale with `draft()` instead of being skipped.
+
+**Lead-image dedup matches resized variants.** `_bs4_strip_opener` falls back to `_img_variant_key` (host + folder + basename minus a `-WxH` or Future-style `-WIDTH-QUALITY` suffix), so a lead at `…-1280-80.jpg` removes a body opener at `…-1200-80.jpg` instead of showing the hero twice.
