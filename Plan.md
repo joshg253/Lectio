@@ -35,6 +35,14 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
 - `_has_manual_tags_cache` is keyed per user but not per DB; the tagged-key entry is path-checked, the `"any"` entry is not.
 - `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it.
 
+### Re-fetch follow-ups (2026-10-02)
+
+- The page ladder's 6h host cooldown trips on a single URL exhausting every tier, which silences autofetch for the whole host. Consider
+  requiring two consecutive exhausted fetches (existing tests assume one).
+- Lazy-loaded embeds recovered from the raw page are appended at the end of the article, not placed where they were. A per-site
+  plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
+- Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
+
 ## Tier 3 — sized, no open decision, ready to build
 
 Empty.

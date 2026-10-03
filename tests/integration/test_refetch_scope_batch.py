@@ -226,7 +226,7 @@ def test_batch_does_not_bump_saved_at(configured, monkeypatch):
 
     _run([None] * 3)
 
-    assert seen_kwargs == [{"bump_received": False, "date_choice": None}] * 3
+    assert seen_kwargs == [{"bump_received": False, "date_choice": None, "ignore_cooldown": True}] * 3
 
 
 def test_batch_forwards_the_jobs_date_choice(configured, monkeypatch):
@@ -245,7 +245,7 @@ def test_batch_forwards_the_jobs_date_choice(configured, monkeypatch):
 
     _run([None] * 2, job={"running": True, "cancel": False, "date_choice": "pub"})
 
-    assert seen_kwargs == [{"bump_received": False, "date_choice": "pub"}] * 2
+    assert seen_kwargs == [{"bump_received": False, "date_choice": "pub", "ignore_cooldown": True}] * 2
 
 
 def test_outcomes_are_counted_apart(configured, monkeypatch):
@@ -378,3 +378,66 @@ def test_a_queued_scope_is_resolved_when_it_starts_not_when_it_is_queued(configu
     main._refetch_worker([], job)
 
     assert resolved == [(None, FEED_A)]
+
+
+# ── explicit selection ──
+def _start_entries(payload):
+    import asyncio
+
+    resp = asyncio.run(routes.saved.start_refetch_entries(cast(Request, _Req(payload))))
+    return resp.status_code, json.loads(bytes(resp.body))
+
+
+def test_selection_queues_its_own_rows_and_skips_linkless_entries(configured):
+    """Unlike a scope, a hand-picked selection is not limited to kept entries, and the
+    queued item carries its rows (re-resolving a scope for it would find nothing)."""
+    job = main._refetch_job_state(create=True)
+    job.update({"running": True, "done": 0, "total": 5, "queue": []})
+
+    status, body = _start_entries(
+        {
+            "entries": [
+                {"feed_url": FEED_A, "entry_id": "plain"},
+                {"feed_url": FEED_A, "entry_id": "plain"},
+                {"feed_url": FEED_A, "entry_id": "nolink"},
+                {"feed_url": FEED_A, "entry_id": "missing"},
+            ]
+        }
+    )
+
+    assert status == 200 and body["queued"] is True and body["total"] == 1
+    assert job["queue"][0]["rows"] == [(FEED_A, "plain", "https://a.test/plain")]
+
+
+def test_empty_selection_is_rejected(configured):
+    status, _ = _start_entries({"entries": []})
+    assert status == 400
+
+
+# ── thumbnail survives a re-fetch that brings no image ──
+def _refetch_with_old_thumb(monkeypatch, entry_id, body_html):
+    old = "https://a.test/old-thumb.jpg"
+    with main.get_reader() as reader:
+        reader.add_entry(
+            {
+                "feed_url": FEED_A,
+                "id": entry_id,
+                "link": f"https://a.test/{entry_id}",
+                "content": [{"value": body_html, "type": "text/html"}] if body_html else [],
+            }
+        )
+    main.lead_image_service.store_entry_lead_image(FEED_A, entry_id, old)
+    monkeypatch.setattr(main.saved_articles_service, "refresh_captured_article", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(main, "_apply_mined_publish_date", lambda *a, **k: None)
+    main._refresh_captured_article_for_current_user(FEED_A, entry_id, "readability")
+    return old, main.lead_image_service.get_cached_lead_image_url(FEED_A, entry_id)
+
+
+def test_refetch_keeps_the_thumbnail_when_the_new_body_has_no_image(configured, monkeypatch):
+    old, now = _refetch_with_old_thumb(monkeypatch, "thumbkeep", "<p>text only</p>")
+    assert now == old
+
+
+def test_refetch_still_clears_the_thumbnail_when_the_new_body_has_an_image(configured, monkeypatch):
+    old, now = _refetch_with_old_thumb(monkeypatch, "thumbclear", '<p>hi</p><img src="https://a.test/new.jpg">')
+    assert now != old

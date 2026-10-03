@@ -575,6 +575,13 @@ def _embed_host_allowed(src: str) -> bool:
 def _sanitize_iframe(tag) -> bool:
     """Clean an <iframe> in place. Return True to keep it, False to drop it."""
     src = str(tag.attrs.get("src", "")).strip()
+    if not src:
+        # Lazy-loaded embeds (Thrive/WP lazyload: guitarchalk.com ships ~30 per lesson) carry the
+        # URL in data-src and let JS set src. We run no such JS, so promote it — it is checked
+        # against the same host allowlist below.
+        src = str(tag.attrs.get("data-src", "")).strip()
+        if src:
+            tag.attrs["src"] = src
     if not _embed_host_allowed(src):
         return False
     allowed = _ALLOWED_ATTRS["iframe"]

@@ -3176,6 +3176,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const postMarkReadBulkButton = document.getElementById('ctx-post-mark-read-bulk');
     const postMarkUnreadBulkButton = document.getElementById('ctx-post-mark-unread-bulk');
     const postStarBulkButton = document.getElementById('ctx-post-star-bulk');
+    const postRefetchBulkButton = document.getElementById('ctx-post-refetch-bulk');
     const postUnstarBulkButton = document.getElementById('ctx-post-unstar-bulk');
     const postMarkFeedReadButton = document.getElementById('ctx-post-mark-feed-read');
     const postOpenInFeedsButton = document.getElementById('ctx-post-open-in-feeds');
@@ -8830,6 +8831,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       setMenuItemVisible(postMarkUnreadBulkButton, false);
       setMenuItemVisible(postStarBulkButton, false);
       setMenuItemVisible(postUnstarBulkButton, false);
+      setMenuItemVisible(postRefetchBulkButton, false);
       setMenuItemVisible(postCopyUrlButton, Boolean(contextPostLink));
       setMenuItemVisible(postAddLinkToNoteButton, Boolean(contextPostFeedUrl && contextPostEntryId));
       setMenuItemVisible(postMarkFeedReadButton, Boolean(contextPostFeedUrl));
@@ -9485,6 +9487,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               setMenuItemVisible(postStarBulkButton, true);
               if (postUnstarBulkButton) postUnstarBulkButton.textContent = `Remove star from ${contextSelectedPosts.length} posts`;
               setMenuItemVisible(postUnstarBulkButton, true);
+              if (postRefetchBulkButton) postRefetchBulkButton.textContent = `Re-fetch content of ${contextSelectedPosts.length} posts`;
+              setMenuItemVisible(postRefetchBulkButton, true);
               showPostContextMenu(event);
             } else {
               _openPostContextMenu(postItem, event, { isListItem: true });
@@ -11188,6 +11192,32 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       event.preventDefault();
       event.stopPropagation();
       void _bulkSetStarred(false);
+    });
+
+    postRefetchBulkButton?.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const entries = contextSelectedPosts.map((p) => ({ feed_url: p.feedUrl, entry_id: p.entryId }));
+      hideAllContextMenus();
+      if (!entries.length) return;
+      try {
+        const resp = await fetch('/saved/refetch-entries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries }),
+        });
+        const data = await resp.json();
+        if (!data.ok) {
+          window.alert(data.error || 'Could not start the re-fetch.');
+          return;
+        }
+        showToastMessage(data.queued
+          ? `Queued ${data.total} posts — position ${data.position}.`
+          : `Re-fetching ${data.total} post${data.total === 1 ? '' : 's'} in the background — ${humanDuration(data.estimate_seconds)}.`);
+        pollRefetchScope(500);
+      } catch (_) {
+        window.alert('Could not start the re-fetch.');
+      }
     });
 
     postMoveToFeedButton?.addEventListener('click', (event) => {

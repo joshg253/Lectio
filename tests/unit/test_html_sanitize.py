@@ -106,6 +106,16 @@ def test_iframe_event_handlers_and_extra_attrs_stripped():
     assert "style=" not in out.lower()
 
 
+def test_lazy_loaded_iframe_data_src_is_promoted_to_src():
+    out = H.sanitize_html('<iframe data-src="https://www.youtube.com/embed/abc?rel=0" loading="lazy"></iframe>')
+    assert 'src="https://www.youtube.com/embed/abc?rel=0"' in out
+    assert "data-src" not in out.lower()
+
+
+def test_lazy_loaded_iframe_data_src_still_host_checked():
+    assert "<iframe" not in H.sanitize_html('<iframe data-src="https://evil.com/x"></iframe>').lower()
+
+
 def test_inline_svg_kept_but_cleaned():
     out = H.sanitize_html('<svg viewBox="0 0 10 10"><rect width="10" height="10"/><script>alert(1)</script></svg>')
     assert "<svg" in out.lower()

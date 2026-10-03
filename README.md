@@ -85,7 +85,7 @@ short version:
   behind an anti-bot challenge.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
-  Internet Archive fallback — one post, or a whole feed or folder at a time.
+  Internet Archive fallback — one post, a multi-selection, or a whole feed or folder at a time.
   Teaser-only feeds can fetch the full article automatically as new posts
   arrive, and feeds whose RSS lacks real tags can pick up the publisher's own
   article topics as tag suggestions — each switched on per folder or per feed.
