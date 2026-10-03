@@ -109,6 +109,15 @@ def _normalize_text(value: str | None) -> str:
     return _WS_RE.sub(" ", value).strip()[:_TEXT_PREFIX_LEN]
 
 
+def _text_content(node) -> str:
+    """The node's text the way the browser's ``textContent`` reads it: strings joined with NO
+    separator. ``get_text(" ", strip=True)`` inserted a space between every text node, so
+    ``<span>1</span><a>4 Non Blondes</a>`` read "1 4 Non Blondes" here and "14 Non Blondes" in
+    cleanup.js, and any node holding more than one adjacent text-bearing child (a table of
+    contents, a byline, a button row) could never be matched."""
+    return node.get_text("")
+
+
 def _normalize_src(value: str | None) -> str:
     """Reduce an image/iframe URL to something stable across the render-time
     rewrites: unwrap the ``/api/img?u=`` proxy and keep the last path segment,
@@ -140,7 +149,7 @@ def fingerprint(node) -> dict:
         "tag": node.name or "",
         "id": (node.get("id") or "").strip(),
         "cls": sorted(str(c) for c in classes),
-        "text": _normalize_text(node.get_text(" ", strip=True)),
+        "text": _normalize_text(_text_content(node)),
         "kids": len(_element_children(node)),
         "src": _normalize_src(node.get("src")),
     }
@@ -250,7 +259,7 @@ def _resolve_by_text(root, target: dict):
             return False
         return candidate[:shortest] == text[:shortest]
 
-    matches = [node for node in root.find_all(tag) if _same_passage(_normalize_text(node.get_text(" ", strip=True)))]
+    matches = [node for node in root.find_all(tag) if _same_passage(_normalize_text(_text_content(node)))]
     return matches[0] if len(matches) == 1 else None
 
 

@@ -255,3 +255,16 @@ def test_the_text_fallback_refuses_two_candidates_sharing_a_prefix():
     target = {"tag": "p", "id": "", "cls": [], "text": lead, "kids": 0, "src": ""}
 
     assert content_edits._resolve_by_text(root, target) is None
+
+
+def test_text_fingerprint_matches_browser_textcontent_for_adjacent_text_nodes():
+    """cleanup.js reads ``textContent`` (no separator between text nodes). A node with several
+    adjacent text-bearing children -- a table of contents row -- fingerprinted differently on the
+    server and could never be matched ("None of those elements could be matched")."""
+    html = '<p>intro</p><div class="toc-row"><span>1</span><a href="#a">4 Non Blondes</a></div><p>outro</p>'
+    op = _op(html, [1])
+    op["fp"]["text"] = "14 Non Blondes"  # what the browser computes for that row
+    op["path"] = [7]  # force the path miss too, so the search/text fallbacks are exercised
+    new_html, applied, unmatched = content_edits.apply_ops(html, [op])
+    assert applied == 1 and unmatched == []
+    assert "Non Blondes" not in new_html
