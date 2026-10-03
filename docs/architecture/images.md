@@ -1041,3 +1041,8 @@ pinned before its token can die unread.
   `album=<id>` player, which embeds on any site and streams the same pre-order/
   premiere album. Applied to feed-native and source-recovered embeds in
   `get_entry_detail`, and to both reader-view render paths.
+- **Pinned entry thumbnails are capped at 1 MB.** `/api/entry-thumb` serves the stored bytes as-is, and an image too large to
+  decode or an animated GIF used to be stored unchanged — up to 77 MB for a 400px list thumbnail, starving the page of bandwidth.
+  `_pin_entry_thumbnail_bytes` now refuses anything still over `_ENTRY_THUMB_MAX_STORE_BYTES` after downscaling, and the list
+  ignores older oversized pins (`has_pinned_entry_thumbnail(..., usable_only=True)`), falling back to `/thumb`. Oversized JPEGs
+  are decoded at reduced scale with `draft()` instead of being skipped.

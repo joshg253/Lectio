@@ -19,7 +19,21 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
-Empty.
+### Folder-switch speed — what's left (2026-10-02)
+
+Shipped: no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s
+tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1 MB. Left:
+- Saved badges are still recomputed per request (~100ms). A cache keyed on the unread generation plus a saved generation bumped by
+  star/tag/archive writes, with a background refresh, would take it to ~0 without going stale.
+- A partial index on `entry_lead_images(feed_url) WHERE locked_until IS NOT NULL` makes the locked-comics lookup free; today it scans
+  150k rows (~55ms). Needs the per-user schema migration.
+- GIL starvation was confirmed with `py-spy` (78% of GIL time in `purge_tombstoned_entries`, fixed). The 1ms switch interval is a
+  belt-and-braces measure; revert it to the 5ms default if it ever shows a throughput cost. Re-profile before considering a
+  separate refresh process.
+- `lectio:saved` has ~4.7k tombstones and no publisher window, so the nightly sweep never removes them. Harmless now that the purge
+  is one query per feed.
+- `_has_manual_tags_cache` is keyed per user but not per DB; the tagged-key entry is path-checked, the `"any"` entry is not.
+- `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it.
 
 ## Tier 3 — sized, no open decision, ready to build
 
@@ -216,6 +230,10 @@ Rule engine + on-star fan-out + shared destination senders are shipped (Instapap
 playlist, email, Quire, Pinterest). Build more only if actually wanted: save-to-tag/starred-archive
 as a rule action, Readwise/Reader, Wallabag. Each is small, reusing the existing engine.
 
+Instapaper API v2 (announced 2026-09-29): we only *save* via the Simple API (`/api/add`, username + password), which the post doesn't
+mention, so nothing is forced. xAuth shuts off 2027-09-30. If the Simple API is ever deprecated, or we want tags sent with a save,
+switch the sender to v2 with a personal access token (no password stored). Revisit if Instapaper announces anything about the Simple API.
+
 Readit (wereadit.com): send-to-Readit is blocked — their save endpoint is unreachable outside
 their own extension (Cloudflare). Import is blocked until they expose an export/API. The reverse
 direction (Lectio receiving from the Readit extension's save protocol) already works today.
@@ -361,7 +379,9 @@ does; nothing else blocks it.
 ### Methodology: diagnosing refresh-contention/latency stalls
 
 Elapsed-time SQL timing can't distinguish SQLite lock-wait from GIL starvation — live `py-spy`
-sampling during a real stall settles it faster. Reach for this first, not last.
+sampling during a real stall settles it faster. Reach for this first, not last. Run it as
+`sudo env "PATH=$PATH" py-spy record --pid <python pid from docker top> --gil --nonblocking ...`: without `--nonblocking` it
+pauses the process for every sample and freezes the live app.
 
 ### Parked, deliberately
 

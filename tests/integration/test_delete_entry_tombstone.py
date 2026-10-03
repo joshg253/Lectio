@@ -79,3 +79,19 @@ def test_refresh_purges_resurrected_tombstoned_entry(configured):
         assert reader.get_entry((FEED, "e2"), None) is None
     # Idempotent: nothing left to purge on the next refresh.
     assert main.feed_refresh_service.purge_tombstoned_entries([FEED]) == 0
+
+
+def test_purge_only_removes_present_tombstones_across_feeds(configured):
+    """Tombstones for entries reader no longer has (the vast majority) must cost no reader call and purge nothing."""
+    _add_entry("keep")
+    _add_entry("gone")
+    with main.get_meta_connection() as conn:
+        conn.executemany(
+            "INSERT INTO deleted_entries (feed_url, entry_id) VALUES (?, ?)",
+            [(FEED, "gone")] + [(FEED, f"absent-{i}") for i in range(200)] + [("https://other.test/feed", "x")],
+        )
+
+    assert main.feed_refresh_service.purge_tombstoned_entries([FEED, "https://other.test/feed"]) == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED, "gone"), None) is None
+        assert reader.get_entry((FEED, "keep"), None) is not None

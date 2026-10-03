@@ -1012,16 +1012,24 @@ class FeedRefreshService:
             return 0
         if not rows:
             return 0
+        # One SQL read per feed, intersected with its tombstones. This used to call reader.get_entry() once per tombstone:
+        # with 78k tombstones (26k on a single feed) and only ~100 still present, that was tens of thousands of reader
+        # queries per refresh, each rebuilding its SQL text in pure Python with the GIL held -- 78% of GIL time in a live
+        # py-spy capture, which stalled every page request during a refresh.
+        tombstoned: dict[str, set[str]] = {}
+        for row in rows:
+            tombstoned.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
         purged = 0
         with self._get_reader() as reader:
-            for row in rows:
-                key = (str(row["feed_url"]), str(row["entry_id"]))
+            db = reader._storage.get_db()
+            for feed, ids in tombstoned.items():
                 try:
-                    if reader.get_entry(key, None) is not None:
-                        reader._storage.delete_entries([key])
-                        purged += 1
+                    present = [(feed, str(r[0])) for r in db.execute("SELECT id FROM entries WHERE feed = ?", (feed,)) if str(r[0]) in ids]
+                    if present:
+                        reader._storage.delete_entries(present)
+                        purged += len(present)
                 except Exception:  # noqa: BLE001
-                    self._logger.exception("[refresh] tombstone purge failed for %s", key)
+                    self._logger.exception("[refresh] tombstone purge failed for %s", feed)
         if purged:
             self._logger.info("[refresh] purged %d tombstoned entr%s", purged, "y" if purged == 1 else "ies")
         return purged

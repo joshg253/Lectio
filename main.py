@@ -208,6 +208,14 @@ BASE_DIR = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("lectio")
 LOGGER.setLevel(logging.INFO)
 
+# Refresh and page-fetch threads keep this one process's GIL busy, and a request makes many short DB calls that each
+# have to win it back (5ms per turn by default) -- measured 2026-10-02 as the same steps taking ~50ms at rest and 1-4s
+# during a refresh burst. A shorter interval hands it back sooner; throughput cost is small.
+try:
+    sys.setswitchinterval(float(os.getenv("LECTIO_GIL_SWITCH_INTERVAL", "0.001")))
+except ValueError:
+    pass
+
 
 class _ReaderNonFatalParseWarningFilter(logging.Filter):
     """Filter known non-fatal feed parsing warnings from `reader` logs."""
@@ -8068,6 +8076,7 @@ def get_reader():
         pool.move_to_end(uid)  # mark most-recently-used
         return proxy
 
+    _open_start = time.perf_counter()
     proxy = _PersistentReaderProxy(
         ReaderApi(
             tenancy.reader_db_path(uid),
@@ -8079,6 +8088,11 @@ def get_reader():
         ).client()
     )
     pool[uid] = proxy
+    _open_ms = int((time.perf_counter() - _open_start) * 1000)
+    if _open_ms > 200:
+        # A cold per-thread open is a suspect for multi-second folder switches (get_tagged_entry_keys
+        # stalls with progress_steps=0, i.e. before any SQL runs); logged so that's confirmed or cleared.
+        LOGGER.info("[perf] get_reader cold_open=%dms thread=%s", _open_ms, threading.current_thread().name)
     # Evict + close the least-recently-used handles beyond the per-thread cap.
     # Safe because the pool is thread-local and a thread serves one request at a
     # time, so an evicted handle is never mid-use on another thread.
@@ -9310,6 +9324,12 @@ def invalidate_has_manual_tags_cache() -> None:
         _has_manual_tags_cache.clear()
 
 
+# The library-wide tagged-key set, cached briefly: the home route asks for it twice per request (unread badge and
+# per-folder counts) and the full read is ~17k rows. Shares _has_manual_tags_cache, so every tag write that
+# invalidates that also drops this; the short TTL covers write paths that don't (imports, merges).
+_TAGGED_KEYS_CACHE_TTL_SECONDS = 15
+
+
 def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, str]]:
     """(feed_url, entry_id) of every manually-tagged entry — the "tag" half of the
     Kept view's star-OR-tag set. When *feed_urls* is given, restrict to those feeds
@@ -9327,6 +9347,16 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     slow so a live stall pins the blame here or clears it. Shared by the Kept
     view list, per-folder counts, and the sidebar badge so the three stay
     consistent."""
+    with _has_manual_tags_lock:
+        cached = _has_manual_tags_cache.get("tagged_keys")
+    db_path = str(tenancy.reader_db_path())
+    if cached and cached[2] == db_path and time.time() - cached[0] < _TAGGED_KEYS_CACHE_TTL_SECONDS:
+        all_keys = cached[1]
+        return set(all_keys) if feed_urls is None else {k for k in all_keys if k[0] in feed_urls}
+    if feed_urls is not None:
+        # Fill the cache from the full read, then narrow: one scan serves every scope.
+        all_keys = get_tagged_entry_keys(None)
+        return {k for k in all_keys if k[0] in feed_urls}
     keys: set[tuple[str, str]] = set()
     like = f"{MANUAL_TAG_KEY_PREFIX}%"
     _start = time.perf_counter()
@@ -9346,33 +9376,22 @@ def get_tagged_entry_keys(feed_urls: set[str] | None = None) -> set[tuple[str, s
     try:
         with get_reader() as reader:
             db = reader._storage.get_db()
-            if feed_urls is None:
-                for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
-                    keys.add((str(row[0]), str(row[1])))
-                _progress_steps += getattr(db, "_lectio_progress_steps", 0)
-            else:
-                feed_list = list(feed_urls)
-                for i in range(0, len(feed_list), 900):
-                    chunk = feed_list[i : i + 900]
-                    ph = ",".join("?" for _ in chunk)
-                    for row in db.execute(
-                        f"SELECT feed, id FROM entry_tags WHERE key LIKE ? AND feed IN ({ph})",
-                        [like, *chunk],
-                    ):
-                        keys.add((str(row[0]), str(row[1])))
-                    _progress_steps += getattr(db, "_lectio_progress_steps", 0)
+            for row in db.execute("SELECT feed, id FROM entry_tags WHERE key LIKE ?", (like,)):
+                keys.add((str(row[0]), str(row[1])))
+            _progress_steps += getattr(db, "_lectio_progress_steps", 0)
+        with _has_manual_tags_lock:
+            _has_manual_tags_cache["tagged_keys"] = (time.time(), keys, db_path)
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning("get_tagged_entry_keys failed: %s", exc)
     elapsed_ms = int((time.perf_counter() - _start) * 1000)
     if elapsed_ms > 200:
         LOGGER.info(
-            "[perf] get_tagged_entry_keys=%dms rows=%d scoped=%s progress_steps=%d",
+            "[perf] get_tagged_entry_keys=%dms rows=%d progress_steps=%d",
             elapsed_ms,
             len(keys),
-            feed_urls is not None,
             _progress_steps,
         )
-    return keys
+    return set(keys)
 
 
 def get_entry_keys_for_manual_tag(feed_urls: set[str], tag: str) -> set[tuple[str, str]]:
@@ -13483,6 +13502,7 @@ def list_entries_for_feeds(
     kept_scope: str = "kept",
     archived: bool | None = None,
     enrich: bool = True,
+    min_fill: float = 1.0,
 ) -> list[dict]:
     """Thin retry wrapper around `_list_entries_for_feeds_fetch`.
 
@@ -13516,6 +13536,7 @@ def list_entries_for_feeds(
     fetch cost each attempt, for a fetch that was never actually window-bound
     to begin with -- see that constant's own comment.
     """
+    _stats: dict = {}
     result = _list_entries_for_feeds_fetch(
         feed_urls,
         limit=limit,
@@ -13529,8 +13550,17 @@ def list_entries_for_feeds(
         kept_scope=kept_scope,
         archived=archived,
         enrich=enrich,
+        _stats=_stats,
     )
-    if len(result) >= limit or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
+    # min_fill < 1 accepts a slightly short page without the retry: a hide filter dropping one row of 250 otherwise
+    # re-ran the whole fetch (~1.5s on a big folder) to backfill a row nobody sees. Only callers that never depend
+    # on a full page opt in -- a delta chunk fetch must not, or it could come back with nothing new.
+    if len(result) >= limit * min_fill or not feed_urls or limit > _HIDE_FILTER_UNDERFILL_RETRY_MAX_LIMIT:
+        return result
+    if _stats.get("exhausted"):
+        # The raw fetch came back short of its window, so nothing older exists to backfill with. Without this,
+        # any folder with fewer matches than `limit` (every small unread folder) re-ran the whole fetch up to
+        # three more times whenever a hide filter was on anywhere in scope.
         return result
 
     with get_meta_connection() as _prefs_conn:
@@ -13588,6 +13618,7 @@ def _list_entries_for_feeds_fetch(
     kept_scope: str = "kept",
     archived: bool | None = None,
     enrich: bool = True,
+    _stats: dict | None = None,
 ) -> list[dict]:
     entries: list[dict] = []
     if not feed_urls:
@@ -13971,6 +14002,9 @@ def _list_entries_for_feeds_fetch(
             len(all_feed_entries),
             fetch_ms,
         )
+        if _stats is not None:
+            # Fewer raw rows than the window means the source is exhausted: a bigger window cannot add any.
+            _stats["exhausted"] = len(all_feed_entries) < fetch_limit
 
         # Two-phase processing: build a lightweight per-entry record that has
         # *only* what filter/sort/dedupe needs, then enrich the surviving top-N
@@ -13995,8 +14029,10 @@ def _list_entries_for_feeds_fetch(
         # phase) so "don't show unpremiered videos yet" can drop entries before
         # the sort+limit clip — a filtered-out row must not steal one of the
         # top-N display slots from a real (already-aired) entry.
+        _pre_start = time.perf_counter()
         with get_meta_connection() as _prefs_conn:
             _all_display_prefs = get_all_feed_display_prefs(_prefs_conn)
+        _prefs_ms = int((time.perf_counter() - _pre_start) * 1000)
         _hide_unpremiered_global = youtube_hide_unpremiered_global()
         _hide_locked_comics_global = hide_locked_comics_global()
 
@@ -14015,20 +14051,13 @@ def _list_entries_for_feeds_fetch(
         ):
             try:
                 with get_meta_connection() as _lock_conn:
-                    # Chunked, same as the feed-site query above: an unchunked IN
-                    # raises past SQLite's bind-parameter limit for a large scope
-                    # (e.g. "all feeds"), and the broad except below would then
-                    # silently disable the filter for the whole view rather than
-                    # just failing to load a few feeds' worth of rows.
-                    _lock_feed_list = list(feed_urls)
-                    for _i in range(0, len(_lock_feed_list), 999):
-                        _chunk = _lock_feed_list[_i : _i + 999]
-                        _ph = ",".join("?" for _ in _chunk)
-                        for _row in _lock_conn.execute(
-                            f"SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
-                            f" WHERE feed_url IN ({_ph}) AND locked_until IS NOT NULL",
-                            _chunk,
-                        ).fetchall():
+                    # Locked rows are a handful library-wide, so ask for them directly and scope in Python. Probing
+                    # entry_lead_images per feed (150k rows) cost ~100ms per 999-feed chunk -- ~300ms for "All" -- to
+                    # find the one locked row, and the chunking is no longer needed to stay under the bind limit.
+                    for _row in _lock_conn.execute(
+                        "SELECT feed_url, entry_id, locked_until FROM entry_lead_images WHERE locked_until IS NOT NULL"
+                    ).fetchall():
+                        if str(_row[0]) in feed_urls:
                             _locked_until_map[(str(_row[0]), str(_row[1]))] = float(_row[2])
             except Exception:
                 LOGGER.exception("[hide-locked-comics] failed to load locked_until map")
@@ -14038,6 +14067,9 @@ def _list_entries_for_feeds_fetch(
         # reader's native fetch — it's a one-off narrowing of whatever the
         # current view already fetched, not a persisted scope, so a single
         # pre-fetched set + O(1) membership check is enough (no per-entry call).
+        _locked_ms = int((time.perf_counter() - _pre_start) * 1000) - _prefs_ms
+        if _prefs_ms + _locked_ms > 100:
+            LOGGER.info("[perf] list_entries: prep prefs_ms=%d locked_ms=%d", _prefs_ms, _locked_ms)
         feed_tag_keys: set[tuple[str, str]] | None = None
         if normalized_selected_feed_tag:
             feed_tag_keys = get_entry_ids_with_feed_tag(set(feed_urls), normalized_selected_feed_tag)
@@ -14325,7 +14357,7 @@ def _list_entries_for_feeds_fetch(
         # etc.) may have a since-expired token. Only the pinned entries are
         # substituted — everything else is unchanged, so this is a no-op until
         # the enhance pass has actually pinned something for this entry.
-        if _thumb and _url_is_signed(_thumb) and has_pinned_entry_thumbnail(feed_url_str, _entry_id):
+        if _thumb and _url_is_signed(_thumb) and has_pinned_entry_thumbnail(feed_url_str, _entry_id, usable_only=True):
             _thumb = f"/api/entry-thumb?feed_url={quote_plus(feed_url_str)}&entry_id={quote_plus(_entry_id)}"
         _entry_crop_override = lead_image_service.get_entry_thumb_crop(feed_url_str, _entry_id)
         _thumb_crop = _entry_crop_override if _entry_crop_override else _feed_thumb_crop
@@ -14703,34 +14735,21 @@ def mark_entry_read_everywhere(feed_url: str, entry_id: str) -> None:
 
 def get_saved_unread_count() -> int:
     """Unread count across all kept (starred OR tagged) entries, for the sidebar's
-    Saved Articles badge. Batched into (feed, id) chunks rather than one query per
-    feed: kept sets are small in total but commonly span hundreds of distinct feeds
-    (529 on the live library), so a per-feed loop meant hundreds of sequential
-    round-trips on every home-route request — cheap at rest, but each round-trip
-    pays a bit more under concurrent refresh writes, and that compounds across
-    hundreds of them (see the home-route gap_block investigation, 2026-09-01)."""
-    saved_by_feed: dict[str, set[str]] = {}
+    Saved Articles badge. Kept sets span hundreds of feeds, so this is a single
+    set intersection rather than a per-feed or per-chunk query loop, which got
+    slower under concurrent refresh writes (home-route gap_block, 2026-09-01)."""
+    kept: set[tuple[str, str]] = set()
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
-            saved_by_feed.setdefault(str(row["feed_url"]), set()).add(str(row["entry_id"]))
-    for feed, eid in get_tagged_entry_keys():  # union the tag axis in
-        saved_by_feed.setdefault(feed, set()).add(eid)
-    if not saved_by_feed:
+            kept.add((str(row["feed_url"]), str(row["entry_id"])))
+    kept |= get_tagged_entry_keys()  # union the tag axis in
+    if not kept:
         return 0
-    pairs = [(feed_url, eid) for feed_url, ids in saved_by_feed.items() for eid in ids]
-    count = 0
+    # One scan of the unread keys intersected with the kept set, rather than ~30 chunked (feed, id) IN (VALUES ...)
+    # probes against a 25k-pair kept set: same count, ~50ms instead of ~250ms on the live library.
     with get_reader() as reader:
         db = reader._storage.get_db()
-        for i in range(0, len(pairs), 900):
-            chunk = pairs[i : i + 900]
-            values_sql = ",".join("(?,?)" for _ in chunk)
-            params = [v for pair in chunk for v in pair]
-            row = db.execute(
-                f"SELECT COUNT(*) FROM entries WHERE read = 0 AND (feed, id) IN (VALUES {values_sql})",
-                params,
-            ).fetchone()
-            count += int(row[0] or 0)
-    return count
+        return sum(1 for row in db.execute("SELECT feed, id FROM entries WHERE read = 0") if (str(row[0]), str(row[1])) in kept)
 
 
 def get_starred_inbox_total() -> int:
@@ -22072,6 +22091,8 @@ def _home_inner(
         # spans the whole kept set (starred OR tagged), because a tag is filing
         # and filing something is not a to-do.
         kept_scope=("starred" if inbox_view else "kept"),
+        # The initial load's client reveals ~20 rows at a time and pages by offset, so a page a few rows short is fine.
+        min_fill=0.9 if offset is None else 1.0,
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
@@ -22857,6 +22878,10 @@ def api_feed_thumb(feed_url: str = Query(...)):
 _ENTRY_THUMB_CACHE_PREFIX = "entrythumb:"
 _ENTRY_THUMB_MAX_DIM = 400
 _ENTRY_THUMB_TARGET_BYTES = 30_000
+# A pinned thumbnail that is still bigger than this after downscaling (an animated GIF, or a page too large to decode) is not
+# stored: /api/entry-thumb serves the bytes as-is, so 64 such rows (1.35 GB, up to 77 MB each) were being sent to the browser
+# for a 400px list thumbnail, starving the page itself. Unpinned entries fall back to /thumb, which renders a static thumbnail.
+_ENTRY_THUMB_MAX_STORE_BYTES = 1_000_000
 
 
 def _entry_thumb_cache_key(feed_url: str, entry_id: str) -> str:
@@ -22882,12 +22907,14 @@ def _url_is_signed(url: str) -> bool:
     return any(k.lower() in _IMG_CACHE_VOLATILE_PARAMS for k, _ in params)
 
 
-def has_pinned_entry_thumbnail(feed_url: str, entry_id: str) -> bool:
+def has_pinned_entry_thumbnail(feed_url: str, entry_id: str, *, usable_only: bool = False) -> bool:
+    """usable_only ignores a pinned copy over _ENTRY_THUMB_MAX_STORE_BYTES (rows pinned before that cap existed): the list must
+    not point at one, but the pin sink still counts it as pinned so it does not re-download the source on every pass."""
     try:
         with get_img_cache_connection() as conn:
             row = conn.execute(
-                "SELECT 1 FROM img_cache WHERE cache_key = ?",
-                (_entry_thumb_cache_key(feed_url, entry_id),),
+                "SELECT 1 FROM img_cache WHERE cache_key = ?" + (" AND size <= ?" if usable_only else ""),
+                (_entry_thumb_cache_key(feed_url, entry_id), *((_ENTRY_THUMB_MAX_STORE_BYTES,) if usable_only else ())),
             ).fetchone()
         return row is not None
     except Exception:
@@ -22910,6 +22937,9 @@ def _pin_entry_thumbnail_bytes(feed_url: str, entry_id: str, image_url: str) -> 
         if new_ct is not None:
             body, content_type = downscaled, new_ct
         body, content_type = _maybe_shrink_oversized_image(body, content_type, _ENTRY_THUMB_TARGET_BYTES)
+        if len(body) > _ENTRY_THUMB_MAX_STORE_BYTES:
+            LOGGER.info("[entry-thumb] not pinning %s/%s: %d bytes after downscaling", feed_url, entry_id, len(body))
+            return False
         _img_cache_store(_entry_thumb_cache_key(feed_url, entry_id), body, content_type)
         return True
     except Exception:  # noqa: BLE001 — the raw URL still gets stored/shown; this is only the durable copy
@@ -25063,9 +25093,15 @@ def _maybe_downscale_image(raw: bytes, max_dim: int) -> tuple[bytes, str | None]
         if max(w, h) <= max_dim:
             return raw, None  # already small enough; never upscale
         if w * h > _IMG_MAX_DECODE_PIXELS:
-            # Too large to resize safely (resize loads the whole source bitmap);
-            # store the original bytes rather than materialize it in the worker.
-            return raw, None
+            if fmt != "JPEG":
+                # Too large to resize safely (resize loads the whole source bitmap);
+                # store the original bytes rather than materialize it in the worker.
+                return raw, None
+            # JPEG can be decoded at 1/2, 1/4 or 1/8 scale without building the full bitmap, which is what makes
+            # this case safe; draft() picks the largest reduction that still covers max_dim.
+            img.draft("RGB", (max_dim, max_dim))
+            if img.size[0] * img.size[1] > _IMG_MAX_DECODE_PIXELS:
+                return raw, None
         scale = max_dim / max(w, h)
         new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
         buf = io.BytesIO()
