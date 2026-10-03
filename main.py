@@ -24791,7 +24791,8 @@ def _refetch_worker(rows: list[tuple[str, str, str]], job: dict) -> None:
             nxt = queue.pop(0)
         # Resolved now, not when queued: an hour in a queue is long enough for what
         # is kept in the scope to have changed.
-        rows = _scope_refetchable(nxt["folder_id"], nxt["list_feed_url"])
+        # An explicit selection carries its own rows; there is no scope to re-resolve.
+        rows = nxt["rows"] if nxt.get("rows") is not None else _scope_refetchable(nxt["folder_id"], nxt["list_feed_url"])
         if not rows:
             continue
         with _refetch_jobs_lock:
@@ -24828,8 +24829,14 @@ def _run_refetch_batch(rows: list[tuple[str, str, str]], job: dict) -> None:
                 # "look, this one changed" the way a deliberate single re-fetch
                 # is — bumping every touched saved_at at once used to dump the
                 # whole Inbox's order onto whatever finished last.
+                # ignore_cooldown: the ladder's 6h host cooldown is tripped by ONE page
+                # exhausting every tier (a single WAF-blocked URL), and would then
+                # silently skip the rest of the host while this loop counted each skip
+                # as a failure. The batch has its own pacing and HOST_FAILURE_LIMIT, so
+                # a host that really is refusing us still stops the run, after
+                # HOST_FAILURE_LIMIT genuine attempts rather than one.
                 result = _refresh_captured_article_for_current_user(
-                    feed_u, entry_id, "readability", bump_received=False, date_choice=date_choice
+                    feed_u, entry_id, "readability", bump_received=False, date_choice=date_choice, ignore_cooldown=True
                 )
             except Exception:  # noqa: BLE001 — one bad entry must not end the run
                 LOGGER.warning("[refetch-batch] failed for %s", entry_id, exc_info=True)

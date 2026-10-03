@@ -1054,6 +1054,73 @@ async def start_refetch_scope(request: Request):
     return JSONResponse({"ok": True, "started": True, "total": len(rows), "estimate_seconds": estimate, "label": label})
 
 
+@router.post("/saved/refetch-entries")
+async def start_refetch_entries(request: Request):
+    """Re-fetch an explicit selection of posts through the same paced job as a scope.
+
+    Unlike a scope this is not limited to kept entries: the single-article re-fetch
+    already works on any entry with a link (the content pin applies either way), and
+    the user picked these by hand.
+    """
+    body = await request.json()
+    date_choice = body.get("date_choice")
+    date_choice = date_choice if date_choice in {"now", "original", "pub"} else None
+    wanted: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in body.get("entries") or []:
+        key = (str(item.get("feed_url") or ""), str(item.get("entry_id") or ""))
+        if key[0] and key[1] and key not in seen:
+            seen.add(key)
+            wanted.append(key)
+    if not wanted:
+        return JSONResponse({"ok": False, "error": "Select at least one post."}, status_code=400)
+
+    def _resolve() -> list[tuple[str, str, str]]:
+        found: list[tuple[str, str, str]] = []
+        with get_reader() as reader:
+            for f, e in wanted:
+                entry = reader.get_entry((f, e), None)
+                if entry is None:
+                    continue
+                link = str(getattr(entry, "link", "") or "") or e
+                if link.startswith(("http://", "https://")):
+                    found.append((f, e, link))
+        return refetch_batch.interleave_by_host(found)
+
+    rows = await run_in_threadpool(_resolve)
+    if not rows:
+        return JSONResponse({"ok": False, "error": "None of the selected posts has a link to re-fetch."}, status_code=400)
+    label = f"{len(rows)} selected post{'' if len(rows) == 1 else 's'}"
+    estimate = int(refetch_batch.estimate_seconds(rows))
+
+    job = _refetch_job_state(create=True)
+    with _refetch_jobs_lock:
+        if job.get("running"):
+            queue = job.setdefault("queue", [])
+            queue.append(
+                {
+                    "folder_id": None,
+                    "list_feed_url": None,
+                    "rows": rows,
+                    "label": label,
+                    "count": len(rows),
+                    "estimate_seconds": estimate,
+                    "date_choice": date_choice,
+                }
+            )
+            return JSONResponse(
+                {"ok": True, "queued": True, "position": len(queue), "total": len(rows), "estimate_seconds": estimate, "label": label}
+            )
+        _refetch_begin(job, label, rows, estimate, date_choice=date_choice)
+
+    uid = tenancy.current_user_id()
+    threading.Thread(
+        target=lambda: _run_in_user_context(uid, _refetch_worker, rows, job),
+        daemon=True,
+    ).start()
+    return JSONResponse({"ok": True, "started": True, "total": len(rows), "estimate_seconds": estimate, "label": label})
+
+
 @router.get("/saved/unstar-scope/preview")
 def preview_unstar_scope(
     folder_id: int | None = Query(default=None),
