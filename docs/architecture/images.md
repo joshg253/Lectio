@@ -144,7 +144,8 @@ extracts nothing also falls back to the cached lead.
 fetched_at)`. `image_alt`/`image_title` are the raw attributes, stored separately
 so `feed_display_prefs.caption_source` (`auto`/`alt`/`title`/`both`/`none`) can
 choose. NULL means "no image found": negatives retry after 4h, positives
-revalidate after 12h.
+revalidate after 12h. Both intervals stretch with the post's age (x2 past a week, x6 past 60 days) so old
+unread/tagged posts aren't re-scraped all day.
 
 **A non-NULL URL is never overwritten with NULL.** On first resolution an
 `og_scrape`-manual feed stores the inline image then falls through to the

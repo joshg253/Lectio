@@ -766,6 +766,29 @@ class LeadImageService:
     _FEED_STRIP_DIV_RE = re.compile(r"<(/?)div\b[^>]*>", re.IGNORECASE)
     _POSITIVE_REVALIDATE_SECONDS = 12 * 60 * 60
     _POSITIVE_REVALIDATE_PER_FEED_LIMIT = 12
+
+    @staticmethod
+    def _age_scaled_retry_seconds(entry: object, base_seconds: float, now: float) -> float:
+        """Back a retry interval off as the post ages.
+
+        A post that is still unread, starred or tagged months later is not going to grow an
+        og:image it lacked last week, yet it was re-scraped every 4h (or 12h with an image) forever,
+        which is most of the page traffic a restart or refresh produces. Fresh posts keep the base
+        interval; the old tail is retried a few times a month, not a few times a day."""
+        published = getattr(entry, "published", None) or getattr(entry, "updated", None)
+        if published is None:
+            return base_seconds
+        try:
+            stamp = (published if published.tzinfo else published.replace(tzinfo=timezone.utc)).timestamp()
+        except AttributeError, ValueError, OverflowError, OSError:
+            return base_seconds
+        age_days = (now - stamp) / 86400
+        if age_days >= 60:
+            return base_seconds * 6
+        if age_days >= 7:
+            return base_seconds * 2
+        return base_seconds
+
     # Re-detect feed strategy weekly (or when still 'unknown')
     _STRATEGY_REDETECT_AFTER_SECONDS = 7 * 24 * 3600
     # Refresh-contention investigation (Plan.md Tier 1): flush the per-feed
@@ -2280,9 +2303,9 @@ class LeadImageService:
                         pass
                     elif positive_revalidated >= self._POSITIVE_REVALIDATE_PER_FEED_LIMIT:
                         continue
-                    elif (not force_retry_negative) and now - self._fetched_at_cache.get(
-                        cache_key, 0.0
-                    ) < self._POSITIVE_REVALIDATE_SECONDS:
+                    elif (not force_retry_negative) and now - self._fetched_at_cache.get(cache_key, 0.0) < self._age_scaled_retry_seconds(
+                        entry, self._POSITIVE_REVALIDATE_SECONDS, now
+                    ):
                         continue
                     else:
                         entry_link = str(getattr(entry, "link", "") or "")
@@ -2298,7 +2321,9 @@ class LeadImageService:
                         time.sleep(0.15)
                         continue
                 fetched_at = self._fetched_at_cache.get(cache_key, 0.0)
-                if (not force_retry_negative) and now - fetched_at < self._NEGATIVE_RETRY_SECONDS:
+                if (not force_retry_negative) and now - fetched_at < self._age_scaled_retry_seconds(
+                    entry, self._NEGATIVE_RETRY_SECONDS, now
+                ):
                     continue
 
             inline = self.extract_entry_thumbnail_url(entry, include_source_lookup=False)
