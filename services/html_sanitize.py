@@ -388,6 +388,7 @@ _EMBED_HOST_ALLOWLIST = frozenset(
         "redditmedia.com",
         "archive.org",
         "soundslice.com",
+        "instagram.com",
     }
 )
 # allow-same-origin refers to the *embed's* origin (a different host), so the
@@ -570,6 +571,41 @@ def _embed_host_allowed(src: str) -> bool:
     if not host:
         return False
     return any(host == h or host.endswith("." + h) for h in _EMBED_HOST_ALLOWLIST)
+
+
+_INSTAGRAM_PERMALINK_RE = re.compile(r"^https://(?:www\.)?instagram\.com/((?:p|reel|tv)/[A-Za-z0-9_-]+)", re.IGNORECASE)
+
+
+def _instagram_blockquotes_to_iframes(soup) -> None:
+    """Rebuild an Instagram embed from the fallback blockquote the feed ships.
+
+    The live embed is a blockquote that Instagram's embed.js swaps for an iframe; we run no such script, so only the fallback link
+    survived. Instagram serves the same player at <permalink>/embed/, which goes through the normal iframe allowlist and sandbox.
+    """
+    for bq in soup.find_all("blockquote"):
+        if "instagram-media" not in (bq.get("class") or []):
+            continue
+        permalink = None
+        for a in bq.find_all("a", href=True):
+            m = _INSTAGRAM_PERMALINK_RE.match(str(a["href"]).strip())
+            if m:
+                permalink = m.group(1)
+                break
+        if permalink is None:
+            continue
+        frame = soup.new_tag(
+            "iframe",
+            src=f"https://www.instagram.com/{permalink}/embed/",
+            width="540",
+            height="720",
+            title="Instagram post",
+            allowfullscreen="",
+        )
+        wrapper = bq.parent
+        if wrapper is not None and "instagram-embed" in (wrapper.get("class") or []) and len(wrapper.find_all(True, recursive=False)) == 1:
+            wrapper.replace_with(frame)
+        else:
+            bq.replace_with(frame)
 
 
 def _sanitize_iframe(tag) -> bool:
@@ -1038,6 +1074,8 @@ def sanitize_html(content: str) -> str:
             _promote_math_height(img, style_value)
             continue
         _lift_img_style_sizes_on_tag(img)
+
+    _instagram_blockquotes_to_iframes(soup)
 
     has_svg_or_math = bool(soup.find("svg") or soup.find("math"))
     for tag in soup.find_all(True):

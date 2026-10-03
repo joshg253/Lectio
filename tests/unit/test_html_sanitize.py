@@ -368,3 +368,19 @@ def test_full_text_decodes_entities_and_drops_markup():
 def test_full_text_of_nothing_is_empty():
     assert H.plain_text_full("") == ""
     assert H.plain_text_full(None) == ""
+
+
+def test_instagram_fallback_blockquote_becomes_the_embed_iframe():
+    html = (
+        '<p>before</p><div class="instagram-embed"><blockquote class="instagram-media"><p>'
+        '<a href="https://www.instagram.com/p/Dc4H6pENdrf/">A post shared by Guitar World</a></p></blockquote></div>'
+    )
+    out = H.sanitize_html(html)
+    assert "<iframe" in out
+    assert 'src="https://www.instagram.com/p/Dc4H6pENdrf/embed/"' in out
+    assert "sandbox=" in out and "instagram-media" not in out
+
+
+def test_instagram_blockquote_without_a_permalink_is_left_alone():
+    out = H.sanitize_html('<blockquote class="instagram-media"><p>no link</p></blockquote>')
+    assert "<iframe" not in out and "no link" in out
