@@ -19,6 +19,10 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
+### Direct `content[0]` reads (2026-10-03)
+
+Some feeds (guitarworld) lead with a literal `"null"` text/plain element before the real HTML. The tag auto-refetch precheck now uses `_richest_content`; the other `content[0]` reads (main.py dedup/merge spots, services/dedup.py, the email full-text path) may misjudge such entries and haven't been checked.
+
 ### Folder-switch speed — what's left (2026-10-02)
 
 Shipped: no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s

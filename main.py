@@ -24113,7 +24113,10 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
             entry = reader.get_entry((feed_url, entry_id), None)
         if entry is None or not (entry.link or "").startswith(("http://", "https://")):
             return False
-        stored = (entry.content[0].value if entry.content else None) or entry.summary or ""
+        # Richest element, not content[0]: a feed can lead with a stub (guitarworld ships a literal "null" text/plain first)
+        # and that made a full article look thin, so tagging it overwrote it with a worse extraction.
+        _best = _richest_content(entry, entry.content[0] if entry.content else None)
+        stored = (_best.value if _best is not None else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored):
             return False  # a real article already — leave it alone
         host = urlparse(entry.link).netloc.lower()

@@ -151,3 +151,21 @@ def test_tags_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monk
             headers={"X-Requested-With": "lectio-ajax"},
         )
     assert r.json()["autofetch_pending"] is True
+
+
+def test_a_full_article_behind_a_null_placeholder_is_not_refetched(thin_entry, monkeypatch):
+    """guitarworld ships content[0] = "null" (text/plain) ahead of the real HTML; tagging it re-fetched and degraded it."""
+    body = "<p>" + "A real paragraph of lesson text. " * 40 + "</p>"
+    with main.get_reader() as reader:
+        reader.add_entry(
+            {
+                "feed_url": FEED,
+                "id": "full",
+                "title": "post",
+                "link": LINK,
+                "content": [{"value": "null", "type": "text/plain"}, {"value": body, "type": "text/html"}],
+            }
+        )
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: pytest.fail("must not re-fetch"))
+
+    assert main._maybe_autofetch_on_keep(FEED, "full") is False
