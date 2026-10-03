@@ -24326,7 +24326,17 @@ def _refresh_captured_article_for_current_user(
         # simply vanished. Clearing it here makes the next render derive one
         # from what the article now actually contains.
         try:
-            lead_image_service.clear_entry_lead_image_cache(feed_url, entry_id)
+            old_lead = lead_image_service.clear_entry_lead_image_cache(feed_url, entry_id)
+            if old_lead:
+                # Clearing is right when the new body can supply a replacement, but when it
+                # holds no image at all the next render would derive nothing and the post
+                # would lose a perfectly good thumbnail. Keep the old one in that case.
+                entry = reader.get_entry((feed_url, entry_id), None)
+                body = ""
+                if entry is not None:
+                    body = (entry.content[0].value if getattr(entry, "content", None) else "") or entry.summary or ""
+                if not lead_image_service._extract_first_image_url_from_html(body, str(getattr(entry, "link", "") or feed_url)):
+                    lead_image_service.store_entry_lead_image(feed_url, entry_id, old_lead)
         except Exception:  # noqa: BLE001 — never fail a good re-fetch over this
             LOGGER.debug("lead-image invalidation failed for %s", entry_id, exc_info=True)
         try:
