@@ -17091,6 +17091,10 @@ def _resolve_entry_content_html(entry):
         # same way as a bare-text summary.
         content_html = _promote_plaintext_summary(content_html) or content_html
 
+    # Bodies stored before the sanitizer rebuilt Instagram embeds still carry the fallback blockquote.
+    if isinstance(content_html, str):
+        content_html = html_sanitize.instagram_embeds(content_html)
+
     # Some feeds embed URL-encoded protocols in src attributes (e.g. http%3A// instead
     # of http://).  The reader library resolves these as relative paths, producing
     # URLs like https://example.com/path/http%3A/actual-host.com/image.png.

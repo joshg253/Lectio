@@ -384,3 +384,10 @@ def test_instagram_fallback_blockquote_becomes_the_embed_iframe():
 def test_instagram_blockquote_without_a_permalink_is_left_alone():
     out = H.sanitize_html('<blockquote class="instagram-media"><p>no link</p></blockquote>')
     assert "<iframe" not in out and "no link" in out
+
+
+def test_display_time_instagram_rebuild_for_already_stored_bodies():
+    stored = '<p>x</p><div class="instagram-embed"><blockquote class="instagram-media"><p><a href="https://www.instagram.com/p/DUuhUllEoXn/">a</a></p></blockquote></div>'
+    out = H.instagram_embeds(stored)
+    assert 'src="https://www.instagram.com/p/DUuhUllEoXn/embed/"' in out and "sandbox=" in out
+    assert H.instagram_embeds("<p>nothing</p>") == "<p>nothing</p>"

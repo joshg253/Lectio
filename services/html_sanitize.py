@@ -601,11 +601,23 @@ def _instagram_blockquotes_to_iframes(soup) -> None:
             title="Instagram post",
             allowfullscreen="",
         )
+        _sanitize_iframe(frame)  # sandbox/referrer/loading, for callers that don't run the full pass afterwards
         wrapper = bq.parent
         if wrapper is not None and "instagram-embed" in (wrapper.get("class") or []) and len(wrapper.find_all(True, recursive=False)) == 1:
             wrapper.replace_with(frame)
         else:
             bq.replace_with(frame)
+
+
+def instagram_embeds(content: str) -> str:
+    """Display-time form of the Instagram rebuild, for bodies stored before the sanitizer did it."""
+    if not content or "instagram-media" not in content:
+        return content
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content, "html.parser")
+    _instagram_blockquotes_to_iframes(soup)
+    return str(soup)
 
 
 def _sanitize_iframe(tag) -> bool:
