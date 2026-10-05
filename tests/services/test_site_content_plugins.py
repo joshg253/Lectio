@@ -260,3 +260,68 @@ def test_devsite_readability_keeps_the_article_not_the_banner():
     _title, article_html = main.extract_readability_article(DEVSITE_PAGE, DEVSITE_URL)
     assert "Preview release" in article_html
     assert "Sign up to participate" not in article_html
+
+
+SOUND_URL = "https://www.rentonreporter.com/2026/09/29/fall-time-in-kent-carpinito-bros-pumpkin-patch-corn-maze/"
+SOUND_PAGE = (
+    "<html><body>"
+    '<div id="masthead-container">Sections News Sports Subscriber Center</div>'
+    '<div class="masthead-navigation-menu">Special Sections</div>'
+    '<div id="article_content"><div class="trinityAudioPlaceholder">Getting your Trinity Audio player ready...</div>'
+    "<p>The pumpkin patch and corn maze are back at the Carpinito Bros., with a rainy opening Friday on Sept. 25 in Kent.</p>"
+    '<div><div>4/9</div><div class="hide-swipe-text"><em>Swipe or click to see more</em></div></div>'
+    '<div onclick="revealGalleryImage(\'1\');"><svg><path d="M0 0"></path></svg></div></div>'
+    '<div class="marfeel-recommender-container"><h3>You Might Like</h3></div>'
+    '<div class="thumbnail-container"><img src="https://x.test/thumb.jpg"></div>'
+    '<div class="single-sidebar-container"><ul><li>Rail ad</li></ul></div>'
+    '<div class="ad mobile-ad-contain">Advertisement</div>'
+    '<div id="footer">Our Company About Us</div>'
+    "</body></html>"
+)
+
+
+@pytest.mark.parametrize(
+    "url, handled",
+    [
+        (SOUND_URL, True),
+        ("https://www.kentreporter.com/2026/09/29/x/", True),
+        ("https://www.issaquahreporter.com/x", True),
+        ("https://rentonreporter.com.evil.test/x", False),
+        ("https://example.com/x", False),
+    ],
+)
+def test_sound_publishing_handles(url, handled):
+    from services.site_content_plugins import SoundPublishingPlugin
+
+    assert SoundPublishingPlugin().handles(source_url=url) is handled
+
+
+def test_sound_publishing_strips_site_chrome():
+    import main
+
+    cleaned = main._strip_site_chrome(SOUND_PAGE, SOUND_URL)
+    assert "pumpkin patch and corn maze" in cleaned
+    for gone in (
+        "Sections News",
+        "Trinity Audio",
+        "Swipe or click",
+        "4/9",
+        "You Might Like",
+        "thumb.jpg",
+        "Rail ad",
+        "Advertisement",
+        "Our Company",
+        "Special Sections",
+    ):
+        assert gone not in cleaned, gone
+
+
+def test_sound_publishing_readability_keeps_the_page_title():
+    import main
+
+    page = SOUND_PAGE.replace("<html><body>", "<html><head><title>Fall time in Kent</title></head><body>", 1)
+    page = page.replace('<div id="article_content">', '<div class="story_detail"><div id="article_content">', 1)
+    page = page.replace('<div class="marfeel-recommender-container">', '</div><div class="marfeel-recommender-container">', 1)
+    title, article_html = main.extract_readability_article(page, SOUND_URL)
+    assert title == "Fall time in Kent"
+    assert "pumpkin patch and corn maze" in article_html and "You Might Like" not in article_html
