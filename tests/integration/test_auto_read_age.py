@@ -176,3 +176,14 @@ def test_locked_strip_is_untouched_until_unlock_then_ages_from_it(env):
     _unlock("long_unlocked", -60)
     assert main._apply_auto_read_age({FEED}) == 1
     assert _read("long_unlocked") and not _read("locked") and not _read("just_unlocked")
+
+
+def test_post_the_user_marked_unread_again_is_left_alone(env):
+    _feed_pref(30)
+    _add("old", 90)
+    _add("kept", 90)
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((FEED, "kept"))
+        reader.mark_entry_as_unread((FEED, "kept"))
+    assert main._apply_auto_read_age({FEED}) == 1
+    assert _read("old") and not _read("kept")

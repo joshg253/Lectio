@@ -7513,6 +7513,9 @@ def _apply_auto_read_age(refreshed_feed_urls: set[str]) -> int:
             for feed_u, days in ages.items():
                 cutoff = now - timedelta(days=days)
                 for entry in reader.get_entries(feed=feed_u, read=False):
+                    # An entry whose read state was ever changed by hand (marked unread again, say) is the user's call, not ours.
+                    if entry.read_modified is not None:
+                        continue
                     added = entry.added
                     if added is not None:
                         if added.tzinfo is None:
