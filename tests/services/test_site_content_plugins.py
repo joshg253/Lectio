@@ -314,3 +314,14 @@ def test_sound_publishing_strips_site_chrome():
         "Special Sections",
     ):
         assert gone not in cleaned, gone
+
+
+def test_sound_publishing_readability_keeps_the_page_title():
+    import main
+
+    page = SOUND_PAGE.replace("<html><body>", "<html><head><title>Fall time in Kent</title></head><body>", 1)
+    page = page.replace('<div id="article_content">', '<div class="story_detail"><div id="article_content">', 1)
+    page = page.replace('<div class="marfeel-recommender-container">', '</div><div class="marfeel-recommender-container">', 1)
+    title, article_html = main.extract_readability_article(page, SOUND_URL)
+    assert title == "Fall time in Kent"
+    assert "pumpkin patch and corn maze" in article_html and "You Might Like" not in article_html

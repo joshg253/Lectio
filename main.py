@@ -12694,7 +12694,9 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     content_selectors = site_content_plugins.content_selectors(source_url)
     sliced = _slice_to_content(raw_html, content_selectors) if content_selectors else None
     if sliced:
-        return extract_full_page_article(sliced, source_url)
+        # The slice has no <head>, so the title comes from the page it was cut from.
+        title = _page_title_from_html(raw_html, source_url)
+        return title, extract_full_page_article(sliced, source_url)[1]
     raw_html = _replace_youtube_facades(raw_html)
     raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
