@@ -19,6 +19,12 @@ Empty.
 
 ## Tier 2 — small, fast, independent wins
 
+### Reddit RSS ends 2026-11-13 (2026-10-04)
+
+Reddit is retiring `.rss` feeds with no replacement for non-mod use, and API access was refused, so Reddit stops being a source. On/after the cutoff, delete the six Reddit feeds in the admin account (r/VinylDeals, r/buildapcsales, r/GameDeals, r/Boardgamedeals, r/LaptopDeals, one user-submitted) through the app's feed-delete path (none are starred or archived), restart, and drop any Reddit mention from README.
+
+Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the forum HTML 403s, only the `/rss/` URL works) and a filtered Slickdeals feed (PC and laptop deals). No replacement for r/GameDeals or r/VinylDeals; vinyl.deals has no feed and its rows are `onclick` handlers, so the page scraper can't read it without a new row mode (skipped).
+
 ### Direct `content[0]` reads (2026-10-03)
 
 Some feeds (guitarworld) lead with a literal `"null"` text/plain element before the real HTML. The tag auto-refetch precheck now uses `_richest_content`; the other `content[0]` reads (main.py dedup/merge spots, services/dedup.py, the email full-text path) may misjudge such entries and haven't been checked.
