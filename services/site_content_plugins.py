@@ -271,10 +271,61 @@ class DeveloperAndroidPlugin:
         return None
 
 
+@dataclass(frozen=True)
+class SoundPublishingPlugin:
+    """Sound Publishing's local papers (Renton, Kent, Issaquah Reporter): readability keeps the whole page for a short story.
+
+    A short piece scores below the nav and footer, so the extraction came back with the masthead menus, a "Trinity Audio player ready..."
+    stub, the "You Might Like" rail, and the footer around two paragraphs. The page marks each of those blocks with its own id/class, so
+    they are named here rather than coaxed out by scoring. The body, gallery included, is ``div.story_detail``.
+    """
+
+    _HOSTS = ("rentonreporter.com", "kentreporter.com", "issaquahreporter.com")
+
+    def handles(self, *, source_url: str) -> bool:
+        try:
+            host = (urlparse(source_url).netloc or "").lower().split(":", 1)[0].rstrip(".")
+        except ValueError:
+            return False
+        return any(host == h or host.endswith("." + h) for h in self._HOSTS)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return (
+            "#masthead-container",
+            ".masthead-navigation-menu",
+            "#footer",
+            ".trinityAudioPlaceholder",
+            "#trinity-audio-table",
+            ".marfeel-recommender-container",
+            ".share_buttons_group",
+            # The gallery repeats every photo as a thumbnail strip; the sidebar is empty ad-slot bullets.
+            ".thumbnail-container",
+            ".single-sidebar-container",
+            ".ad, .ad_wide",
+            # The gallery's "4/9 / Swipe or click to see more" counter, which has no class of its own; the swipe hint does.
+            "div:has(> .hide-swipe-text)",
+            # Its prev/next arrows: click targets holding full-size SVGs that render huge once the carousel script is gone.
+            '[onclick*="revealGalleryImage"]',
+        )
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ("div.story_detail",)
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return False
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        return None
+
+
 DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
     PaizoBlogPlugin(),
     DeveloperAndroidPlugin(),
+    SoundPublishingPlugin(),
 )
 
 

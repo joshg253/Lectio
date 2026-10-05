@@ -259,6 +259,10 @@ site behaves exactly as before:
   capture opened with ~700 characters of cookie policy ahead of the music. Scoped
   to the site, so full-page's "keeps everything" contract is unchanged elsewhere.
 
+- **`content_selectors`** also applies on the readability path (`extract_readability_article`), not just source-article capture: when a
+  plugin names the body, that slice goes through the whole-body extractor. The Sound Publishing papers (Renton/Kent/Issaquah Reporter)
+  need it — their photo gallery is slides with almost no text, so density scoring dropped the photos and kept the page around them.
+
 - **`embed_at_top`** places that embed after the article's first heading rather
   than at the end: the scans are a reference you scroll, the video is the point.
 

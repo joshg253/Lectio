@@ -12689,6 +12689,12 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
     # up to column width. Lift style px sizes onto attributes, capture every
     # image's size from the raw page, and reapply after extraction.
     raw_html = _strip_site_chrome(raw_html, source_url)
+    # A site that names its article body gets that slice taken whole, as the source-article path does: readability's density scoring
+    # drops a photo gallery's slides (little text) and keeps the page around them.
+    content_selectors = site_content_plugins.content_selectors(source_url)
+    sliced = _slice_to_content(raw_html, content_selectors) if content_selectors else None
+    if sliced:
+        return extract_full_page_article(sliced, source_url)
     raw_html = _replace_youtube_facades(raw_html)
     raw_html = html_sanitize.lift_float_classes(raw_html)
     raw_html = html_sanitize.lift_img_style_sizes(raw_html)
