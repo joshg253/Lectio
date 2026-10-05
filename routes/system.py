@@ -103,6 +103,7 @@ from main import (
     get_tailscale_url,
     get_thumb_connection,
     get_tombstone_sweep_days,
+    instance_auto_read_days,
     invalidate_has_manual_tags_cache,
     invalidate_meta_structure_cache,
     invalidate_problematic_feeds_cache,
@@ -465,6 +466,7 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
             # Instance tuning
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+            "auto_read_days_instance": instance_auto_read_days(),
             "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
             "login_window_seconds": get_login_window_seconds(),

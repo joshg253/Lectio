@@ -8,6 +8,14 @@
 // in one place because a typo silently falls back to readability rather than
 // erroring; the server-side spelling lives in main.CAPTURE_MODE_FULL.
 const CAPTURE_MODE_FULL = 'full';
+
+// Auto-read age menus: a level can only shorten the limit above it, so longer choices are disabled and the empty option says so.
+function applyAutoReadCap(sel, noneOpt, cap, noneLabel) {
+  if (!sel) return;
+  Array.from(sel.options).forEach(o => { const v = parseInt(o.value, 10); o.disabled = !!cap && v > cap; });
+  if (noneOpt) noneOpt.textContent = cap ? `Same as limit above (${cap} days)` : noneLabel;
+}
+
 // Re-fetch the Internet Archive's snapshot rather than the live page. Same
 // reason as above for keeping the spelling in one place: main.CAPTURE_MODE_ARCHIVE.
 const CAPTURE_MODE_ARCHIVE = 'archive';
@@ -3274,6 +3282,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const feedPropInjectSourceImages = document.getElementById('feed-prop-inject-source-images');
     const feedPropKatexDollarMath = document.getElementById('feed-prop-katex-dollar-math');
     const feedPropFullContent = document.getElementById('feed-prop-full-content');
+    const feedPropAutoRead = document.getElementById('feed-prop-auto-read');
     const feedPropPageTopics = document.getElementById('feed-prop-page-topics');
     const feedPropPresetBtns = document.querySelectorAll('.feed-prop-preset-btn');
     const feedPropCaptionTitle = document.getElementById('feed-prop-caption-title');
@@ -6060,6 +6069,12 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const inheritOpt = document.getElementById('feed-prop-full-content-inherit');
             if (inheritOpt) inheritOpt.textContent = `Folder setting (${data.folder_fetch_full_content ? 'on' : 'off'})`;
           }
+          if (feedPropAutoRead) {
+            feedPropAutoRead.value = String(data.auto_read_days || 0);
+            feedPropAutoRead.dataset.feedUrl = feedUrl;
+            feedPropAutoRead.dataset.prev = feedPropAutoRead.value;
+            applyAutoReadCap(feedPropAutoRead, document.getElementById('feed-prop-auto-read-inherit'), data.auto_read_cap || 0, 'Off');
+          }
           if (feedPropPageTopics) {
             feedPropPageTopics.value = String(data.capture_page_topics ?? -1);
             feedPropPageTopics.dataset.feedUrl = feedUrl;
@@ -6689,6 +6704,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         const retentionStatus = document.getElementById('folder-prop-retention-status');
         if (retentionStatus) retentionStatus.textContent = '';
+        const autoReadSel = document.getElementById('folder-prop-auto-read');
+        if (autoReadSel) {
+          autoReadSel.dataset.folderId = String(folderId);
+          const autoRead = data.auto_read_days || 0;
+          const aMatch = Array.from(autoReadSel.options).find(o => parseInt(o.value) === autoRead);
+          autoReadSel.value = aMatch ? String(autoRead) : '0';
+          applyAutoReadCap(autoReadSel, document.getElementById('folder-prop-auto-read-none'), data.auto_read_cap || 0, 'Off');
+        }
+        const autoReadStatus = document.getElementById('folder-prop-auto-read-status');
+        if (autoReadStatus) autoReadStatus.textContent = '';
         const fullContentBox = document.getElementById('folder-prop-full-content');
         if (fullContentBox) {
           fullContentBox.dataset.folderId = String(folderId);
@@ -7959,6 +7984,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await saveDisplayPref(feedUrl, 'fetch_full_content', parseInt(feedPropFullContent.value, 10));
         feedPropFullContent.dataset.prev = feedPropFullContent.value;
       } catch (e) { feedPropFullContent.value = feedPropFullContent.dataset.prev || '-1'; }
+    });
+
+    feedPropAutoRead?.addEventListener('change', async () => {
+      const feedUrl = feedPropAutoRead.dataset.feedUrl;
+      if (!feedUrl) return;
+      try {
+        await saveDisplayPref(feedUrl, 'auto_read_days', parseInt(feedPropAutoRead.value, 10));
+        feedPropAutoRead.dataset.prev = feedPropAutoRead.value;
+      } catch (e) { feedPropAutoRead.value = feedPropAutoRead.dataset.prev || '0'; }
     });
 
     feedPropPageTopics?.addEventListener('change', async () => {
@@ -15158,6 +15192,14 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           tzEl.value = d.tz_display || '';
           tzEl.placeholder = d.tz_default ? `${d.tz_default} (server default)` : 'Server default';
         }
+        {
+          const el = document.getElementById('sett-auto-read-days');
+          const hint = document.getElementById('sett-auto-read-hint');
+          const cap = d.auto_read_days_instance || 0;
+          if (el) { el.value = d.auto_read_days_user ? String(d.auto_read_days_user) : ''; if (cap) el.max = String(cap); }
+          if (hint) hint.textContent = 'New posts dated older than this are marked read when fetched. Folders and feeds can only shorten it. 0 disables.'
+            + (cap ? ` The instance limit is ${cap} days; yours can't be longer.` : '');
+        }
         const pwEl = document.getElementById('sett-portrait-img-width');
         if (pwEl && d.portrait_img_max_width != null) pwEl.value = String(d.portrait_img_max_width);
         { const el = document.getElementById('sett-proxy-body-images'); if (el) el.checked = !!d.proxy_body_images; }
@@ -15520,6 +15562,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             profile_name: g('sett-profile-name'),
             profile_email: g('sett-profile-email'),
             tz_display: g('sett-tz-display'),
+            auto_read_days_user: g('sett-auto-read-days'),
             portrait_img_max_width: g('sett-portrait-img-width'),
             proxy_body_images: (document.getElementById('sett-proxy-body-images')?.checked ? '1' : '0'),
             proxy_mode: document.getElementById('sett-proxy-mode')?.value || '',
@@ -16176,6 +16219,23 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       try {
         const body = new URLSearchParams({ folder_id: folderId, retention_days: sel.value });
         const resp = await fetch('/folders/retention', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
+        const json = await resp.json();
+        if (!json.ok) throw new Error(json.error || 'save failed');
+        if (status) status.textContent = '';
+      } catch (err) {
+        if (status) status.textContent = `Error: ${err.message}`;
+      }
+    });
+
+    document.getElementById('folder-prop-auto-read')?.addEventListener('change', async (e) => {
+      const sel = e.target;
+      const folderId = sel.dataset.folderId;
+      if (!folderId) return;
+      const status = document.getElementById('folder-prop-auto-read-status');
+      if (status) status.textContent = 'Saving…';
+      try {
+        const body = new URLSearchParams({ folder_id: folderId, auto_read_days: sel.value });
+        const resp = await fetch('/folders/auto-read', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, credentials: 'same-origin', body: body.toString() });
         const json = await resp.json();
         if (!json.ok) throw new Error(json.error || 'save failed');
         if (status) status.textContent = '';

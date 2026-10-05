@@ -1177,3 +1177,9 @@ had actually succeeded. The bulk-edit success handler now checks whether the
 open pane's `(feed_url, entry_id)` is among the edited entries and, if so,
 calls `loadEntryPaneWithoutFullRefresh` — the same in-place refresh the
 single-entry tag form already used.
+
+## Auto-read age
+
+New posts dated older than N days are marked read after a refresh (`_apply_auto_read_age`, run from `_run_automation_after_refresh` beside the hide-paywalled pass). Four levels hold N — `app_settings` at instance and account level, `folders.auto_read_days`, `feed_display_prefs.auto_read_days` — all 0 (off) by default, and each can only shorten the one above, so the effective age is the smallest positive value (`effective_auto_read_days`). Taking the minimum, instead of trusting the saved child value, means lowering a parent later still holds over a stale child; the UI disables longer choices and the routes reject them. A feed in several folders gets the shortest folder value.
+
+Only posts added in the last day are swept, so a post the user later marks unread isn't re-marked on every refresh; the cost is that turning the setting on doesn't clear an existing backlog (the "Older than N days" bulk action does). Age is `entry_effective_date`, the date the list greys on, pushed later to when the post became viewable: a YouTube premiere's scheduled start, or a webcomic strip's unlock (`entry_lead_images.locked_until`). A premiere that hasn't aired or a strip still locked is left alone, and undated posts stay unread.

@@ -75,6 +75,9 @@
           <label class="settings-label" for="sett-tz-display">Timezone display</label>
           <input type="text" id="sett-tz-display" class="settings-input" list="sett-tz-list" placeholder="Server default" autocomplete="off" />
           <datalist id="sett-tz-list"></datalist>
+          <label class="settings-label" for="sett-auto-read-days">Auto-read old posts (days)</label>
+          <input type="number" id="sett-auto-read-days" class="settings-input" min="0" step="1" placeholder="0" autocomplete="off" />
+          <p class="settings-hint" id="sett-auto-read-hint">New posts dated older than this are marked read when fetched. Folders and feeds can only shorten it. 0 disables.</p>
           <label class="settings-label" for="sett-portrait-img-width">Portrait image max width (px)</label>
           <input type="number" id="sett-portrait-img-width" class="settings-input" min="0" step="10" placeholder="650" autocomplete="off" />
           <p class="settings-hint">Caps tall (portrait) article images to this width; wide images stay full-width. 0 disables.</p>
