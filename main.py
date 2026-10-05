@@ -663,6 +663,9 @@ SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
 SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
+# Auto-read age (days; 0 = off) at instance and account level. Each level below can only shorten it: folder, then feed.
+SETTING_AUTO_READ_DAYS_INSTANCE = "auto_read_days_instance"
+SETTING_AUTO_READ_DAYS_USER = "auto_read_days_user"
 SETTING_TOMBSTONE_SWEEP_DAYS = "tombstone_sweep_days"
 SETTING_LOGIN_MAX_FAILURES = "login_max_failures"
 SETTING_LOGIN_WINDOW_SECONDS = "login_window_seconds"
@@ -4786,6 +4789,15 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN hide_paywalled INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
+        # Auto-mark posts read once older than N days (0 = no limit of its own); folders hold the same as NULL/N.
+        try:
+            conn.execute("ALTER TABLE feed_display_prefs ADD COLUMN auto_read_days INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE folders ADD COLUMN auto_read_days INTEGER DEFAULT NULL")
+        except Exception:
+            pass
         # Tags this feed's posts usually want, pinned to the front of the
         # suggestion chips. A feed with a stable subject (a guitar blog: #guitar,
         # #bass) publishes no tags saying so, leaving the same words to be typed
@@ -5023,6 +5035,7 @@ _DISPLAY_PREF_KEYS = frozenset(
         "hide_unpremiered",
         "hide_members_only",
         "hide_paywalled",
+        "auto_read_days",
         "hide_locked_comics",
         "inject_source_images",
         "katex_dollar_math",
@@ -5041,6 +5054,7 @@ _DISPLAY_PREF_DEFAULTS: dict = {
     "hide_unpremiered": 0,
     "hide_members_only": 0,
     "hide_paywalled": 0,
+    "auto_read_days": 0,
     "hide_locked_comics": 0,
     "inject_source_images": 0,
     "katex_dollar_math": 0,
@@ -7279,6 +7293,21 @@ def _is_youtube_unpremiered(entry: object) -> bool:
     return _youtube_unpremiered_video_id(getattr(entry, "feed_url", None), getattr(entry, "link", None)) is not None
 
 
+def _youtube_live_info(entry: object) -> tuple[bool, datetime | None]:
+    """``(still_upcoming, scheduled_start)`` from the cached live status of a YouTube entry; ``(False, None)`` for anything else."""
+    feed_url, link = getattr(entry, "feed_url", None), getattr(entry, "link", None)
+    if not link or not feed_url or "youtube.com/feeds/videos.xml" not in str(feed_url):
+        return False, None
+    vid = youtube_duration_service.extract_video_id(str(link))
+    if not vid:
+        return False, None
+    live_status, scheduled = youtube_duration_service.get_cached_live_status(vid)
+    start = _parse_stored_dt(scheduled)
+    if start is not None and start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return live_status == "upcoming", start
+
+
 def _youtube_premiere_prefix(video_id: str) -> str | None:
     """'[Premieres in Xd]'-style title prefix for a video still scheduled to
     air, or None if it isn't an upcoming premiere. Computed live from the
@@ -7399,6 +7428,130 @@ def is_paywall_stub(content_html: str | None, entry_link: str | None) -> bool:
         return False
     own = (entry_link or "").split("?", 1)[0].rstrip("/")
     return bool(own) and any(h.split("?", 1)[0].rstrip("/") == own for h in hrefs)
+
+
+def _min_positive(*values: int) -> int:
+    """The smallest value above zero, or 0 when none is (zero means "no limit" at every level)."""
+    positive = [v for v in values if v and v > 0]
+    return min(positive) if positive else 0
+
+
+def _int_setting(raw: str | None) -> int:
+    try:
+        return max(0, int((raw or "").strip() or 0))
+    except ValueError:
+        return 0
+
+
+def instance_auto_read_days() -> int:
+    return _int_setting(get_instance_setting(SETTING_AUTO_READ_DAYS_INSTANCE))
+
+
+def user_auto_read_days() -> int:
+    return _int_setting(get_runtime_setting(SETTING_AUTO_READ_DAYS_USER))
+
+
+def folder_auto_read_days(conn: sqlite3.Connection, feed_url: str) -> int:
+    """The auto-read age the feed's folders ask for: the smallest positive value across them (a feed in two folders gets the stricter),
+    0 when none sets one."""
+    row = conn.execute(
+        "SELECT MIN(f.auto_read_days) FROM folder_feeds ff JOIN folders f ON f.id = ff.folder_id"
+        " WHERE ff.feed_url = ? AND f.auto_read_days > 0",
+        (feed_url,),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def auto_read_parent_cap(conn: sqlite3.Connection | None = None, *, feed_url: str | None = None) -> int:
+    """The longest auto-read age a level may choose: the instance and account settings, plus the feed's folders when *feed_url* is given.
+    0 = nothing above it sets one."""
+    folder = folder_auto_read_days(conn, feed_url) if conn is not None and feed_url else 0
+    return _min_positive(instance_auto_read_days(), user_auto_read_days(), folder)
+
+
+def effective_auto_read_days(conn: sqlite3.Connection, feed_url: str) -> int:
+    """Days after which this feed's new posts are auto-marked read; 0 = never. Every level (instance, account, folder, feed) can only
+    shorten what the one above allows, so the shortest one set wins -- and a later-lowered parent still holds over a stale child."""
+    row = conn.execute("SELECT auto_read_days FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
+    own = int(row[0]) if row is not None and row[0] is not None else 0
+    return _min_positive(auto_read_parent_cap(conn, feed_url=feed_url), own)
+
+
+# Only posts that arrived this recently are swept, so a post the user marks unread later is not re-marked on every refresh.
+_AUTO_READ_AGE_ARRIVAL_WINDOW = timedelta(days=1)
+
+
+def _apply_auto_read_age(refreshed_feed_urls: set[str]) -> int:
+    """Auto-mark newly arrived posts read when their date is older than the feed's (or folder's) auto-read age.
+
+    A feed that goes quiet for months and then updates dumps its stale posts into the unread list; this keeps them findable under All
+    without making you clear them. Judged by the same effective date the list greys on; a post with no usable date is left unread.
+    """
+    try:
+        with get_meta_connection() as conn:
+            ages = {u: effective_auto_read_days(conn, u) for u in refreshed_feed_urls}
+        ages = {u: d for u, d in ages.items() if d > 0}
+        if not ages:
+            return 0
+        now = datetime.now(timezone.utc)
+        arrived_after = now - _AUTO_READ_AGE_ARRIVAL_WINDOW
+        # A supporter-locked webcomic strip is viewable from its unlock time, not its post date.
+        with get_meta_connection() as conn:
+            _ph = ",".join("?" * len(ages))
+            unlock_at = {
+                (str(r["feed_url"]), str(r["entry_id"])): datetime.fromtimestamp(float(r["locked_until"]), timezone.utc)
+                for r in conn.execute(
+                    (
+                        "SELECT feed_url, entry_id, locked_until FROM entry_lead_images"
+                        f" WHERE locked_until IS NOT NULL AND feed_url IN ({_ph})"
+                    ),
+                    tuple(ages),
+                ).fetchall()
+            }
+        to_mark: list[tuple[str, str]] = []
+        with get_reader() as reader:
+            for feed_u, days in ages.items():
+                cutoff = now - timedelta(days=days)
+                for entry in reader.get_entries(feed=feed_u, read=False):
+                    # An entry whose read state was ever changed by hand (marked unread again, say) is the user's call, not ours.
+                    if entry.read_modified is not None:
+                        continue
+                    added = entry.added
+                    if added is not None:
+                        if added.tzinfo is None:
+                            added = added.replace(tzinfo=timezone.utc)
+                        if added < arrived_after:
+                            continue
+                    date = entry_effective_date(entry)
+                    if date is None:
+                        continue
+                    if date.tzinfo is None:
+                        date = date.replace(tzinfo=timezone.utc)
+                    # Age runs from when the post became viewable, not from the date it showed up: a premiere from its scheduled start, a
+                    # locked strip from its unlock. One that isn't viewable yet is left alone entirely.
+                    upcoming, premiere_start = _youtube_live_info(entry)
+                    unlock = unlock_at.get((feed_u, str(entry.id)))
+                    if upcoming or (unlock is not None and unlock > now):
+                        continue
+                    viewable = max(d for d in (date, premiere_start, unlock) if d is not None)
+                    if viewable < cutoff:
+                        to_mark.append((feed_u, str(entry.id)))
+            for feed_u, entry_id in to_mark:
+                reader.mark_entry_as_read((feed_u, entry_id))
+        if to_mark:
+            when = datetime.now().isoformat()
+            with get_meta_connection() as conn:
+                conn.executemany(
+                    "INSERT INTO entry_read_state (feed_url, entry_id, read_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(feed_url, entry_id) DO UPDATE SET read_at = excluded.read_at",
+                    [(fu, eid, when) for fu, eid in to_mark],
+                )
+            invalidate_unread_counts_cache()
+            LOGGER.info("[automation] auto-read age marked %d old post(s) read", len(to_mark))
+        return len(to_mark)
+    except Exception:
+        LOGGER.exception("[automation] error applying auto-read age")
+        return 0
 
 
 def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
@@ -9905,6 +10058,8 @@ def get_feed_properties(feed_url: str) -> dict:
             "hide_members_only": bool(_disp.get("hide_members_only", 0)),
             "hide_locked_comics": bool(_disp.get("hide_locked_comics", 0)),
             "hide_paywalled": bool(_disp.get("hide_paywalled", 0)),
+            "auto_read_days": int(_disp.get("auto_read_days", 0)),
+            "auto_read_cap": auto_read_parent_cap(_pc, feed_url=feed_url),
             "inject_source_images": bool(_disp.get("inject_source_images", 0)),
             "katex_dollar_math": bool(_disp.get("katex_dollar_math", 0)),
             "fetch_full_content": int(_disp.get("fetch_full_content", full_content_fetch.FEED_INHERIT)),
@@ -10012,7 +10167,7 @@ def get_folder_properties(folder_id: int) -> dict:
     with get_meta_connection() as conn:
         folder_row = conn.execute(
             """
-            SELECT f.id, f.name, f.cadence_minutes, f.retention_days, f.fetch_full_content, f.capture_page_topics,
+            SELECT f.id, f.name, f.cadence_minutes, f.retention_days, f.auto_read_days, f.fetch_full_content, f.capture_page_topics,
                 CASE WHEN f.parent_id IS NULL THEN f.name
                      ELSE root.name || ' / ' || f.name END AS path
             FROM folders f
@@ -10048,6 +10203,8 @@ def get_folder_properties(folder_id: int) -> dict:
             "path": folder_row["path"],
             "cadence_minutes": folder_row["cadence_minutes"],
             "retention_days": folder_row["retention_days"],
+            "auto_read_days": folder_row["auto_read_days"],
+            "auto_read_cap": auto_read_parent_cap(),
             "fetch_full_content": bool(folder_row["fetch_full_content"]),
             "capture_page_topics": bool(folder_row["capture_page_topics"]),
             "deleted_articles": 0,
@@ -10146,6 +10303,8 @@ def get_folder_properties(folder_id: int) -> dict:
         "path": folder_row["path"],
         "cadence_minutes": folder_row["cadence_minutes"],
         "retention_days": folder_row["retention_days"],
+        "auto_read_days": folder_row["auto_read_days"],
+        "auto_read_cap": auto_read_parent_cap(),
         "fetch_full_content": bool(folder_row["fetch_full_content"]),
         "capture_page_topics": bool(folder_row["capture_page_topics"]),
         "deleted_articles": deleted_articles,

@@ -293,6 +293,7 @@ from main import (
     add_feed_to_folder,
     archive_conn,
     assume_https_if_schemeless,
+    auto_read_parent_cap,
     build_read_filter_query,
     build_resume_read_filter_query,
     build_sort_query,
@@ -499,6 +500,24 @@ def set_folder_retention(folder_id: int = Form(...), retention_days: str = Form(
             (days if days > 0 else None, folder_id),
         )
     return JSONResponse({"ok": True, "retention_days": days if days > 0 else None})
+
+
+@router.post("/folders/auto-read")
+def set_folder_auto_read(folder_id: int = Form(...), auto_read_days: str = Form(...)):
+    """Set or clear the per-folder auto-read age (new posts older than N days are marked read at fetch; 0 = off). A feed's own setting
+    overrides it."""
+    try:
+        days = int(auto_read_days)
+        if days < 0:
+            raise ValueError
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "auto_read_days must be a non-negative integer"}, status_code=400)
+    cap = auto_read_parent_cap()
+    if cap and days > cap:
+        return JSONResponse({"ok": False, "error": f"Can't be longer than the {cap}-day limit set above."}, status_code=400)
+    with get_meta_connection() as conn:
+        conn.execute("UPDATE folders SET auto_read_days = ? WHERE id = ?", (days if days > 0 else None, folder_id))
+    return JSONResponse({"ok": True, "auto_read_days": days if days > 0 else None})
 
 
 @router.post("/folders/full-content")
@@ -1205,6 +1224,11 @@ def set_feed_display_pref_route(
 ):
     if key not in _DISPLAY_PREF_KEYS:
         return JSONResponse({"error": "invalid key"}, status_code=400)
+    if key == "auto_read_days":
+        with get_meta_connection() as conn:
+            cap = auto_read_parent_cap(conn, feed_url=feed_url)
+        if value < 0 or (cap and value > cap):
+            return JSONResponse({"error": f"Can't be longer than the {cap}-day limit set above."}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_display_pref(conn, feed_url, key, value)
     # Turning Hide Shorts on clears the existing backlog immediately, not just

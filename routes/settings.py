@@ -59,6 +59,8 @@ from main import (
     PROBLEMATIC_FEEDS_LAST_VIEWED_AT_SETTING_KEY,
     PROFILE_EMAIL_SETTING_KEY,
     PROFILE_NAME_SETTING_KEY,
+    SETTING_AUTO_READ_DAYS_INSTANCE,
+    SETTING_AUTO_READ_DAYS_USER,
     SETTING_DEFAULT_AUTO_REFRESH_MINUTES,
     SETTING_DEVIANTART_ACCESS_TOKEN,
     SETTING_DEVIANTART_CLIENT_ID,
@@ -194,6 +196,7 @@ from main import (
     get_yt_quota_status,
     hide_locked_comics_global,
     inoreader_connected,
+    instance_auto_read_days,
     invalidate_instance_setting_cache,
     invalidate_problematic_feeds_cache,
     is_async_action_request,
@@ -211,6 +214,7 @@ from main import (
     set_setting,
     templates,
     tenancy,
+    user_auto_read_days,
     youtube_embed_account_features_enabled,
     youtube_hide_members_only_global,
     youtube_hide_shorts_global,
@@ -372,6 +376,8 @@ def get_all_settings():
             "email_to_default": email_to_default,
             "public_url": LECTIO_PUBLIC_URL,
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
+            "auto_read_days_instance": instance_auto_read_days(),
+            "auto_read_days_user": user_auto_read_days(),
             "tombstone_sweep_days": get_tombstone_sweep_days(),
             "login_max_failures": get_login_max_failures(),
             "login_window_seconds": get_login_window_seconds(),
@@ -470,6 +476,8 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_REDDIT_CLIENT_SECRET,
         SETTING_STAR_SEND_REDDIT_SUBREDDIT,
         SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
+        SETTING_AUTO_READ_DAYS_INSTANCE,
+        SETTING_AUTO_READ_DAYS_USER,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES,
         SETTING_LOGIN_WINDOW_SECONDS,
@@ -495,6 +503,7 @@ async def save_all_settings(request: Request):
         SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
         SETTING_SHARED_REDDIT_CLIENT_ID,
         SETTING_SHARED_REDDIT_CLIENT_SECRET,
+        SETTING_AUTO_READ_DAYS_INSTANCE,
         SETTING_FETCH_HISTORY_MAX_AGE_DAYS,
         SETTING_TOMBSTONE_SWEEP_DAYS,
         SETTING_LOGIN_MAX_FAILURES,
@@ -537,6 +546,13 @@ async def save_all_settings(request: Request):
                     )
                 continue
             str_val = str(value).strip() if value is not None else ""
+            if key in (SETTING_AUTO_READ_DAYS_INSTANCE, SETTING_AUTO_READ_DAYS_USER):
+                # Whole days, 0 = off; an account can only shorten the instance limit.
+                days = int(str_val) if str_val.isdigit() else 0
+                cap = instance_auto_read_days() if key == SETTING_AUTO_READ_DAYS_USER else 0
+                if cap and days > cap:
+                    days = cap
+                str_val = str(days) if days else ""
             if _keep_existing_sensitive(key, str_val, _SENSITIVE):
                 continue
             if str_val:

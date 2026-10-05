@@ -76,6 +76,8 @@ short version:
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.
+  An **auto-read age** (off by default) marks new posts read at fetch once they're older than N days, so a quiet site that finally
+  updates doesn't flood the unread list; set it for the instance, an account, a folder or a feed, each only able to shorten the one above.
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an
   artist Watches them; on a Watch-feed byline, the name filters to that

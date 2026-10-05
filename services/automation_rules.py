@@ -41,6 +41,7 @@ from main import (
     SETTING_INSTAPAPER_PASSWORD,
     SETTING_INSTAPAPER_USERNAME,
     SETTING_YT_PLAYLIST_AUTO_LAST_CHECK,
+    _apply_auto_read_age,
     _apply_hide_members_only,
     _apply_hide_paywalled,
     _apply_hide_shorts,
@@ -1362,6 +1363,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
 
     _apply_hide_shorts(refreshed_feed_urls)
     _apply_hide_paywalled(refreshed_feed_urls)
+    _apply_auto_read_age(refreshed_feed_urls)
     _apply_hide_members_only(refreshed_feed_urls)
     try:
         # ── Read phase (no write lock held) ──────────────────────────────────

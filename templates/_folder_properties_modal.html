@@ -39,6 +39,18 @@
           </select>
           <span id="folder-prop-retention-status" class="feed-prop-inline-status"></span>
         </dd>
+        <dt>Auto-read old posts</dt>
+        <dd>
+          <select id="folder-prop-auto-read" class="feed-prop-strategy-select" style="width:auto" title="New posts dated older than this are marked read when fetched, so a quiet site that finally updates doesn't flood the unread list. A feed's own setting overrides this.">
+            <option value="0" id="folder-prop-auto-read-none">Off</option>
+            <option value="7">Older than 7 days</option>
+            <option value="14">Older than 14 days</option>
+            <option value="30">Older than 30 days</option>
+            <option value="60">Older than 60 days</option>
+            <option value="90">Older than 90 days</option>
+          </select>
+          <span id="folder-prop-auto-read-status" class="feed-prop-inline-status"></span>
+        </dd>
         <dt>Full content</dt>
         <dd>
           <label title="New posts whose body is only a teaser get the full article fetched from the source page. A feed's own setting overrides this.">

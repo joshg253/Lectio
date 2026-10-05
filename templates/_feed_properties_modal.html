@@ -200,6 +200,18 @@
                 <option value="0">Off</option>
               </select>
             </label>
+            {# New posts dated older than this are marked read at fetch, so a quiet site that finally updates doesn't flood unread. #}
+            <label class="feed-prop-toggle-row">
+              <span>Auto-read old posts</span>
+              <select id="feed-prop-auto-read" class="feed-prop-strategy-select" style="width:auto">
+                <option value="0" id="feed-prop-auto-read-inherit">Off</option>
+                <option value="7">Older than 7 days</option>
+                <option value="14">Older than 14 days</option>
+                <option value="30">Older than 30 days</option>
+                <option value="60">Older than 60 days</option>
+                <option value="90">Older than 90 days</option>
+              </select>
+            </label>
             {# The publisher's own article tags (article:tag metas — PC Gamer's "Topics") as tag suggestions, fetched for each new
                post (first 64KB of the page only). Inherit = the folder's setting. #}
             <label class="feed-prop-toggle-row">
