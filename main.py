@@ -11553,7 +11553,7 @@ def _strip_site_chrome(raw_html: str, source_url: str) -> str:
         return raw_html
 
 
-def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> str:
+def _append_site_embeds(article_html: str, source_url: str, raw_html: str, *, prepend: bool = False) -> str:
     """Append a per-site embed the page only produces via JS.
 
     ``_reinject_readability_embeds`` above recovers embeds that were in the
@@ -11576,6 +11576,9 @@ def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> st
         return article_html  # the sanitizer rejected it — say nothing
     if not site_content_plugins.embed_at_top(source_url):
         return f"{article_html}{clean}"
+    if prepend:
+        # A caller-selected region has no title of its own; its first heading is a section label ("Tags").
+        return f"{clean}{article_html}"
     # At the top means after the article's own heading, if it has one — above it
     # the video reads as a banner rather than as part of the piece.
     return _insert_after_first_heading(article_html, clean)
@@ -24496,7 +24499,8 @@ def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cool
     if region is None:
         return None
     title = soup.title.get_text(strip=True) if soup.title else ""
-    return title, str(region)
+    scraper_service.absolutize_links(region, url)
+    return title, _append_site_embeds(str(region), url, result.html, prepend=True)
 
 
 def _refresh_captured_article_for_current_user(

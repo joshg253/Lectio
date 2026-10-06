@@ -325,3 +325,12 @@ def test_sound_publishing_readability_keeps_the_page_title():
     title, article_html = main.extract_readability_article(page, SOUND_URL)
     assert title == "Fall time in Kent"
     assert "pumpkin patch and corn maze" in article_html and "You Might Like" not in article_html
+
+
+def test_texasbluesalley_mux_player_becomes_an_iframe_embed():
+    html = "<body><mux-player playback-id='PhGxAXXG97l7v2S16Rqd9oIPH00p5x4OtBWwedlnxNZw' default-hidden-captions></mux-player>"
+    url = "https://texasbluesalley.com/woodshed/free-lessons/x"
+    out = plugins.extra_embed_html(url, html)
+    assert out and "https://player.mux.com/PhGxAXXG97l7v2S16Rqd9oIPH00p5x4OtBWwedlnxNZw" in out
+    assert plugins.embed_at_top(url)
+    assert plugins.extra_embed_html(url, "<body>no player</body>") is None
