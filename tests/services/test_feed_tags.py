@@ -1273,3 +1273,15 @@ def test_hashtag_field_without_hash_prefix_still_works():
 
 def test_oversized_hashtag_tokens_are_ignored():
     assert extract_feed_entry_tags({"pub_tags": "#" + "x" * 61}) == []
+
+
+def test_rel_tag_anchors_beat_generic_keywords_meta_and_byline_is_skipped():
+    html = (
+        '<meta name="keywords" content="Xbox Game Pass new games, steam summer sale, Uplay">'
+        '<a class="label" href="/news/subscriptions/" rel="tag category">Subscriptions</a>'
+        '<a class="relative tag badge" rel="tag" href="/news/new-on-game-pass/">Xbox Game Pass new games</a>'
+        '<div class="author-tag tag"><a class="tag-author-link" href="/news/author/kasumi/">Daria Beres</a></div>'
+    )
+    tags = extract_page_tags(html, "https://gg.deals/x/")
+    assert "Subscriptions" in tags and "Xbox Game Pass new games" in tags
+    assert "Uplay" not in tags and "Daria Beres" not in tags

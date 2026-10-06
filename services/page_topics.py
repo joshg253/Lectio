@@ -4,8 +4,9 @@ as feed-tag suggestions (``entry_feed_tags`` with ``source='page'``) for feeds w
 Opt-in per folder, overridable per feed (column ``capture_page_topics``, resolved like full-content fetch). A reader NEW-entry hook
 queues entries on opted-in feeds; a background drain fetches up to ``PER_FEED_CAP`` per feed per refresh cycle. Each fetch reads only
 the first ``PREFIX_BYTES`` of the page and hangs up — the tags sit in the head (~3.6KB into a 2MB PC Gamer page), so the rest,
-inline scripts included, is never downloaded. Honest UA, no escalation: a site that refuses gets no topics, and its host is paused
-for an hour. Each entry is attempted once.
+inline scripts included, is never downloaded. Honest UA first; a refusal falls back to the page-fetch ladder (proxy tier at most) when
+one is wired, and a host that still refuses is paused for an hour. When tags were written, ``on_tags_recorded`` runs the feed's tag-filter
+rules. Each entry is attempted once.
 """
 
 from __future__ import annotations
@@ -49,6 +50,37 @@ def folder_enabled(conn, feed_url: str) -> bool:
     return full_content_fetch.folder_enabled(conn, feed_url, COLUMN)
 
 
+def enable_if_page_sourced(conn, feed_url: str) -> bool:
+    """Turn capture on for a feed whose tags exist only on its article pages (rows with ``source='page'`` and none from the feed's own
+    RSS), so a tag filter set from those chips also fires at ingest. Only moves an Inherit feed whose folder is off; an explicit
+    feed setting, either way, is the user's call."""
+    row = conn.execute(
+        "SELECT SUM(source = 'page'), SUM(source = 'feed') FROM entry_feed_tags WHERE feed_url = ?",
+        (feed_url,),
+    ).fetchone()
+    if not row or not (row[0] or 0) or (row[1] or 0):
+        return False
+    pref = conn.execute(f"SELECT {COLUMN} FROM feed_display_prefs WHERE feed_url = ?", (feed_url,)).fetchone()
+    if pref is not None and pref[0] is not None and pref[0] != full_content_fetch.FEED_INHERIT:
+        return False
+    if folder_enabled(conn, feed_url):
+        return False
+    conn.execute(
+        f"INSERT INTO feed_display_prefs (feed_url, {COLUMN}) VALUES (?, ?) "
+        f"ON CONFLICT(feed_url) DO UPDATE SET {COLUMN} = excluded.{COLUMN}",
+        (feed_url, full_content_fetch.FEED_ON),
+    )
+    return True
+
+
+def enable_for_rule_scope(conn, feed_urls: Iterable[str] | None) -> int:
+    """``enable_if_page_sourced`` over a tag-filter rule's feeds (``None`` = every feed, i.e. a global rule); returns how many were turned
+    on. Feeds with no page-sourced tags are skipped, so a broad rule never switches capture on for feeds that don't need it."""
+    page_feeds = {r[0] for r in conn.execute("SELECT DISTINCT feed_url FROM entry_feed_tags WHERE source = 'page'")}
+    candidates = page_feeds if feed_urls is None else page_feeds & set(feed_urls)
+    return sum(enable_if_page_sourced(conn, f) for f in candidates)
+
+
 class PageTopicsService:
     def __init__(
         self,
@@ -59,6 +91,8 @@ class PageTopicsService:
         record_tags: Callable[[str, str, list[str]], None],
         is_excluded_feed: Callable[[str], bool] = lambda feed_url: False,
         clock: Callable[[], float] = time.time,
+        fetch_escalated: Callable[[str], str] | None = None,
+        on_tags_recorded: Callable[[str], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
         self._get_reader = get_reader
@@ -67,6 +101,8 @@ class PageTopicsService:
         self._record_tags = record_tags
         self._is_excluded_feed = is_excluded_feed
         self._clock = clock
+        self._fetch_escalated = fetch_escalated
+        self._on_tags_recorded = on_tags_recorded
         self._host_paused_until: dict[str, float] = {}
         self._draining: set[str] = set()
         self._lock = threading.Lock()
@@ -123,10 +159,18 @@ class PageTopicsService:
             if not is_enabled_for_feed(conn, feed_url):
                 conn.execute("DELETE FROM page_topics_queue WHERE feed_url = ?", (feed_url,))
                 return
+        recorded = False
         for row in rows:
-            self._fetch_one(feed_url, str(row[0]))
+            recorded = self._fetch_one(feed_url, str(row[0])) or recorded
+        if recorded and self._on_tags_recorded is not None:
+            # Once per drained batch, not per entry: tag-filter rules scan the whole feed.
+            try:
+                self._on_tags_recorded(feed_url)
+            except Exception:  # noqa: BLE001
+                LOGGER.warning("[page-topics] post-capture hook failed for %s", feed_url, exc_info=True)
 
-    def _fetch_one(self, feed_url: str, entry_id: str) -> None:
+    def _fetch_one(self, feed_url: str, entry_id: str) -> bool:
+        """Fetch and record one entry's page tags; True when tags were written."""
         try:
             with self._get_reader() as reader:
                 entry = reader.get_entry((feed_url, entry_id), None)
@@ -135,21 +179,31 @@ class PageTopicsService:
         link = str(getattr(entry, "link", None) or "") if entry is not None else ""
         host = urlparse(link).netloc.lower()
         if host and self._host_paused(host):
-            return  # stays queued until the pause lapses
+            return False  # stays queued until the pause lapses
         with self._get_meta_connection() as conn:
             conn.execute("DELETE FROM page_topics_queue WHERE feed_url = ? AND entry_id = ?", (feed_url, entry_id))
         if not host:
-            return  # purged, or no link any more
+            return False  # purged, or no link any more
         try:
             html, status = self._fetch_prefix(link)
         except Exception as exc:  # noqa: BLE001
             LOGGER.info("[page-topics] %s: fetch failed (%s); pausing %s", link, exc, host)
             self._pause_host(host)
-            return
+            return False
+        if status >= 400 and self._fetch_escalated is not None:
+            # The cheap honest-UA prefix was refused; use the same ladder (capped below FlareSolverr) the reader uses on open.
+            try:
+                html, status = self._fetch_escalated(link), 200
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.info("[page-topics] %s: escalated fetch failed (%s); pausing %s", link, exc, host)
+                self._pause_host(host)
+                return False
         if status >= 400:
             LOGGER.info("[page-topics] %s: HTTP %s; pausing %s", link, status, host)
             self._pause_host(host)
-            return
+            return False
         tags = self._extract_tags(html, link)
-        if tags:
-            self._record_tags(feed_url, entry_id, tags)
+        if not tags:
+            return False
+        self._record_tags(feed_url, entry_id, tags)
+        return True

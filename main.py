@@ -24446,6 +24446,8 @@ page_topics_service = page_topics.PageTopicsService(
     extract_tags=lambda html, url: feed_tags_service_mod.extract_page_tags(html, url),
     record_tags=lambda feed_url, entry_id, tags: feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)], source="page"),
     is_excluded_feed=lambda feed_url: saved_articles_service.is_saved_articles_feed(feed_url),
+    fetch_escalated=lambda url: page_fetcher.fetch(url, timeout=12.0, max_tier="proxy").html,
+    on_tags_recorded=lambda feed_url: _run_tag_filter_rules_for_feed(feed_url),
 )
 
 
@@ -25735,6 +25737,7 @@ from routes.saved import router as _saved_router  # noqa: E402
 from routes.settings import router as _settings_router  # noqa: E402
 from routes.tags import router as _tags_router  # noqa: E402
 from services.automation_rules import (  # noqa: E402
+    _run_tag_filter_rules_for_feed,
     # The six _run_*_rules_after_refresh dispatchers and _apply_youtube_playlist_rules/
     # _entry_matches_rule have no caller left inside main.py itself now that
     # _run_automation_after_refresh has moved too -- kept importable here only for tests

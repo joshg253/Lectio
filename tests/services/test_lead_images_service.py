@@ -2991,3 +2991,24 @@ def test_image_inside_an_open_author_box_is_still_skipped():
     service = _build_service(Path("/tmp"), [])
     assert service._in_open_author_context('<div class="author-box"><div class="avatar">') is True
     assert service._in_open_author_context('<address class="article-author">X</address><figure>') is False
+
+
+def test_page_tag_sink_runs_for_ids_queued_while_an_idless_fetch_is_in_flight(tmp_path: Path):
+    import threading
+
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    gate = threading.Event()
+
+    def slow_fetch(url):
+        gate.wait(5)
+        return ("<html></html>", url, False)
+
+    service._fetch_page_html = slow_fetch  # type: ignore[method-assign]
+    seen: list[tuple[str, str]] = []
+    service.set_page_tag_sink(lambda feed, entry, html, url: seen.append((feed, entry)))
+    link = "https://gg.deals/post/"
+    service.queue_source_html_fetch(link)  # a list render: no ids
+    service.queue_source_html_fetch(link, feed_url="f", entry_id="e")  # the pane: ids, but the fetch is already running
+    gate.set()
+    assert service.wait_for_source_html_fetch(link, timeout=5)
+    assert seen == [("f", "e")]

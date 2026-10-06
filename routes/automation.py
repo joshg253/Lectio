@@ -48,7 +48,7 @@ from main import (
     url_guard,
     youtube_duration_service,
 )
-from services import dedup
+from services import dedup, page_topics
 from services.automation_rules import _dedup_false_matches, _run_now_dedup, _run_now_pattern, _run_tag_filter
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
 
@@ -397,6 +397,8 @@ def tag_filter_toggle_route(
     and apply it to unread entries immediately."""
     with get_meta_connection() as conn:
         result = toggle_feed_tag_filter(conn, feed_url, tag, sign)
+        if "error" not in result:
+            page_topics.enable_if_page_sourced(conn, feed_url)
     if "error" in result:
         return JSONResponse({"error": result["error"]}, status_code=400)
     result["ok"] = True
