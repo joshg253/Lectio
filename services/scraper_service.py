@@ -267,9 +267,13 @@ def extract_link_items(html: str, source_url: str, selector: str) -> list[dict]:
     (see _title_quality) rather than just the first one encountered.
     """
     soup = BeautifulSoup(html, "html.parser")
+    return _dedupe_anchor_items(_resolve_link_anchors(soup, str(selector or "").strip()), source_url)
+
+
+def _dedupe_anchor_items(anchors: list, source_url: str) -> list[dict]:
     order: list[str] = []
     best_by_url: dict[str, dict] = {}
-    for anchor in _resolve_link_anchors(soup, str(selector or "").strip()):
+    for anchor in anchors:
         item = _anchor_to_item(anchor, source_url)
         if not item:
             continue
@@ -475,21 +479,27 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     selector = str(feed.get("selector") or "").strip()
     soup = BeautifulSoup(html, "html.parser")
-    link_elements = _resolve_link_anchors(soup, selector)
+    items = _dedupe_anchor_items(_resolve_link_anchors(soup, selector), str(feed["source_url"]))
 
-    existing_urls: set[str] = {
-        str(r["entry_url"])
-        for r in conn.execute("SELECT entry_url FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)).fetchall()
+    existing = {
+        str(r["entry_url"]): str(r["title"] or "")
+        for r in conn.execute("SELECT entry_url, title FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)).fetchall()
     }
+    existing_urls: set[str] = set(existing)
+    # Heal entries stored before the duplicate-anchor fix, whose title is just a duration badge.
+    for item in items:
+        old = existing.get(item["url"])
+        if old is not None and not _HAS_LETTER_RE.search(old) and _HAS_LETTER_RE.search(item["title"]):
+            conn.execute(
+                "UPDATE scraped_entries SET title = ? WHERE scraped_feed_id = ? AND entry_url = ?",
+                (item["title"], feed["id"], item["url"]),
+            )
 
     now = datetime.now(timezone.utc).isoformat()
     new_visible = 0
     content_selector = str(feed.get("content_selector") or "").strip()
 
-    for a in link_elements:
-        item = _anchor_to_item(a, str(feed["source_url"]))
-        if not item:
-            continue
+    for item in items:
         abs_url = item["url"]
         if abs_url in existing_urls:
             continue

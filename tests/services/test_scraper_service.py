@@ -164,6 +164,18 @@ def test_extract_link_items_prefers_real_title_over_duplicate_decoration_anchor(
     assert items[0]["title"] == "Open Strings Unlock Little Wing's Potential"
 
 
+def test_link_list_scrape_prefers_real_title_and_heals_duration_titles(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _DUAL_ANCHOR_PAGE if url.endswith("/") else "")
+    conn = _make_conn()
+    feed = {"id": "f1", "source_url": "https://texasbluesalley.com/", "selector": "a.thumbnail-item-link"}
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    row = conn.execute("SELECT title FROM scraped_entries").fetchone()
+    assert row["title"] == "Open Strings Unlock Little Wing's Potential"
+    conn.execute("UPDATE scraped_entries SET title = '15:40'")
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    assert conn.execute("SELECT title FROM scraped_entries").fetchone()["title"] == "Open Strings Unlock Little Wing's Potential"
+
+
 _RANK_PAGE = """
 <html><body>
   <nav><div><div><a href='/login'>Login</a></div><div><a href='/a'>A</a></div>
