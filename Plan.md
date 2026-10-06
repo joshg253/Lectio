@@ -446,3 +446,9 @@ Nothing to do here until one of these recurs or a lead turns up.
   subtrees as XML at ingest.
 - Article-nav post-swap binder exception — mitigated (no more hard-reload on failure), but the
   underlying binder exception still exists somewhere. Grab the console error if it recurs.
+
+### Page-topics auto-enable: mixed feeds
+
+`page_topics.enable_if_page_sourced` skips any feed that has even one RSS-sourced tag, so a feed with RSS section categories plus page-only
+topics (PC Gamer) is never auto-enabled when you filter on a topic; turn it on in Feed Properties. Fix when it bites: judge the tags named in
+the rule (seen only from the page → enable) instead of the whole feed.

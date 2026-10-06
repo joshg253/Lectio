@@ -206,6 +206,7 @@ _META_ATTR_RE = re.compile(r'\b(property|name|content)\s*=\s*("([^"]*)"|\'([^\']
 # article: namespace, not a different taxonomy shape.
 _PAGE_TAG_KEYS = {"article:tag", "og:article:tag", "parsely-tags", "keywords", "news_keywords", "sailthru.tags"}
 _SINGLE_VALUE_META_TAG_KEYS = {"article:tag", "og:article:tag"}
+_GENERIC_KEYWORD_META_KEYS = {"keywords", "news_keywords"}
 _MAX_PAGE_TAGS = 15
 # Distinct 4-digit years on one page that mark an archive list rather than tags.
 _ARCHIVE_YEAR_RUN = 5
@@ -537,6 +538,14 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
     html = _NAV_RE.sub(" ", html)
     html = _NAV_CLASS_UL_RE.sub(" ", html)
     values: list[str] = []
+    # A page that marks its own tags with rel="tag" has stated them; its generic keywords meta is then site-wide SEO boilerplate
+    # (gg.deals ships "steam summer sale, price tracker, Uplay, ..." on every article), not this article's taxonomy.
+    has_rel_tag = False
+    for anchor in _ANCHOR_RE.finditer(html):
+        rel_match = re.search(r"""\brel\s*=\s*["']?([^"'>]*)""", anchor.group(1), re.IGNORECASE)
+        if rel_match and "tag" in rel_match.group(1).lower().split():
+            has_rel_tag = True
+            break
     for meta in _META_TAG_RE.findall(html):
         attrs: dict[str, str] = {}
         for m in _META_ATTR_RE.finditer(meta):
@@ -544,6 +553,8 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
         key = (attrs.get("property") or attrs.get("name") or "").strip().lower()
         content = (attrs.get("content") or "").strip()
         if key not in _PAGE_TAG_KEYS or not content:
+            continue
+        if has_rel_tag and key in _GENERIC_KEYWORD_META_KEYS:
             continue
         if key in _SINGLE_VALUE_META_TAG_KEYS:
             values.append(content)
@@ -617,6 +628,8 @@ def extract_page_tags(html: str | None, source_url: str | None = None) -> list[s
         classes = (attrs.get("class") or "").lower()
         if "tag" not in classes or attrs.get("title"):
             continue  # titled anchors are the tier above's job
+        if "author" in classes:
+            continue  # a byline link (gg.deals "tag-author-link"); the author is already its own filter pseudo-tag
         body = m.group(2)
         if "<" in body:
             continue  # wraps markup — not a plain tag label

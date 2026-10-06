@@ -868,6 +868,8 @@ class LeadImageService:
         # Small bounded cache of recently-fetched source HTML (entry_link → (final_url, html)).
         # Avoids a second HTTP request when extracting img alt text after lead image resolution.
         self._source_html_cache: OrderedDict[str, tuple[str, str]] = OrderedDict()
+        # entry_link -> {(feed_url, entry_id)} awaiting the in-flight source-page fetch, for the page-tag sink.
+        self._tag_targets: dict[str, set[tuple[str, str]]] = {}
         self._SOURCE_HTML_CACHE_MAX = 8
         # Events signalled when queue_source_html_fetch completes; lets the first-open entry
         # render wait briefly for caption text rather than deferring to the next open.
@@ -4410,8 +4412,14 @@ class LeadImageService:
             return
         html_key = ("__html__", entry_link)
         if html_key in self._source_fetch_in_progress:
+            # The fetch already running may have been queued without feed/entry ids (a list render, say); leaving this call's ids
+            # behind lets its sink still run on completion instead of the page tags being silently dropped.
+            if feed_url and entry_id:
+                self._tag_targets.setdefault(entry_link, set()).add((feed_url, entry_id))
             return
         self._source_fetch_in_progress.add(html_key)
+        if feed_url and entry_id:
+            self._tag_targets.setdefault(entry_link, set()).add((feed_url, entry_id))
         event = threading.Event()
         self._source_html_fetch_events[entry_link] = event
         # store_entry_image_alt writes through the context-bound meta connection;
@@ -4436,14 +4444,16 @@ class LeadImageService:
                                 is_webcomic=self._is_feed_webcomic(feed_url),
                             )
                             self.store_entry_image_alt(feed_url, entry_id, alt, title_text=title)
-                        if feed_url and entry_id and self._page_tag_sink is not None:
-                            try:
-                                self._page_tag_sink(feed_url, entry_id, source_html, entry_link)
-                            except Exception:
-                                LOGGER.warning("page-tag sink failed for %s", entry_link, exc_info=True)
+                        if self._page_tag_sink is not None:
+                            for target_feed, target_entry in self._tag_targets.pop(entry_link, set()):
+                                try:
+                                    self._page_tag_sink(target_feed, target_entry, source_html, entry_link)
+                                except Exception:
+                                    LOGGER.warning("page-tag sink failed for %s", entry_link, exc_info=True)
             except Exception:
                 pass
             finally:
+                self._tag_targets.pop(entry_link, None)
                 self._source_fetch_in_progress.discard(html_key)
                 event.set()
                 self._source_html_fetch_events.pop(entry_link, None)

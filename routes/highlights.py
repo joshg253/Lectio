@@ -42,9 +42,11 @@ from main import (
     parse_tag_filter_spec,
     quire_project_oid,
     remove_highlight_keyword,
+    resolve_rule_feed_urls,
     url_guard,
     youtube_oauth_connected,
 )
+from services import page_topics
 from services.webhooks import WEBHOOK_VALID_FORMATS
 
 router = APIRouter()
@@ -188,6 +190,13 @@ def _validate_highlight_rule(
     return None
 
 
+def _enable_page_capture_for_tag_filter(scope: str, scope_id: str) -> None:
+    """A tag filter over page-scraped tags only fires at ingest if the feed's page-topics capture is on; switch it on for the rule's
+    feeds that have page-only tags (never an explicit off)."""
+    with get_meta_connection() as conn:
+        page_topics.enable_for_rule_scope(conn, resolve_rule_feed_urls(conn, scope, scope_id))
+
+
 def _highlight_rule_response(
     scope,
     scope_id,
@@ -322,6 +331,8 @@ def add_highlight_route(
             yt_max_minutes,
             label=label,
         )
+    if type == "tag_filter" and enabled:
+        _enable_page_capture_for_tag_filter(scope, scope_id)
     return _highlight_rule_response(
         scope,
         scope_id,
@@ -449,6 +460,8 @@ def edit_highlight_route(
             rule_uid,
             label,
         )
+    if type == "tag_filter" and enabled:
+        _enable_page_capture_for_tag_filter(scope, scope_id)
     return _highlight_rule_response(
         scope,
         scope_id,
@@ -505,6 +518,15 @@ def toggle_highlight_route(
             "UPDATE highlight_keywords SET enabled = ? WHERE scope = ? AND scope_id = ? AND keyword = ?",
             (1 if enabled else 0, scope, scope_id, keyword.strip()),
         )
+        is_tag_filter = (
+            enabled
+            and conn.execute(
+                "SELECT 1 FROM highlight_keywords WHERE type = 'tag_filter' AND scope = ? AND scope_id = ? AND keyword = ?",
+                (scope, scope_id, keyword.strip()),
+            ).fetchone()
+        )
+    if is_tag_filter:
+        _enable_page_capture_for_tag_filter(scope, scope_id)
     return JSONResponse({"ok": True, "enabled": bool(enabled)})
 
 

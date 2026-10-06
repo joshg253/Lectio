@@ -66,7 +66,7 @@ def _entry(eid, link=None):
     return SimpleNamespace(feed_url=FEED, id=eid, link=link if link is not None else f"https://www.pcgamer.com/games/{eid}/")
 
 
-def _service(connect, entries, responses=None):
+def _service(connect, entries, responses=None, **extra):
     calls: list[str] = []
     tags = FeedTagService(get_meta_connection=connect)
 
@@ -83,6 +83,7 @@ def _service(connect, entries, responses=None):
         fetch_prefix=fetch,
         extract_tags=lambda html, url: [t for t in ("Games", "Krafton") if f'content="{t}"' in html],
         record_tags=lambda fu, eid, t: tags.record_entry_tags(fu, [(eid, t)], source="page"),
+        **extra,
     )
     return svc, calls, tags
 
@@ -170,3 +171,70 @@ def test_turning_it_off_drops_the_backlog(tmp_path):
     _set_folder(connect, on=False)
     svc.drain([FEED], "u1")
     assert calls == [] and _queued(connect) == []
+
+
+def test_refused_prefix_falls_back_to_the_escalated_fetch_and_fires_the_hook_once(tmp_path):
+    connect = _meta(tmp_path)
+    _set_folder(connect, on=True)
+    entries = [_entry(f"e{i}") for i in range(2)]
+    refused = {e.link: ("", 403) for e in entries}
+    hooked: list[str] = []
+    svc, _, _ = _service(connect, entries, refused, fetch_escalated=lambda url: PAGE, on_tags_recorded=hooked.append)
+    for e in entries:
+        svc.on_entry_updated(e, is_new=True)
+    svc.drain([FEED], "u1")
+    assert _tags(connect, "e0") == [("Games", "page"), ("Krafton", "page")]
+    assert hooked == [FEED]  # once per drained batch, not per entry
+
+
+def test_refused_prefix_without_escalation_still_pauses_and_skips_the_hook(tmp_path):
+    connect = _meta(tmp_path)
+    _set_folder(connect, on=True)
+    e = _entry("a")
+    hooked: list[str] = []
+    svc, _, _ = _service(connect, [e], {e.link: ("", 403)}, on_tags_recorded=hooked.append)
+    svc.on_entry_updated(e, is_new=True)
+    svc.drain([FEED], "u1")
+    assert _tags(connect, "a") == [] and hooked == []
+
+
+def _seed_tag(connect, source):
+    with connect() as c:
+        c.execute("INSERT INTO entry_feed_tags VALUES (?, 'a', 'Dell', 0, ?)", (FEED, source))
+
+
+def _pref(connect):
+    with connect() as c:
+        row = c.execute("SELECT capture_page_topics FROM feed_display_prefs WHERE feed_url = ?", (FEED,)).fetchone()
+    return None if row is None else row[0]
+
+
+def test_filtering_on_page_only_tags_turns_capture_on(tmp_path):
+    connect = _meta(tmp_path)
+    _seed_tag(connect, "page")
+    with connect() as c:
+        assert page_topics.enable_if_page_sourced(c, FEED) is True
+    assert _pref(connect) == 1
+
+
+def test_enable_leaves_feed_tagged_feeds_and_explicit_choices_alone(tmp_path):
+    connect = _meta(tmp_path)
+    _seed_tag(connect, "page")
+    with connect() as c:
+        c.execute("INSERT INTO entry_feed_tags VALUES (?, 'b', 'deals', 0, 'feed')", (FEED,))
+        assert page_topics.enable_if_page_sourced(c, FEED) is False
+        c.execute("DELETE FROM entry_feed_tags WHERE source = 'feed'")
+        c.execute("INSERT INTO feed_display_prefs (feed_url, capture_page_topics) VALUES (?, 0)", (FEED,))
+        assert page_topics.enable_if_page_sourced(c, FEED) is False
+    assert _pref(connect) == 0
+
+
+def test_rule_scope_enables_only_page_only_feeds(tmp_path):
+    connect = _meta(tmp_path)
+    other = "https://example.com/feed"
+    with connect() as c:
+        c.execute("INSERT INTO entry_feed_tags VALUES (?, 'a', 'Dell', 0, 'page')", (FEED,))
+        c.execute("INSERT INTO entry_feed_tags VALUES (?, 'a', 'x', 0, 'feed')", (other,))
+        assert page_topics.enable_for_rule_scope(c, [FEED, other]) == 1
+        assert page_topics.enable_for_rule_scope(c, None) == 0  # already on / not page-only
+    assert _pref(connect) == 1

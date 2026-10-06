@@ -1331,6 +1331,25 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
         LOGGER.exception("[yt-playlist-auto] error in _run_youtube_playlist_rules_after_refresh")
 
 
+def _run_tag_filter_rules_for_feed(feed_url: str) -> None:
+    """Run only the enabled tag_filter rules covering *feed_url*. For feeds whose tags arrive after the refresh pass (page topics)."""
+    with get_meta_connection() as conn:
+        rules = [r for r in get_highlight_keywords(conn) if r.get("enabled") and r.get("type") == "tag_filter"]
+        folder_ids: set[int] = set()
+        for r in rules:
+            folder_ids |= rule_scope_folder_ids(str(r.get("scope", "")), str(r.get("scope_id") or ""))
+        folder_feed_map = {fid: get_folder_feed_urls(conn, fid) for fid in folder_ids}
+    now = datetime.now().isoformat()
+    for rule in rules:
+        scope, scope_id, keyword = str(rule.get("scope", "")), str(rule.get("scope_id") or ""), str(rule.get("keyword", ""))
+        if not feed_in_rule_scope(scope, scope_id, feed_url, rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)):
+            continue
+        with get_meta_connection() as conn:
+            result = _run_tag_filter(conn, "feed", feed_url, keyword)
+            if "error" not in result and result.get("count", 0) > 0:
+                _log_auto_run(conn, now, "tag_filter", scope, scope_id, keyword, result)
+
+
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
     if not refreshed_feed_urls:

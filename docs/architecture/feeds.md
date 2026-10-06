@@ -524,8 +524,10 @@ Same opt-in shape and NEW-entry hook as full-content fetch (column `capture_page
 post's page (`url_guard.safe_get_prefix` streams and hangs up — the tag metas sit in `<head>`, ~3.6KB into a 2MB PC Gamer page whose
 `</head>` is ~1MB in) with the honest UA and no escalation; a refusal pauses the host for an hour. Tags come from
 `extract_page_tags` and are stored in `entry_feed_tags` with `source='page'`: the feed's per-entry replace only deletes `source='feed'`
-rows, so topics survive the feed re-delivering the entry. Topics land after the after-refresh tag-filter pass, so a tag-filter rule
-matches them only on later runs.
+rows, so topics survive the feed re-delivering the entry. A refused prefix fetch (GottaDeal 403s the honest UA) falls back to the
+page-fetch ladder capped at the proxy tier. Topics land after the after-refresh tag-filter pass, so once a drained batch has written
+tags the service calls `_run_tag_filter_rules_for_feed` — only that feed's enabled tag-filter rules, not email/webhook — so a rule
+like `-dell` fires at ingest instead of when the post is opened. Needs `capture_page_topics` on for the feed (or its folder); saving or arming a tag-filter rule (or clicking a ▲▼ chip) turns it on, via `enable_for_rule_scope`, for the rule's feeds whose tags are page-only — never over an explicit off, never for feeds that ship their own tags.
 
 ## FakeFeedz entries get the article's own date, and optionally their own body
 
