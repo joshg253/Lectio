@@ -153,6 +153,18 @@ def _write_empty_feed_file(feed_id: str, feed_title: str, source_url: str) -> No
 # ---------------------------------------------------------------------------
 
 
+_RELATIVE_LINK_RE = re.compile(r"""\b(?:href|src)\s*=\s*["'](?!https?:|//|#|data:|mailto:|javascript:|tel:)""", re.IGNORECASE)
+
+
+def absolutize_links(region, base_url: str) -> None:
+    """Rewrite relative href/src inside a selected region (in place) so they resolve off the publisher, not off this host."""
+    for el in region.find_all(True):
+        for attr in ("href", "src"):
+            value = str(el.get(attr) or "").strip()
+            if value and not value.startswith(("#", "data:", "mailto:", "javascript:")):
+                el[attr] = urljoin(base_url, value)
+
+
 def _new_entry_extras(entry_url: str, content_selector: str) -> tuple[str | None, str]:
     """Mine a newly-discovered entry's own page for its published date and
     (when content_selector is set) its body content, from ONE fetch.
@@ -207,7 +219,14 @@ def _new_entry_extras(entry_url: str, content_selector: str) -> tuple[str | None
             region = None
             LOGGER.debug("scrape: content_selector %r failed for %s", content_selector, entry_url, exc_info=True)
         if region is not None:
+            absolutize_links(region, entry_url)
             content = str(region)[:_MAX_CONTENT_BYTES]
+            try:
+                from main import _append_site_embeds  # local import: main imports this module
+
+                content = _append_site_embeds(content, entry_url, html, prepend=True)[:_MAX_CONTENT_BYTES]
+            except Exception:  # noqa: BLE001 — an embed is a bonus
+                LOGGER.debug("scrape: site embed failed for %s", entry_url, exc_info=True)
 
     return (dt.isoformat() if dt else None), content
 
@@ -267,9 +286,13 @@ def extract_link_items(html: str, source_url: str, selector: str) -> list[dict]:
     (see _title_quality) rather than just the first one encountered.
     """
     soup = BeautifulSoup(html, "html.parser")
+    return _dedupe_anchor_items(_resolve_link_anchors(soup, str(selector or "").strip()), source_url)
+
+
+def _dedupe_anchor_items(anchors: list, source_url: str) -> list[dict]:
     order: list[str] = []
     best_by_url: dict[str, dict] = {}
-    for anchor in _resolve_link_anchors(soup, str(selector or "").strip()):
+    for anchor in anchors:
         item = _anchor_to_item(anchor, source_url)
         if not item:
             continue
@@ -475,21 +498,35 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
 
     selector = str(feed.get("selector") or "").strip()
     soup = BeautifulSoup(html, "html.parser")
-    link_elements = _resolve_link_anchors(soup, selector)
+    items = _dedupe_anchor_items(_resolve_link_anchors(soup, selector), str(feed["source_url"]))
 
-    existing_urls: set[str] = {
-        str(r["entry_url"])
-        for r in conn.execute("SELECT entry_url FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)).fetchall()
-    }
+    stored_rows = conn.execute("SELECT entry_url, title, content FROM scraped_entries WHERE scraped_feed_id = ?", (feed["id"],)).fetchall()
+    existing = {str(r["entry_url"]): str(r["title"] or "") for r in stored_rows}
+    # Heal bodies stored before relative links were absolutized: they would resolve off Lectio's own host.
+    for r in stored_rows:
+        body = str(r["content"] or "")
+        if _RELATIVE_LINK_RE.search(body):
+            frag = BeautifulSoup(body, "html.parser")
+            absolutize_links(frag, str(r["entry_url"]))
+            conn.execute(
+                "UPDATE scraped_entries SET content = ? WHERE scraped_feed_id = ? AND entry_url = ?",
+                (str(frag), feed["id"], r["entry_url"]),
+            )
+    existing_urls: set[str] = set(existing)
+    # Heal entries stored before the duplicate-anchor fix, whose title is just a duration badge.
+    for item in items:
+        old = existing.get(item["url"])
+        if old is not None and not _HAS_LETTER_RE.search(old) and _HAS_LETTER_RE.search(item["title"]):
+            conn.execute(
+                "UPDATE scraped_entries SET title = ? WHERE scraped_feed_id = ? AND entry_url = ?",
+                (item["title"], feed["id"], item["url"]),
+            )
 
     now = datetime.now(timezone.utc).isoformat()
     new_visible = 0
     content_selector = str(feed.get("content_selector") or "").strip()
 
-    for a in link_elements:
-        item = _anchor_to_item(a, str(feed["source_url"]))
-        if not item:
-            continue
+    for item in items:
         abs_url = item["url"]
         if abs_url in existing_urls:
             continue

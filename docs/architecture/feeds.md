@@ -558,6 +558,13 @@ different concept from `selector` (which scopes *link discovery* on the *listing
 page) — it scopes *body extraction* on each *entry's own* page, and is applied
 once, at scrape time, not live on every open.
 
+The selector also applies to a re-fetch (`_extract_selected_region`), or tagging a stub would swap the clean body for a readability
+copy with the site chrome around it (36KB for a 1KB lesson). Relative `href`/`src` in the region are made absolute
+(`absolutize_links`), since the body is stored raw and would otherwise resolve off Lectio's own host; the scrape heals older rows.
+`_scrape_link_list` dedupes by URL through `_dedupe_anchor_items`, so a duration-badge thumbnail anchor never beats the caption anchor
+for the title. texasbluesalley.com's video is a JS-only `<mux-player>`; `TexasBluesAlleyPlugin` turns its public playback id into a
+`player.mux.com` iframe, prepended to a selected region (its first heading there is a section label, not a title).
+
 `publish_date.from_visible_text` needed a second tier for this. Its matcher wants
 an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS
 frameworks never provide — the byline lives in

@@ -164,6 +164,18 @@ def test_extract_link_items_prefers_real_title_over_duplicate_decoration_anchor(
     assert items[0]["title"] == "Open Strings Unlock Little Wing's Potential"
 
 
+def test_link_list_scrape_prefers_real_title_and_heals_duration_titles(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _DUAL_ANCHOR_PAGE if url.endswith("/") else "")
+    conn = _make_conn()
+    feed = {"id": "f1", "source_url": "https://texasbluesalley.com/", "selector": "a.thumbnail-item-link"}
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    row = conn.execute("SELECT title FROM scraped_entries").fetchone()
+    assert row["title"] == "Open Strings Unlock Little Wing's Potential"
+    conn.execute("UPDATE scraped_entries SET title = '15:40'")
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    assert conn.execute("SELECT title FROM scraped_entries").fetchone()["title"] == "Open Strings Unlock Little Wing's Potential"
+
+
 _RANK_PAGE = """
 <html><body>
   <nav><div><div><a href='/login'>Login</a></div><div><a href='/a'>A</a></div>
@@ -223,3 +235,28 @@ def test_preview_page_feed_change_detect(monkeypatch):
     out = scraper_service.preview_page_feed("https://basslessons.be/", "change_detect", "ul")
     assert out["mode"] == "change_detect"
     assert "Diana Ross" in out["content_preview"]
+
+
+def test_absolutize_links_resolves_relative_href_and_src_only():
+    from bs4 import BeautifulSoup
+
+    region = BeautifulSoup(
+        '<div><a href="/woodshed/tag/Hendrix">H</a><img src="img/a.png"><a href="#top">t</a><a href="https://x.test/y">y</a></div>',
+        "html.parser",
+    ).div
+    scraper_service.absolutize_links(region, "https://texasbluesalley.com/woodshed/free-lessons/lesson")
+    out = str(region)
+    assert 'href="https://texasbluesalley.com/woodshed/tag/Hendrix"' in out
+    assert 'src="https://texasbluesalley.com/woodshed/free-lessons/img/a.png"' in out
+    assert 'href="#top"' in out and 'href="https://x.test/y"' in out
+
+
+def test_link_list_scrape_heals_relative_links_in_stored_bodies(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE if url == "https://basslessons.be/" else "")
+    conn = _make_conn()
+    feed = {"id": "f1", "source_url": "https://basslessons.be/", "selector": "a"}
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    conn.execute("UPDATE scraped_entries SET content = '<div><a href=\"/tag/x\">x</a></div>'")
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    body = conn.execute("SELECT content FROM scraped_entries LIMIT 1").fetchone()["content"]
+    assert 'href="https://basslessons.be/tag/x"' in body

@@ -169,3 +169,15 @@ def test_a_full_article_behind_a_null_placeholder_is_not_refetched(thin_entry, m
     monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: pytest.fail("must not re-fetch"))
 
     assert main._maybe_autofetch_on_keep(FEED, "full") is False
+
+
+def test_truncated_teaser_with_read_more_trailer_counts_as_a_stub():
+    teaser = (
+        '<img src="https://example.test/a.png"><p>'
+        + "Arpeggios are one of the most important tools in a bass player's vocabulary. " * 5
+        + "The way we organize our fingers can make the difference...</p>"
+        '<p>Read <a href="https://example.test/post">Arpeggio Fingering</a> on <a href="https://example.test">Bass Magazine</a>.</p>'
+    )
+    assert main._archived_copy_is_plausible(teaser)  # the trailer alone clears the length floor
+    assert main._is_truncated_teaser(teaser)
+    assert not main._is_truncated_teaser("<p>" + "A full article that simply ends. " * 30 + "Read more on this elsewhere.</p>")

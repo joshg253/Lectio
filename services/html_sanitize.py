@@ -389,6 +389,7 @@ _EMBED_HOST_ALLOWLIST = frozenset(
         "archive.org",
         "soundslice.com",
         "instagram.com",
+        "player.mux.com",
     }
 )
 # allow-same-origin refers to the *embed's* origin (a different host), so the

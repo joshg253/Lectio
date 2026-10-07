@@ -583,7 +583,9 @@ stored feed content — so a truncated feed still showed its teaser there.
   copy can only make it worse — the live page may now be a paywall, a cookie wall,
   a 404, or a readability miss that locks onto a sidebar (the illogicalcontraption
   case). Overwriting a good article at the exact moment the
-  reader marked it worth keeping is the failure being avoided.
+  reader marked it worth keeping is the failure being avoided. An ellipsis-cut
+  excerpt plus a "Read X on Y." trailer (`_is_truncated_teaser`) still counts as
+  thin: the trailer alone can clear the length floor.
 - **Only from the star and tag ROUTES**, never from `set_manual_tags_for_entry`.
   That service is also driven by the feed auto-taggers, at ingest, across
   everything a refresh just delivered — hooking it would turn one refresh into a

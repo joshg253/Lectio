@@ -175,7 +175,7 @@ def test_auto_refetch_only_fires_for_a_thin_stored_copy():
     assert "_archived_copy_is_plausible" in src
     # ...and bails out when it IS plausible, rather than merely mentioning it.
     body = src[src.index('"""', src.index('"""') + 3) + 3 :]
-    assert re.search(r"if _archived_copy_is_plausible\(stored\):\s*\n\s*return", body)
+    assert re.search(r"if _archived_copy_is_plausible\(stored\) and not _is_truncated_teaser\(stored\):\s*\n\s*return", body)
 
 
 def test_auto_refetch_is_wired_to_the_routes_not_the_tag_service():
@@ -206,3 +206,28 @@ def test_auto_refetch_runs_under_the_tenancy_helper():
     src = inspect.getsource(main._maybe_autofetch_on_keep)
     assert "_run_in_user_context" in src
     assert "tenancy.current_user_id()" in src
+
+
+def test_extract_selected_region_keeps_only_the_selected_block(monkeypatch):
+    """A scraped feed's content_selector must survive a re-fetch; readability keeps the site chrome."""
+
+    class _Result:
+        html = "<html><head><title>Lesson</title></head><body><nav>menu</nav><div id='a'><p>body</p></div></body></html>"
+
+    monkeypatch.setattr(main.page_fetcher, "fetch", lambda *a, **k: _Result())
+    cap: dict = {}
+    assert main._extract_selected_region("https://x.test/p", "#a", cap) == ("Lesson", '<div id="a"><p>body</p></div>')
+    assert main._extract_selected_region("https://x.test/p", "#missing", cap) is None
+    assert cap["raw_html"] == _Result.html
+
+
+def test_selected_region_embed_goes_before_the_region_not_after_its_first_heading(monkeypatch):
+    class _Result:
+        html = "<mux-player playback-id='abc123'></mux-player><div id='a'><p>desc</p><h3>Tags</h3><table></table></div>"
+
+    monkeypatch.setattr(main.page_fetcher, "fetch", lambda *a, **k: _Result())
+    extracted = main._extract_selected_region("https://texasbluesalley.com/woodshed/free-lessons/x", "#a", {})
+    assert extracted is not None
+    _title, body = extracted
+    assert body.startswith('<p class="lectio-embed"><iframe')
+    assert body.index("player.mux.com/abc123") < body.index("desc") < body.index("Tags")

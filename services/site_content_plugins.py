@@ -321,8 +321,49 @@ class SoundPublishingPlugin:
         return None
 
 
+@dataclass(frozen=True)
+class TexasBluesAlleyPlugin:
+    """texasbluesalley.com lessons: the video is a ``<mux-player playback-id=…>`` custom element that only renders with JS.
+
+    The playback id is public (stream.mux.com serves the HLS with no token), and Mux's own iframe player takes it directly, so the
+    embed is built from the id already in the fetched HTML. Body extraction is left to the feed's content selector or readability.
+    """
+
+    _HOST = "texasbluesalley.com"
+    _PLAYBACK_ID_RE = re.compile(r"""<mux-player\b[^>]*?\bplayback-id\s*=\s*["']([A-Za-z0-9]+)["']""", re.IGNORECASE)
+
+    def handles(self, *, source_url: str) -> bool:
+        try:
+            host = (urlparse(source_url).netloc or "").lower().split(":", 1)[0].rstrip(".")
+        except ValueError:
+            return False
+        return host == self._HOST or host.endswith("." + self._HOST)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return True
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        match = self._PLAYBACK_ID_RE.search(raw_html or "")
+        if match is None:
+            return None
+        return (
+            f'<iframe src="https://player.mux.com/{match.group(1)}" width="640" height="360" '
+            'allow="fullscreen; picture-in-picture" allowfullscreen></iframe>'
+        )
+
+
 DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
+    TexasBluesAlleyPlugin(),
     PaizoBlogPlugin(),
     DeveloperAndroidPlugin(),
     SoundPublishingPlugin(),

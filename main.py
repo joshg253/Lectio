@@ -11553,7 +11553,7 @@ def _strip_site_chrome(raw_html: str, source_url: str) -> str:
         return raw_html
 
 
-def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> str:
+def _append_site_embeds(article_html: str, source_url: str, raw_html: str, *, prepend: bool = False) -> str:
     """Append a per-site embed the page only produces via JS.
 
     ``_reinject_readability_embeds`` above recovers embeds that were in the
@@ -11576,6 +11576,9 @@ def _append_site_embeds(article_html: str, source_url: str, raw_html: str) -> st
         return article_html  # the sanitizer rejected it — say nothing
     if not site_content_plugins.embed_at_top(source_url):
         return f"{article_html}{clean}"
+    if prepend:
+        # A caller-selected region has no title of its own; its first heading is a section label ("Tags").
+        return f"{clean}{article_html}"
     # At the top means after the article's own heading, if it has one — above it
     # the video reads as a banner rather than as part of the piece.
     return _insert_after_first_heading(article_html, clean)
@@ -24308,6 +24311,22 @@ def _autofetch_prune_stale_jobs() -> None:
             _autofetch_jobs.pop(key, None)
 
 
+# A feed's "Read <title> on <site>." / "The post … appeared first on …" trailer after an excerpt cut off with an ellipsis.
+_TEASER_TRAILER_RE = re.compile(
+    r"(?:\.{3}|\u2026)\s*(?:\[\s*(?:\.{3}|\u2026)\s*\]\s*)?(?:Read\b.{0,300}?\bon\b.{0,200}?|The post\b.{0,300}?\bon\b.{0,200}?)\.?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _is_truncated_teaser(html_text: str) -> bool:
+    """An excerpt cut off mid-thought plus the feed's read-more trailer: the trailer alone can push it past the plausibility
+    floor (Bass Musician Magazine: 446 characters, 79 of them the trailer), so the keep-time re-fetch skipped a stub."""
+    if not html_text:
+        return False
+    text = re.sub(r"\s+", " ", _READER_TEXT_TAG_RE.sub(" ", html_text)).strip()
+    return bool(_TEASER_TRAILER_RE.search(text))
+
+
 def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
     """Re-fetch a *stub* article in the background when it is starred or tagged.
 
@@ -24349,7 +24368,7 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
         # and that made a full article look thin, so tagging it overwrote it with a worse extraction.
         _best = _richest_content(entry, entry.content[0] if entry.content else None)
         stored = (_best.value if _best is not None else None) or entry.summary or ""
-        if _archived_copy_is_plausible(stored):
+        if _archived_copy_is_plausible(stored) and not _is_truncated_teaser(stored):
             return False  # a real article already — leave it alone
         host = urlparse(entry.link).netloc.lower()
         if _autofetch_host_in_cooldown(host):
@@ -24451,6 +24470,39 @@ page_topics_service = page_topics.PageTopicsService(
 )
 
 
+def _scraped_feed_content_selector(feed_url: str) -> str:
+    """The per-feed content_selector of a scraped (file://) feed, or "" when there is none."""
+    feed_id = scraper_service.scraped_feed_id_from_url(feed_url)
+    if not feed_id:
+        return ""
+    try:
+        with get_meta_connection() as conn:
+            row = conn.execute("SELECT content_selector FROM scraped_feeds WHERE id = ?", (feed_id,)).fetchone()
+    except Exception:  # noqa: BLE001 — table may not exist; fall back to readability
+        return ""
+    return str(row[0] or "").strip() if row else ""
+
+
+def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cooldown: bool = False) -> tuple[str, str] | None:
+    """Fetch *url* and return ``(title, html)`` of the first element matching *selector*, or None when it matches nothing."""
+    from bs4 import BeautifulSoup
+
+    result = page_fetcher.fetch(
+        url, timeout=12.0, refusal_statuses=_READABILITY_REFUSAL_STATUSES, max_tier="flaresolverr", ignore_cooldown=ignore_cooldown
+    )
+    capture["raw_html"] = result.html
+    soup = BeautifulSoup(result.html, "html.parser")
+    try:
+        region = soup.select_one(selector)
+    except Exception:  # noqa: BLE001 — a bad selector falls back to readability
+        return None
+    if region is None:
+        return None
+    title = soup.title.get_text(strip=True) if soup.title else ""
+    scraper_service.absolutize_links(region, url)
+    return title, _append_site_embeds(str(region), url, result.html, prepend=True)
+
+
 def _refresh_captured_article_for_current_user(
     feed_url: str,
     entry_id: str,
@@ -24501,7 +24553,15 @@ def _refresh_captured_article_for_current_user(
     # second request. readability strips head metadata, which is where the date is.
     _capture: dict = {}
 
+    _scraped_selector = _scraped_feed_content_selector(feed_url) if mode != CAPTURE_MODE_ARCHIVE else ""
+
     def extract(url: str):
+        # A scraped feed with a content selector names the article region itself; readability on its pages keeps the site
+        # chrome (texasbluesalley: nav, footer, 36 KB around a 1 KB lesson description).
+        if _scraped_selector:
+            region = _extract_selected_region(url, _scraped_selector, _capture, ignore_cooldown)
+            if region:
+                return region
         # An explicit archive re-fetch ignores the URL the caller would have
         # used: the snapshot IS the target.
         target = from_archive or url
