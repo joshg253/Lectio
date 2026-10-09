@@ -101,5 +101,5 @@ def reformat(body: str) -> str:
         if title_link is None or not offers:
             return body
         low_note = f" <small>(low {html.escape(low)})</small>" if low else ""
-        items.append(f"<li>{_link(title_link)}{low_note}<br>" + "<br>".join(offers) + "</li>")
+        items.append(f'<li style="margin-bottom:0.7em">{_link(title_link)}{low_note}<br>' + "<br>".join(offers) + "</li>")
     return "<ul>" + "".join(items) + "</ul>"

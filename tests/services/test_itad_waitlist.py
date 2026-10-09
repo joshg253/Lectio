@@ -25,7 +25,7 @@ def test_is_itad_feed():
 
 def test_reformat_folds_each_offer_onto_one_line():
     out = itad_waitlist.reformat(BODY)
-    assert out.count("<li>") == 2
+    assert out.count("<li ") == 2
     assert "Game &amp; B" in out
     assert "−80% · on GOG · <strong>historical low</strong>" in out  # price equals the low
     assert "with voucher <code>ITAD</code>" in out
