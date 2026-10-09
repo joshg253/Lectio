@@ -60,7 +60,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
-from services import full_content_fetch
+from services import full_content_fetch, itad_waitlist
 from services import page_topics
 from services.errors import public_error
 from services.redirects import local_url
@@ -17382,6 +17382,10 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     cards, the WordPress "appeared first on" footer, qwantz nav tables, sanitized
     embed-container iframes, and recovery of stripped YouTube embeds."""
     content_html = _strip_trailing_recirculation_rail(content_html) if isinstance(content_html, str) else content_html
+
+    # IsThereAnyDeal waitlist: one compact line per game offer instead of a column of one-word lines.
+    if isinstance(content_html, str) and itad_waitlist.is_itad_feed(feed_url):
+        content_html = itad_waitlist.reformat(content_html)
 
     # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
     # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
