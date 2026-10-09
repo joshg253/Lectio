@@ -24465,7 +24465,7 @@ page_topics_service = page_topics.PageTopicsService(
     extract_tags=lambda html, url: feed_tags_service_mod.extract_page_tags(html, url),
     record_tags=lambda feed_url, entry_id, tags: feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)], source="page"),
     is_excluded_feed=lambda feed_url: saved_articles_service.is_saved_articles_feed(feed_url),
-    fetch_escalated=lambda url: page_fetcher.fetch(url, timeout=12.0, max_tier="proxy").html,
+    fetch_escalated=lambda url: page_fetcher.fetch(url, timeout=15.0, refusal_statuses=frozenset({403, 503})).html,
     on_tags_recorded=lambda feed_url: _run_tag_filter_rules_for_feed(feed_url),
 )
 
