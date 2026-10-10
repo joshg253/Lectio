@@ -525,7 +525,7 @@ post's page (`url_guard.safe_get_prefix` streams and hangs up — the tag metas 
 `</head>` is ~1MB in) with the honest UA and no escalation; a refusal pauses the host for an hour. Tags come from
 `extract_page_tags` and are stored in `entry_feed_tags` with `source='page'`: the feed's per-entry replace only deletes `source='feed'`
 rows, so topics survive the feed re-delivering the entry. A refused prefix fetch (GottaDeal 403s the honest UA) falls back to the
-page-fetch ladder with every tier available, FlareSolverr included, as on entry open (a Cloudflare-fronted host like gg.deals refuses everything below it, so a proxy-tier cap left those entries untagged until opened). Topics land after the after-refresh tag-filter pass, so once a drained batch has written
+page-fetch ladder with every tier available, FlareSolverr included, as on entry open (a Cloudflare-fronted host like gg.deals refuses everything below it, so a proxy-tier cap left those entries untagged until opened). When the single shared solve slot stays busy for the whole wait the entry is requeued for the next cycle and the host is not paused, since the site was never tried. Topics land after the after-refresh tag-filter pass, so once a drained batch has written
 tags the service calls `_run_tag_filter_rules_for_feed` — only that feed's enabled tag-filter rules, not email/webhook — so a rule
 like `-dell` fires at ingest instead of when the post is opened. Needs `capture_page_topics` on for the feed (or its folder); saving or arming a tag-filter rule (or clicking a ▲▼ chip) turns it on, via `enable_for_rule_scope`, for the rule's feeds whose tags are page-only — never over an explicit off, never for feeds that ship their own tags.
 

@@ -238,3 +238,25 @@ def test_rule_scope_enables_only_page_only_feeds(tmp_path):
         assert page_topics.enable_for_rule_scope(c, [FEED, other]) == 1
         assert page_topics.enable_for_rule_scope(c, None) == 0  # already on / not page-only
     assert _pref(connect) == 1
+
+
+def test_a_busy_solver_requeues_the_entry_without_pausing_the_host(tmp_path):
+    connect = _meta(tmp_path)
+    _set_folder(connect, on=True)
+    entries = [_entry("a"), _entry("b")]
+    refused = {e.link: ("", 403) for e in entries}
+    calls: list[str] = []
+
+    def busy_then_ok(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise page_topics.FetchDeferred(url)
+        return PAGE
+
+    svc, _, _ = _service(connect, entries, refused, fetch_escalated=busy_then_ok)
+    for e in entries:
+        svc.on_entry_updated(e, is_new=True)
+    svc.drain([FEED], "u1")
+    assert _tags(connect, "a") == []  # deferred, not lost
+    assert _tags(connect, "b") != []  # the host was not paused, so the next entry still ran
+    assert _queued(connect) == ["a"]

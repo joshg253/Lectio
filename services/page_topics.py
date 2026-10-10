@@ -28,6 +28,10 @@ PREFIX_BYTES = 64 * 1024
 HOST_COOLDOWN_S = 3600
 
 
+class FetchDeferred(Exception):
+    """The fetch couldn't run for a reason that isn't the page's fault (the shared solver slot was busy); retry next cycle."""
+
+
 def ensure_schema(conn) -> None:
     conn.execute(
         """
@@ -195,6 +199,13 @@ class PageTopicsService:
             # (gg.deals) need FlareSolverr.
             try:
                 html, status = self._fetch_escalated(link), 200
+            except FetchDeferred:
+                with self._get_meta_connection() as conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO page_topics_queue (feed_url, entry_id, queued_at) VALUES (?, ?, ?)",
+                        (feed_url, entry_id, self._clock()),
+                    )
+                return False
             except Exception as exc:  # noqa: BLE001
                 LOGGER.info("[page-topics] %s: escalated fetch failed (%s); pausing %s", link, exc, host)
                 self._pause_host(host)

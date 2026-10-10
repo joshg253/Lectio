@@ -21,12 +21,15 @@ BODY = """<div>
 def test_is_itad_feed():
     assert itad_waitlist.is_itad_feed("https://isthereanydeal.com/feeds/waitlist.rss?token=x")
     assert not itad_waitlist.is_itad_feed("https://example.com/feeds/waitlist.rss")
+    assert not itad_waitlist.is_itad_feed("https://notisthereanydeal.com/feeds/waitlist.rss")
 
 
 def test_reformat_folds_each_offer_onto_one_line():
     out = itad_waitlist.reformat(BODY)
     assert out.count("<li ") == 2
     assert "Game &amp; B" in out
+    assert '<a href="https://itad.link/1/"' in out and ">$3.44</a>" in out  # each offer keeps its linked price
+    assert '<a href="https://itad.link/2/"' in out and ">$4.46</a>" in out
     assert "−80% · on GOG · <strong>historical low</strong>" in out  # price equals the low
     assert "with voucher <code>ITAD</code>" in out
     assert out.index("Game A") < out.index("Game &amp; B")

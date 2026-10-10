@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, Tag
 
+_HOST = "isthereanydeal.com"
 _LOW_RE = re.compile(r"Historical low:\s*([^\s]+)")
 _PERCENT_RE = re.compile(r"-?\d+%")
 _PRICE_RE = re.compile(r"[\d.,]+")
@@ -20,7 +21,8 @@ _PRICE_RE = re.compile(r"[\d.,]+")
 
 def is_itad_feed(feed_url: str) -> bool:
     parsed = urlparse(feed_url or "")
-    return (parsed.hostname or "").endswith("isthereanydeal.com") and parsed.path.startswith("/feeds/")
+    host = parsed.hostname or ""
+    return host in (_HOST, f"www.{_HOST}") and parsed.path.startswith("/feeds/")
 
 
 def _squash(text: str) -> str:

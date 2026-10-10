@@ -103,7 +103,9 @@ class PageFetchError(Exception):
         challenge: str | None,
         response: httpx.Response | None,
         message: str | None = None,
+        solver_busy: bool = False,
     ) -> None:
+        self.solver_busy = solver_busy  # no tier refused the site; the shared FlareSolverr slot was just taken
         self.url = url
         self.status_code = status_code
         self.tier = tier
@@ -456,6 +458,7 @@ class PageFetcher:
             tier=best.tier if best else deepest_available,
             challenge=challenge_seen,
             response=best.response if best else None,
+            solver_busy=solver_busy,
         )
 
     def _attempt(
