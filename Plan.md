@@ -452,3 +452,9 @@ Nothing to do here until one of these recurs or a lead turns up.
 `page_topics.enable_if_page_sourced` skips any feed that has even one RSS-sourced tag, so a feed with RSS section categories plus page-only
 topics (PC Gamer) is never auto-enabled when you filter on a topic; turn it on in Feed Properties. Fix when it bites: judge the tags named in
 the rule (seen only from the page → enable) instead of the whole feed.
+
+### FlareSolverr slot fairness
+
+The single shared solve slot is a plain semaphore: ingest drains (page topics, full content) and an entry-open fetch compete for it with no priority, and a waiter gives up after 55s. gg.deals needs a ~16s solve per page and ignores the saved cookies, so flipping through several posts right after a refresh can starve an open-time fetch (it now just fails without cooling the host; reopen retries). Fix when it bites: give interactive fetches priority over background ones, and log a failed open-time page-tag fetch.
+
+Related, same area, both predating the gg.deals work: a FlareSolverr *outage* (endpoint timeout or HTTP error, as opposed to a busy slot) still records the 6-hour host block, and an ingest fetch that fails on every tier can land its `record_block` after a concurrent open's `record_success`, re-blocking a host that just worked. Fix with the same "the site was never actually tested" rule, and per-host attempt generations for the race.

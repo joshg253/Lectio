@@ -525,7 +525,7 @@ post's page (`url_guard.safe_get_prefix` streams and hangs up — the tag metas 
 `</head>` is ~1MB in) with the honest UA and no escalation; a refusal pauses the host for an hour. Tags come from
 `extract_page_tags` and are stored in `entry_feed_tags` with `source='page'`: the feed's per-entry replace only deletes `source='feed'`
 rows, so topics survive the feed re-delivering the entry. A refused prefix fetch (GottaDeal 403s the honest UA) falls back to the
-page-fetch ladder capped at the proxy tier. Topics land after the after-refresh tag-filter pass, so once a drained batch has written
+page-fetch ladder with every tier available, FlareSolverr included, as on entry open (a Cloudflare-fronted host like gg.deals refuses everything below it, so a proxy-tier cap left those entries untagged until opened). When the single shared solve slot stays busy for the whole wait the entry is requeued for the next cycle and the host is not paused, since the site was never tried. Topics land after the after-refresh tag-filter pass, so once a drained batch has written
 tags the service calls `_run_tag_filter_rules_for_feed` — only that feed's enabled tag-filter rules, not email/webhook — so a rule
 like `-dell` fires at ingest instead of when the post is opened. Needs `capture_page_topics` on for the feed (or its folder); saving or arming a tag-filter rule (or clicking a ▲▼ chip) turns it on, via `enable_for_rule_scope`, for the rule's feeds whose tags are page-only — never over an explicit off, never for feeds that ship their own tags.
 
@@ -602,6 +602,10 @@ The `[MM:SS]` title prefix becomes `[Premieres in Xd]` for an `upcoming` video, 
 ## dev.to filtered feeds
 
 Dev.to's RSS (front page and per-tag) is an unfiltered firehose that mixes languages, while its public unauthenticated JSON API (`GET https://dev.to/api/articles`) exposes a per-article `language` label, reaction counts, and a `top=N` ranking window. `services/devto.py` follows the DeviantArt/FakeFeedz synthetic-feed pattern: one polite API request per refresh per include tag, client-side filtering (the API ignores `?language=`; we filter on dev.to's *own* `language` field, deliberately not our own detection), then render to `file://` RSS under `DATA_DIR/devto-feeds/` for `reader` to ingest. Per-feed config (tag, top-window days, English-only, min reactions, tags_exclude) lives in the per-user meta table `devto_feeds`; the Add Feed dialog detects dev.to front-page/tag URLs client-side (mirroring `parse_devto_url` — user/org pages are left to their normal small RSS) and reveals the filter fields, and the config is editable later via feed Properties → Tuning (`POST /devto-feeds/{id}/config`). `tag` is a comma-separated include list matched as OR — dev.to's own `tag` API param takes only one value, so multiple tags mean one API call each, merged and deduped by article id, with `tags_exclude` filtered client-side against each article's own `tag_list` rather than relying on the API's exclude param (kept consistent across merged calls that way). Cover images seed the lead-image cache via the same sink mechanism as DeviantArt; deletion is dispatched in `purge_orphaned_feed` alongside the other rendered-feed types. Filter changes shape what arrives from then on — already-ingested entries are kept.
+
+## IsThereAnyDeal waitlist bodies (`services/itad_waitlist.py`)
+
+The waitlist feed's body is a stack of unstyled divs per game, one short line each for price, discount, store and voucher. At render time (`_apply_feed_content_cleanups`, ITAD `/feeds/` URLs only) each offer is folded into one line under its game title, with the historical low beside the title and an extra "historical low" mark when the price is at or under it. Stored content is untouched, and markup that doesn't parse as game blocks is shown as shipped.
 
 ## DeviantArt integration
 
@@ -1029,7 +1033,10 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
 - **Host-keyed, in-memory state**, not a new meta-DB table: `HostEscalationState`
   tracks the cheapest tier known to work per `(user, host)` and a 6h cooldown
   once every tier fails — the direct, tier-aware replacement for
-  `_fetch_page_html`'s old `_waf_block_until`. The cooldown compares the tier
+  `_fetch_page_html`'s old `_waf_block_until`. A FlareSolverr attempt that
+  only timed out waiting for the single shared solve slot says nothing about
+  the host and records no block: it used to, and one busy minute then failed
+  every later open of that site for six hours. The cooldown compares the tier
   available when a host was given up on against the deepest tier available
   now, so a newly-configured proxy/FlareSolverr immediately lifts an old
   block with no invalidation hook. In-memory because losing it on restart

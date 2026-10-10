@@ -412,3 +412,18 @@ def test_challenge_body_recognized_by_bot_challenge_module():
     """Sanity check that the fixture body used above is actually recognized —
     otherwise the flaresolverr-gating tests would be vacuously true."""
     assert bot_challenge.detect_challenge("text/html", CLOUDFLARE_BODY.encode()) == "Cloudflare block"
+
+
+def test_busy_flaresolverr_slot_does_not_cool_the_host_down(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text=CLOUDFLARE_BODY, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    state = page_fetch.HostEscalationState()
+    backends = page_fetch.FetchBackends(mode="as_needed", proxy_url="", flaresolverr_url="http://flaresolverr:8191/v1")
+    fetcher = _fetcher(backends=backends, state=state)
+    fetcher._flaresolverr_max_timeout_ms = 10  # the slot below is never released, so the wait runs out at once
+    fetcher._flaresolverr_semaphore.acquire()
+    with pytest.raises(page_fetch.PageFetchError):
+        fetcher.fetch("https://example.com/page")
+    assert not state.is_blocked("u1", "example.com", best_available="flaresolverr", now=1.0)

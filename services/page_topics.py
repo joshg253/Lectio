@@ -4,9 +4,9 @@ as feed-tag suggestions (``entry_feed_tags`` with ``source='page'``) for feeds w
 Opt-in per folder, overridable per feed (column ``capture_page_topics``, resolved like full-content fetch). A reader NEW-entry hook
 queues entries on opted-in feeds; a background drain fetches up to ``PER_FEED_CAP`` per feed per refresh cycle. Each fetch reads only
 the first ``PREFIX_BYTES`` of the page and hangs up — the tags sit in the head (~3.6KB into a 2MB PC Gamer page), so the rest,
-inline scripts included, is never downloaded. Honest UA first; a refusal falls back to the page-fetch ladder (proxy tier at most) when
-one is wired, and a host that still refuses is paused for an hour. When tags were written, ``on_tags_recorded`` runs the feed's tag-filter
-rules. Each entry is attempted once.
+inline scripts included, is never downloaded. Honest UA first; a refusal falls back to the page-fetch ladder (all tiers, FlareSolverr
+included, as on open) when one is wired, and a host that still refuses is paused for an hour. When tags were written,
+``on_tags_recorded`` runs the feed's tag-filter rules. Each entry is attempted once.
 """
 
 from __future__ import annotations
@@ -26,6 +26,10 @@ COLUMN = "capture_page_topics"
 PER_FEED_CAP = 25
 PREFIX_BYTES = 64 * 1024
 HOST_COOLDOWN_S = 3600
+
+
+class FetchDeferred(Exception):
+    """The fetch couldn't run for a reason that isn't the page's fault (the shared solver slot was busy); retry next cycle."""
 
 
 def ensure_schema(conn) -> None:
@@ -191,9 +195,17 @@ class PageTopicsService:
             self._pause_host(host)
             return False
         if status >= 400 and self._fetch_escalated is not None:
-            # The cheap honest-UA prefix was refused; use the same ladder (capped below FlareSolverr) the reader uses on open.
+            # The cheap honest-UA prefix was refused; use the same ladder the reader uses on open: Cloudflare-fronted sites
+            # (gg.deals) need FlareSolverr.
             try:
                 html, status = self._fetch_escalated(link), 200
+            except FetchDeferred:
+                with self._get_meta_connection() as conn:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO page_topics_queue (feed_url, entry_id, queued_at) VALUES (?, ?, ?)",
+                        (feed_url, entry_id, self._clock()),
+                    )
+                return False
             except Exception as exc:  # noqa: BLE001
                 LOGGER.info("[page-topics] %s: escalated fetch failed (%s); pausing %s", link, exc, host)
                 self._pause_host(host)

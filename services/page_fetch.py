@@ -103,7 +103,9 @@ class PageFetchError(Exception):
         challenge: str | None,
         response: httpx.Response | None,
         message: str | None = None,
+        solver_busy: bool = False,
     ) -> None:
+        self.solver_busy = solver_busy  # no tier refused the site; the shared FlareSolverr slot was just taken
         self.url = url
         self.status_code = status_code
         self.tier = tier
@@ -400,6 +402,7 @@ class PageFetcher:
 
         challenge_seen: str | None = None
         best: _Attempt | None = None
+        solver_busy = False
 
         for tier in tiers:
             if tier == "flaresolverr" and not (challenge_seen or learned == "flaresolverr"):
@@ -415,6 +418,7 @@ class PageFetcher:
                 cookies=stored_cookies,
             )
             best = _pick_better(best, attempt)
+            solver_busy = solver_busy or isinstance(attempt.error, _FlareSolverrBusy)
             if attempt.cookies:
                 self._state.record_cookies(uid, host, attempt.cookies, now=time.time())
             if attempt.status is not None and attempt.headers:
@@ -445,13 +449,16 @@ class PageFetcher:
                     )
                 break
 
-        self._state.record_block(uid, host, deepest_available=deepest_available, challenge=challenge_seen, now=now)
+        # A busy shared solver says nothing about the host: cooling it down for hours would fail every later open of the site.
+        if not solver_busy:
+            self._state.record_block(uid, host, deepest_available=deepest_available, challenge=challenge_seen, now=now)
         raise PageFetchError(
             url,
             status_code=best.status if best else None,
             tier=best.tier if best else deepest_available,
             challenge=challenge_seen,
             response=best.response if best else None,
+            solver_busy=solver_busy,
         )
 
     def _attempt(
@@ -565,7 +572,7 @@ class PageFetcher:
                 final_url=url,
                 headers={},
                 response=None,
-                error=TimeoutError("flaresolverr: busy, timed out waiting for the shared solve slot"),
+                error=_FlareSolverrBusy("flaresolverr: busy, timed out waiting for the shared solve slot"),
             )
         try:
             stack_proxy = flaresolverr.normalize_proxy_scheme(proxy_url) if proxy_url else None
@@ -591,6 +598,10 @@ class PageFetcher:
             error=None,
             cookies=solution.cookies,
         )
+
+
+class _FlareSolverrBusy(TimeoutError):
+    """The shared solve slot stayed taken for the whole wait; the site itself was never tried."""
 
 
 def _attempt_from_response(tier: FetchTier, response: httpx.Response) -> _Attempt:

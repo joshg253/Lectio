@@ -60,7 +60,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
-from services import full_content_fetch
+from services import full_content_fetch, itad_waitlist
 from services import page_topics
 from services.errors import public_error
 from services.redirects import local_url
@@ -17383,6 +17383,10 @@ def _apply_feed_content_cleanups(content_html, feed_url: str, entry_id: str):
     embed-container iframes, and recovery of stripped YouTube embeds."""
     content_html = _strip_trailing_recirculation_rail(content_html) if isinstance(content_html, str) else content_html
 
+    # IsThereAnyDeal waitlist: one compact line per game offer instead of a column of one-word lines.
+    if isinstance(content_html, str) and itad_waitlist.is_itad_feed(feed_url):
+        content_html = itad_waitlist.reformat(content_html)
+
     # NASA Science RSS (earthobservatory.nasa.gov) injects the full site secondary-navigation
     # into content:encoded before the article body. Strip any leading wp-block-nasa-blocks-*
     # divs by tracking div nesting depth so the article starts at actual content.
@@ -24458,6 +24462,16 @@ def _fetch_page_prefix(url: str) -> tuple[str, int]:
     return html, status
 
 
+def _page_topics_escalated_fetch(url: str) -> str:
+    """Full-ladder fetch for page topics; a busy shared solver slot defers the entry rather than counting against the host."""
+    try:
+        return page_fetcher.fetch(url, timeout=15.0).html
+    except page_fetch.PageFetchError as exc:
+        if exc.solver_busy:
+            raise page_topics.FetchDeferred(url) from exc
+        raise
+
+
 page_topics_service = page_topics.PageTopicsService(
     get_meta_connection=lambda: get_meta_connection(),
     get_reader=lambda: get_reader(),
@@ -24465,7 +24479,7 @@ page_topics_service = page_topics.PageTopicsService(
     extract_tags=lambda html, url: feed_tags_service_mod.extract_page_tags(html, url),
     record_tags=lambda feed_url, entry_id, tags: feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)], source="page"),
     is_excluded_feed=lambda feed_url: saved_articles_service.is_saved_articles_feed(feed_url),
-    fetch_escalated=lambda url: page_fetcher.fetch(url, timeout=12.0, max_tier="proxy").html,
+    fetch_escalated=lambda url: _page_topics_escalated_fetch(url),
     on_tags_recorded=lambda feed_url: _run_tag_filter_rules_for_feed(feed_url),
 )
 
