@@ -80,7 +80,9 @@ short version:
   updates doesn't flood the unread list; set it for the instance, an account, a folder or a feed, each only able to shorten the one above.
   Tag-filter rules also work on tags scraped from article pages: for a feed whose tags exist only on the page, saving the rule turns on
   page-tag capture, so matching posts are filtered as they arrive rather than when opened.
+  That capture reaches sites that block plain fetches (Cloudflare-fronted ones) through the same fetch ladder as opening a post.
   Tagging a teaser-only post now fetches the full page even when the excerpt plus its "Read X on Y" footer looks long enough.
+- **IsThereAnyDeal waitlist posts** render one compact line per offer (price, discount, store, voucher) instead of a column of short lines.
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an
   artist Watches them; on a Watch-feed byline, the name filters to that

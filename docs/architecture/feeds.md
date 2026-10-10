@@ -525,7 +525,7 @@ post's page (`url_guard.safe_get_prefix` streams and hangs up — the tag metas 
 `</head>` is ~1MB in) with the honest UA and no escalation; a refusal pauses the host for an hour. Tags come from
 `extract_page_tags` and are stored in `entry_feed_tags` with `source='page'`: the feed's per-entry replace only deletes `source='feed'`
 rows, so topics survive the feed re-delivering the entry. A refused prefix fetch (GottaDeal 403s the honest UA) falls back to the
-page-fetch ladder capped at the proxy tier. Topics land after the after-refresh tag-filter pass, so once a drained batch has written
+page-fetch ladder with every tier available, FlareSolverr included, as on entry open (a Cloudflare-fronted host like gg.deals refuses everything below it, so a proxy-tier cap left those entries untagged until opened). Topics land after the after-refresh tag-filter pass, so once a drained batch has written
 tags the service calls `_run_tag_filter_rules_for_feed` — only that feed's enabled tag-filter rules, not email/webhook — so a rule
 like `-dell` fires at ingest instead of when the post is opened. Needs `capture_page_topics` on for the feed (or its folder); saving or arming a tag-filter rule (or clicking a ▲▼ chip) turns it on, via `enable_for_rule_scope`, for the rule's feeds whose tags are page-only — never over an explicit off, never for feeds that ship their own tags.
 
@@ -1033,7 +1033,10 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
 - **Host-keyed, in-memory state**, not a new meta-DB table: `HostEscalationState`
   tracks the cheapest tier known to work per `(user, host)` and a 6h cooldown
   once every tier fails — the direct, tier-aware replacement for
-  `_fetch_page_html`'s old `_waf_block_until`. The cooldown compares the tier
+  `_fetch_page_html`'s old `_waf_block_until`. A FlareSolverr attempt that
+  only timed out waiting for the single shared solve slot says nothing about
+  the host and records no block: it used to, and one busy minute then failed
+  every later open of that site for six hours. The cooldown compares the tier
   available when a host was given up on against the deepest tier available
   now, so a newly-configured proxy/FlareSolverr immediately lifts an old
   block with no invalidation hook. In-memory because losing it on restart
