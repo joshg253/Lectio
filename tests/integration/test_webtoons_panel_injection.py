@@ -148,3 +148,48 @@ def test_a_src_with_an_html_entity_still_matches_its_host():
     out, _ = _inject(body=body)
     assert len(_srcs(out)) == 3, "the body image is stripped despite the entity"
     assert "x.jpg" not in out
+
+
+def _sized(dims):
+    return "".join(
+        f'<img class="_images" width="{w}" height="{h}" data-url="https://webtoon-phinf.pstatic.net/d/{i}.jpg">'
+        for i, (w, h) in enumerate(dims)
+    )
+
+
+def test_discrete_panels_tile_two_across_with_a_wide_banner():
+    """Table Top: a 800x200 banner then 800x970 panels — discrete, so tiled."""
+    out, _ = _inject(page=_sized([(800, 200), (800, 979), (800, 970), (800, 972)]))
+    assert out.count('<div class="source-gallery">') == 1
+    assert out.count('class="source-gallery-wide"') == 1
+    gallery = out.split('<div class="source-gallery">', 1)[1].split("</div>", 1)[0]
+    assert gallery.count("<figure") == 4, "banner and all three panels sit inside the gallery"
+
+
+def test_a_contiguous_strip_stays_stacked():
+    """Slices of one tall strip (800x1280) must keep their reading order."""
+    out, _ = _inject(page=_sized([(800, 1280)] * 4))
+    assert "source-gallery" not in out
+    assert len(_srcs(out)) == 4, "every slice is still rendered"
+
+
+def test_slices_without_dimensions_stay_stacked():
+    out, _ = _inject()
+    assert "source-gallery" not in out
+    assert len(_srcs(out)) == 3, "every slice is still rendered"
+
+
+def test_trailing_four_panel_composites_replace_the_singles():
+    """Table Top: nine singles then two exactly-800x1000 composites of them."""
+    dims = [(800, 200)] + [(800, 970 + i) for i in range(9)] + [(800, 1000)] * 2
+    out, _ = _inject(page=_sized(dims))
+    srcs = _srcs(out)
+    assert [u.rsplit("/", 1)[1] for u in srcs] == ["0.jpg", "10.jpg", "11.jpg"]
+    assert len(srcs) == 3, "banner plus the two composites"
+    assert "source-gallery" not in out
+
+
+def test_a_short_run_of_1000px_panels_is_not_treated_as_composites():
+    dims = [(800, 970), (800, 972), (800, 1000), (800, 1000)]
+    out, _ = _inject(page=_sized(dims))
+    assert len(_srcs(out)) == 4

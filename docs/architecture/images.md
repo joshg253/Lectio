@@ -1049,3 +1049,9 @@ pinned before its token can die unread.
   are decoded at reduced scale with `draft()` instead of being skipped.
 
 **Lead-image dedup matches resized variants.** `_bs4_strip_opener` falls back to `_img_variant_key` (host + folder + basename minus a `-WxH` or Future-style `-WIDTH-QUALITY` suffix), so a lead at `…-1280-80.jpg` removes a body opener at `…-1200-80.jpg` instead of showing the hero twice.
+
+## Webtoons panels tile when they are discrete
+
+`_inject_webtoons_episode_panels` reads each slice's `width`/`height` off the page. If every non-banner slice is at most 1.3 tall-to-wide, the episode is discrete panels (Table Top: ~800x970) and renders in the 2-across `.source-gallery` grid; banners under 0.5 span both columns. Taller slices (up to 800x1280) are one strip cut into pieces, so they stay stacked to keep the reading order. Missing dimensions also stay stacked.
+
+When the episode ends in a run of exactly 800x1000 slices and has at least four singles per slice before it, those are four-panel composites repeating the singles (Table Top); the singles are dropped and the banner plus composites render stacked.
