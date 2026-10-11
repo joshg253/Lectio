@@ -4273,6 +4273,9 @@ nav.tree.saved-folders-collapsed .tags-tree-block:not(.is-collapsed) .tags-tree-
 .entry-content .source-gallery figure {
   margin: 0;
 }
+.entry-content .source-gallery .source-gallery-wide {
+  grid-column: 1 / -1;
+}
 .entry-content .source-gallery img {
   width: 100%;
   height: auto;

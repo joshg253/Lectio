@@ -16743,7 +16743,7 @@ _TAPAS_NULL_PARA_RE = re.compile(r"<p>\s*null\s*</p>", re.IGNORECASE)
 _TAPAS_MAX_PANELS = 60
 
 
-def _panels_into_body(content_html, panels: list[str], is_stripped_img):
+def _panels_into_body(content_html, panels: list[str], is_stripped_img, wide: frozenset[str] = frozenset(), tiled: bool = False):
     """Replace a thumbnail-grade body with the real panels.
 
     Shared by the Tapas and Webtoons injections: strip the feed's own picture
@@ -16751,9 +16751,19 @@ def _panels_into_body(content_html, panels: list[str], is_stripped_img):
     separate hero with it — otherwise the thumbnail renders directly above the
     comic it is a thumbnail of — and put the panels in front of whatever prose
     is left. Returns ``(content_html, lead_image_url)``.
+
+    ``tiled`` lays the panels in the same 2-across ``.source-gallery`` grid the other
+    webcomics use; ``wide`` names panels (banners) that span both columns.
     """
     body = _strip_imgs(content_html or "", is_stripped_img)
     body = _TAPAS_NULL_PARA_RE.sub("", body).strip()
+    if tiled:
+        figs = "".join(
+            ('<figure class="source-gallery-wide">' if u in wide else "<figure>")
+            + f'<img src="{html.escape(u, quote=True)}" alt="" loading="lazy" referrerpolicy="no-referrer"></figure>'
+            for u in panels
+        )
+        return f'<div class="source-gallery">{figs}</div>' + body, None
     figures = "".join(f'<p><img src="{html.escape(u, quote=True)}" alt="" /></p>' for u in panels)
     return figures + body, None
 
@@ -16784,6 +16794,20 @@ def _is_webtoons_body_img(src: str) -> bool:
 
 
 _WEBTOONS_MAX_PANELS = 80
+_WEBTOONS_DIM_RE = re.compile(r'\b(width|height)="([0-9.]+)"', re.IGNORECASE)
+# An episode is tiled only when it is discrete panels (Table Top: ~800x970 each)
+# rather than one tall strip cut into slices (up to 800x1280, contiguous — tiling
+# those would break the reading order). Slices above this height/width ratio mean
+# "strip"; below 0.5 is a banner, which spans both columns instead.
+_WEBTOONS_PANEL_MAX_RATIO = 1.3
+_WEBTOONS_BANNER_MAX_RATIO = 0.5
+_WEBTOONS_MIN_TILED_PANELS = 2
+# Some creators (Table Top) post every panel singly and then repeat them as
+# exactly 800x1000 four-panel composites at the end. A trailing run of those,
+# preceded by at least four singles per composite, is the same content twice:
+# keep the composites and drop the singles.
+_WEBTOONS_COMPOSITE_SIZE = (800.0, 1000.0)
+_WEBTOONS_COMPOSITE_PANELS = 4
 
 
 def _webtoons_public_slice_url(url: str) -> str:
@@ -16829,6 +16853,8 @@ def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_ima
     _base, page_html = fetched
 
     panels: list[str] = []
+    ratios: dict[str, float] = {}
+    sizes: dict[str, tuple[float, float]] = {}
     seen: set[str] = set()
     for tag in _WEBTOONS_SLICE_RE.findall(page_html):
         m = _WEBTOONS_DATA_URL_RE.search(tag)
@@ -16839,6 +16865,12 @@ def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_ima
             continue
         seen.add(url)
         panels.append(url)
+        dims = {k.lower(): v for k, v in _WEBTOONS_DIM_RE.findall(tag)}
+        try:
+            sizes[url] = (float(dims["width"]), float(dims["height"]))
+            ratios[url] = sizes[url][1] / sizes[url][0]
+        except KeyError, ValueError, ZeroDivisionError:
+            pass
         if len(panels) >= _WEBTOONS_MAX_PANELS:
             break
     if not panels:
@@ -16846,7 +16878,25 @@ def _inject_webtoons_episode_panels(content_html, entry, feed_url: str, lead_ima
     # A single-slice episode whose one slice is already the feed's image (Sarah's
     # Scribbles) gains nothing from the rewrite — but it costs nothing either,
     # and the strip-then-inject leaves exactly the same picture in place.
-    return _panels_into_body(content_html, panels, _is_webtoons_body_img)
+    wide = frozenset(u for u in panels if ratios.get(u, 1.0) < _WEBTOONS_BANNER_MAX_RATIO)
+    # Strip the repeated singles when the episode ends in four-panel composites.
+    trail = 0
+    for u in reversed(panels):
+        if sizes.get(u) != _WEBTOONS_COMPOSITE_SIZE:
+            break
+        trail += 1
+    singles = [u for u in panels[: len(panels) - trail] if u not in wide]
+    if trail and len(singles) >= _WEBTOONS_COMPOSITE_PANELS * trail:
+        keep = [u for u in panels if u in wide or u in panels[len(panels) - trail :]]
+        # Composites are already a grid: stacked, not tiled.
+        return _panels_into_body(content_html, keep, _is_webtoons_body_img, wide=wide, tiled=False)
+    body_panels = [u for u in panels if u not in wide]
+    tiled = (
+        len(body_panels) >= _WEBTOONS_MIN_TILED_PANELS
+        and all(u in ratios for u in panels)
+        and all(ratios[u] <= _WEBTOONS_PANEL_MAX_RATIO for u in body_panels)
+    )
+    return _panels_into_body(content_html, panels, _is_webtoons_body_img, wide=wide, tiled=tiled)
 
 
 def _inject_tapas_episode_panels(content_html, entry, feed_url: str, lead_image_url):

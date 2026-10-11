@@ -26,6 +26,10 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - Line wrapping: commit messages get no line breaks (one long line per paragraph). Everything else wraps at 140 columns; `ruff format`
   handles code (see `scripts/lint_changed.py`), comments/docstrings/prose are wrapped by hand. Only wrap new or edited paragraphs.
 
+- Never push anything (branches, tags, PRs) without the user's explicit say-so in that moment; earlier approval doesn't carry over.
+- Incremental back-and-forth on one thing (bug report → fix → tweak) stays one clean commit: hold the commit until the thought is
+  complete, or amend the still-local commit — don't stack "fix the fix" commits.
+
 ## Model guidance
 - The main session is Sonnet at medium effort (pinned in `.claude/settings.json`). Use it directly for normal implementation, refactors,
   tests, docs, and routine debugging — don't ask the user to switch models for a single hard step in an otherwise normal task.
