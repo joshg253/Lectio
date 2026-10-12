@@ -17605,6 +17605,18 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # The RSS body is plain text with real newlines; HTML collapses them to one line.
                 _existing = _promote_plaintext_summary(_existing) or html.escape(_existing).replace("\n", "<br>")
                 content_html = _existing
+            _quote = bluesky.fetch_post_quote(str(entry.id))
+            _quote_html = (
+                f'<p><em>Quoting <a href="{html.escape(_quote["url"], quote=True)}" target="_blank"'
+                f' rel="noopener noreferrer">@{html.escape(_quote["handle"])}</a></em></p>'
+                if _quote
+                else ""
+            )
+            _quote_after = bool(_quote and _quote["own_media"])
+            if _quote_html and not _quote_after:
+                # Label what follows (the quoted post's media); the quoting post's own media goes before it instead.
+                _existing += _quote_html
+                content_html = _existing
             _bsky_video = bluesky.fetch_post_video(str(entry.id))
             if _bsky_video:
                 # A real <video> instead of a static thumb: data-bsky-hls-src is
@@ -17653,6 +17665,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                             f'<p><a href="{html.escape(_card["uri"], quote=True)}" target="_blank" rel="noopener noreferrer">'
                             f"{_thumb}{html.escape(_card['title'] or _card['uri'])}</a></p>"
                         )
+            if _quote_after:
+                content_html = (content_html or "") + _quote_html
 
         # Has this body been hand-cleaned in the pane? Gates "Revert cleanup" in
         # the UI, and suppresses the embed recovery below — re-adding an embed

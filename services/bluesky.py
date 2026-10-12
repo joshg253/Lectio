@@ -94,9 +94,85 @@ def _images_from_embed(embed: object, out: list[str]) -> None:
             out.append(str(thumb))
 
 
+def _quoted_record(embed: object) -> dict | None:
+    """Return the quoted post's view-record dict for a quote-post embed (``record#view`` or ``recordWithMedia#view``), or None."""
+    if not isinstance(embed, dict):
+        return None
+    etype = str(embed.get("$type") or "")
+    if not etype.startswith("app.bsky.embed.record"):
+        return None
+    rec = embed.get("record")
+    # recordWithMedia nests the record view one level deeper.
+    if isinstance(rec, dict) and isinstance(rec.get("record"), dict):
+        rec = rec["record"]
+    return rec if isinstance(rec, dict) else None
+
+
+def _quoted_embeds(embed: object) -> list[dict]:
+    """Return the media embeds of the post a quote-post quotes, or [].
+
+    A quote-post's own embed is just the quoted record; the quoted post's images/video/card sit one level down in
+    ``record.embeds``. Only one level is followed -- a quote of a quote is not unrolled."""
+    rec = _quoted_record(embed)
+    embeds = rec.get("embeds") if rec else None
+    if not isinstance(embeds, list):
+        return []
+    return [e for e in embeds if isinstance(e, dict)]
+
+
+def _has_media(embed: object) -> bool:
+    """True if an embed carries images, a gallery, a video, or an external card of its own (recursing into recordWithMedia)."""
+    if not isinstance(embed, dict):
+        return False
+    etype = str(embed.get("$type") or "")
+    if etype.startswith("app.bsky.embed.recordWithMedia"):
+        return _has_media(embed.get("media"))
+    return etype.startswith(("app.bsky.embed.images", "app.bsky.embed.gallery", "app.bsky.embed.video", "app.bsky.embed.external"))
+
+
+def _media_embeds(post: dict) -> list[dict]:
+    """The embeds to pull images/video/card from: the post's own when it has any media, else the quoted post's.
+
+    Images, video and card all derive from this one list, so a post's own media is never displaced by a quoted post's media of another
+    kind."""
+    embed = post.get("embed")
+    if isinstance(embed, dict) and _has_media(embed):
+        return [embed]
+    return _quoted_embeds(embed)
+
+
+def fetch_post_quote(at_uri: str | None) -> dict[str, str] | None:
+    """Return {"url", "handle", "own_media"} for the post a quote-post quotes, or None.
+
+    ``handle`` is the display name (the DID when the handle failed verification); ``own_media`` is "1" when the quoting post has media
+    of its own, so the caller can place the label after it. Shares the cached fetch with ``fetch_post_images``."""
+    if not at_uri or not at_uri.startswith("at://"):
+        return None
+    post = _fetch_post(at_uri)
+    if not post:
+        return None
+    rec = _quoted_record(post.get("embed"))
+    if not rec:
+        return None
+    m = re.fullmatch(r"at://(did:[a-z]+:[A-Za-z0-9._:%-]+)/app\.bsky\.feed\.post/([A-Za-z0-9]+)", str(rec.get("uri") or ""))
+    if not m:
+        return None
+    did, rkey = m.groups()
+    author = rec.get("author")
+    handle = str(author.get("handle") or "") if isinstance(author, dict) else ""
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", handle) or handle.endswith(".invalid"):
+        handle = did
+    return {
+        "url": f"https://bsky.app/profile/{handle}/post/{rkey}",
+        "handle": handle,
+        "own_media": "1" if _has_media(post.get("embed")) else "",
+    }
+
+
 def _images_from_post(post: dict) -> list[str]:
     out: list[str] = []
-    _images_from_embed(post.get("embed"), out)
+    for embed in _media_embeds(post):
+        _images_from_embed(embed, out)
     # De-dupe while preserving order.
     return list(dict.fromkeys(out))
 
@@ -123,8 +199,10 @@ def _video_from_embed(embed: object) -> dict[str, str] | None:
             out = {"thumbnail": str(thumb), "playlist": str(playlist)}
             aspect = embed.get("aspectRatio")
             if isinstance(aspect, dict) and aspect.get("width") and aspect.get("height"):
-                out["width"] = str(int(aspect["width"]))
-                out["height"] = str(int(aspect["height"]))
+                try:
+                    out["width"], out["height"] = str(int(aspect["width"])), str(int(aspect["height"]))
+                except TypeError, ValueError:
+                    pass
             return out
         return None
     if etype.startswith("app.bsky.embed.recordWithMedia"):
@@ -197,7 +275,9 @@ def fetch_post_card(at_uri: str | None) -> dict[str, str] | None:
     if not at_uri or not at_uri.startswith("at://"):
         return None
     post = _fetch_post(at_uri)
-    return _card_from_embed(post.get("embed")) if post else None
+    if not post:
+        return None
+    return next((c for c in map(_card_from_embed, _media_embeds(post)) if c), None)
 
 
 def fetch_post_video(at_uri: str | None) -> dict[str, str] | None:
@@ -209,4 +289,6 @@ def fetch_post_video(at_uri: str | None) -> dict[str, str] | None:
     if not at_uri or not at_uri.startswith("at://"):
         return None
     post = _fetch_post(at_uri)
-    return _video_from_embed(post.get("embed")) if post else None
+    if not post:
+        return None
+    return next((v for v in map(_video_from_embed, _media_embeds(post)) if v), None)
