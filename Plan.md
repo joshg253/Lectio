@@ -43,15 +43,6 @@ status is on `exc.__cause__.response.status_code` (a requests `HTTPError`). Fix:
 three sites, and make the test fakes chain a real `HTTPError` instead of setting `http_info` (`tests/integration/test_fetch_history.py`,
 `tests/services/test_feed_refresh_service.py`).
 
-### soupsieve 3 `:has()` strictness vs user-typed selectors (2026-10-12)
-
-soupsieve 3.0 rejects a complex selector inside `:has()` (`div:has(p img)`, `div:has(> p > img)`) and a nested `:has()` unless `NOSTRICT` is
-passed; the relative forms `:has(> img)` and `:has(+ b)` still compile. User-typed selectors reach soupsieve at `scraper_service.py`:
-`select_one` for `content_selector` (caught, yields no content), `extract_link_items` (`soup.select`, not wrapped in a try, so the preview
-route would raise), the page-watch `selector` (falls back to the whole page), and `main.py`'s per-feed readability selector (falls back to
-readability). Survey saved selectors for a `:has(` containing a space or `>`; if any exist, pass `flags=soupsieve.NOSTRICT` at those sites
-or guard `extract_link_items`.
-
 ### GitHub OpenGraph card 429s — watch for recurrence (2026-10-12)
 
 Hugo's feed has an empty description for every release, so the `opengraph.githubassets.com` card is the whole post. The v0.167.0 card

@@ -24565,7 +24565,7 @@ def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cool
     capture["raw_html"] = result.html
     soup = BeautifulSoup(result.html, "html.parser")
     try:
-        region = soup.select_one(selector)
+        region = soup.select_one(selector, flags=scraper_service.USER_SELECTOR_FLAGS)
     except Exception:  # noqa: BLE001 — a bad selector falls back to readability
         return None
     if region is None:
