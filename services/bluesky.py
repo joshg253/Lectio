@@ -63,6 +63,11 @@ def is_bsky_feed(feed_url: str | None) -> bool:
     return bool(feed_url and _BSKY_FEED_RE.match(feed_url))
 
 
+def _as_list(value: object) -> list:
+    """``value`` if it is a list, else [] (API data is untrusted: a malformed field must not abort entry rendering)."""
+    return value if isinstance(value, list) else []
+
+
 def _images_from_embed(embed: object, out: list[str]) -> None:
     """Collect fullsize CDN image URLs from a post-view embed (recursively for
     recordWithMedia). Prefers ``fullsize``, falls back to ``thumb``."""
@@ -70,7 +75,7 @@ def _images_from_embed(embed: object, out: list[str]) -> None:
         return
     etype = str(embed.get("$type") or "")
     if etype.startswith("app.bsky.embed.images"):
-        for img in embed.get("images", []) or []:
+        for img in _as_list(embed.get("images")):
             if isinstance(img, dict):
                 url = img.get("fullsize") or img.get("thumb")
                 if url:
@@ -81,7 +86,7 @@ def _images_from_embed(embed: object, out: list[str]) -> None:
         # "items" (not "images"). Found live 2026-09-18: a post using this
         # shape returned zero images through the images-only branch above,
         # despite genuinely having several.
-        for img in embed.get("items", []) or []:
+        for img in _as_list(embed.get("items")):
             if isinstance(img, dict):
                 url = img.get("fullsize") or img.get("thumbnail")
                 if url:
@@ -201,7 +206,7 @@ def _video_from_embed(embed: object) -> dict[str, str] | None:
             if isinstance(aspect, dict) and aspect.get("width") and aspect.get("height"):
                 try:
                     out["width"], out["height"] = str(int(aspect["width"])), str(int(aspect["height"]))
-                except TypeError, ValueError:
+                except TypeError, ValueError, OverflowError:
                     pass
             return out
         return None

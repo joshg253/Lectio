@@ -308,3 +308,12 @@ def test_malformed_quoted_data_does_not_raise():
     assert bluesky._quoted_embeds({"$type": "app.bsky.embed.record#view", "record": {"embeds": 5}}) == []
     vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "t", "playlist": "p", "aspectRatio": {"width": "x", "height": 1}}
     assert bluesky._video_from_embed(vid) == {"thumbnail": "t", "playlist": "p"}
+
+
+def test_malformed_media_fields_are_skipped():
+    out: list[str] = []
+    bluesky._images_from_embed({"$type": "app.bsky.embed.images#view", "images": 5}, out)
+    bluesky._images_from_embed({"$type": "app.bsky.embed.gallery#view", "items": "x"}, out)
+    assert out == []
+    vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "t", "playlist": "p", "aspectRatio": {"width": float("inf"), "height": 1}}
+    assert bluesky._video_from_embed(vid) == {"thumbnail": "t", "playlist": "p"}
