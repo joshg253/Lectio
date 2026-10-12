@@ -218,3 +218,102 @@ def test_card_rejects_unsafe_schemes():
     odd_thumb = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://x.test/a", "thumb": "data:image/png;base64,AA"}}
     card = bluesky._card_from_embed(odd_thumb)
     assert card is not None and card["thumb"] == ""
+
+
+def test_quote_post_falls_back_to_quoted_media():
+    """A quote-post with no media of its own shows the quoted post's images/video/card."""
+    img = {"$type": "app.bsky.embed.images#view", "images": [{"fullsize": "https://cdn.bsky.app/q"}]}
+    post = {"embed": {"$type": "app.bsky.embed.record#view", "record": {"embeds": [img]}}}
+    assert bluesky._images_from_post(post) == ["https://cdn.bsky.app/q"]
+
+    vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "https://t", "playlist": "https://p"}
+    post = {"embed": {"$type": "app.bsky.embed.record#view", "record": {"embeds": [vid]}}}
+    assert bluesky._video_from_embed(bluesky._quoted_embeds(post["embed"])[0]) == {"thumbnail": "https://t", "playlist": "https://p"}
+
+    # recordWithMedia nests the record one level deeper; own media still wins.
+    own = {"$type": "app.bsky.embed.images#view", "images": [{"fullsize": "https://cdn.bsky.app/own"}]}
+    post = {"embed": {"$type": "app.bsky.embed.recordWithMedia#view", "media": own, "record": {"record": {"embeds": [img]}}}}
+    assert bluesky._images_from_post(post) == ["https://cdn.bsky.app/own"]
+    assert bluesky._quoted_embeds(post["embed"]) == [img]
+
+    # A blocked/not-found quoted record has no embeds.
+    assert bluesky._images_from_post({"embed": {"$type": "app.bsky.embed.record#view", "record": {"notFound": True}}}) == []
+
+
+def _quote_post(embed_type="app.bsky.embed.record#view", **rec_extra):
+    rec = {"uri": "at://did:plc:x/app.bsky.feed.post/3abc", "author": {"handle": "a.bsky.social"}, **rec_extra}
+    return {"embed": {"$type": embed_type, "record": rec}}
+
+
+def test_fetch_post_quote(monkeypatch):
+    post = _quote_post()
+    monkeypatch.setattr(bluesky, "_fetch_post", lambda uri: post)
+    assert bluesky.fetch_post_quote("at://did:plc:y/app.bsky.feed.post/1") == {
+        "url": "https://bsky.app/profile/a.bsky.social/post/3abc",
+        "handle": "a.bsky.social",
+        "own_media": "",
+    }
+    post["embed"] = {"$type": "app.bsky.embed.images#view", "images": []}
+    assert bluesky.fetch_post_quote("at://did:plc:y/app.bsky.feed.post/1") is None
+
+
+def test_fetch_post_quote_rejects_and_falls_back(monkeypatch):
+    uri = "at://did:plc:y/app.bsky.feed.post/1"
+    cases = {
+        "unsafe handle": _quote_post(author={"handle": 'x"><script>'}),
+        "string author": _quote_post(author="nope"),
+        "unverified handle": _quote_post(author={"handle": "handle.invalid"}),
+    }
+    for name, post in cases.items():
+        monkeypatch.setattr(bluesky, "_fetch_post", lambda u, post=post: post)
+        quote = bluesky.fetch_post_quote(uri)
+        assert quote is not None, name
+        assert quote["handle"] == "did:plc:x", name  # falls back to the DID
+        assert quote["url"] == "https://bsky.app/profile/did:plc:x/post/3abc", name
+    for bad_uri in ("at://did:plc:x/app.bsky.graph.list/3abc", "at://did:plc:x/app.bsky.feed.post/3a/b?x", ""):
+        post = _quote_post(uri=bad_uri)
+        monkeypatch.setattr(bluesky, "_fetch_post", lambda u, post=post: post)
+        assert bluesky.fetch_post_quote(uri) is None
+    blocked = {"embed": {"$type": "app.bsky.embed.record#view", "record": {"blocked": True, "author": {"did": "did:plc:x"}}}}
+    monkeypatch.setattr(bluesky, "_fetch_post", lambda u: blocked)
+    assert bluesky.fetch_post_quote(uri) is None
+
+
+def test_own_media_is_never_displaced_by_quoted_media(monkeypatch):
+    uri = "at://did:plc:y/app.bsky.feed.post/1"
+    own_img = {"$type": "app.bsky.embed.images#view", "images": [{"fullsize": "https://cdn.bsky.app/own"}]}
+    own_card = {"$type": "app.bsky.embed.external#view", "external": {"uri": "https://example.com/a", "title": "T"}}
+    q_vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "https://t", "playlist": "https://p"}
+    q_img = {"$type": "app.bsky.embed.images#view", "images": [{"fullsize": "https://cdn.bsky.app/q"}]}
+
+    def rwm(media, quoted):
+        return {"embed": {"$type": "app.bsky.embed.recordWithMedia#view", "media": media, "record": {"record": {"embeds": [quoted]}}}}
+
+    # Own images + quoted video: the video must not win.
+    monkeypatch.setattr(bluesky, "_fetch_post", lambda u: rwm(own_img, q_vid))
+    assert bluesky.fetch_post_video(uri) is None
+    assert bluesky.fetch_post_images(uri) == ["https://cdn.bsky.app/own"]
+    # Own card + quoted images: the images must not win.
+    monkeypatch.setattr(bluesky, "_fetch_post", lambda u: rwm(own_card, q_img))
+    assert bluesky.fetch_post_images(uri) == []
+    card = bluesky.fetch_post_card(uri)
+    assert card is not None and card["uri"] == "https://example.com/a"
+    # No own media: the quoted post's video is used.
+    post = _quote_post(embeds=[q_vid])
+    monkeypatch.setattr(bluesky, "_fetch_post", lambda u: post)
+    assert bluesky.fetch_post_video(uri) == {"thumbnail": "https://t", "playlist": "https://p"}
+
+
+def test_malformed_quoted_data_does_not_raise():
+    assert bluesky._quoted_embeds({"$type": "app.bsky.embed.record#view", "record": {"embeds": 5}}) == []
+    vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "t", "playlist": "p", "aspectRatio": {"width": "x", "height": 1}}
+    assert bluesky._video_from_embed(vid) == {"thumbnail": "t", "playlist": "p"}
+
+
+def test_malformed_media_fields_are_skipped():
+    out: list[str] = []
+    bluesky._images_from_embed({"$type": "app.bsky.embed.images#view", "images": 5}, out)
+    bluesky._images_from_embed({"$type": "app.bsky.embed.gallery#view", "items": "x"}, out)
+    assert out == []
+    vid = {"$type": "app.bsky.embed.video#view", "thumbnail": "t", "playlist": "p", "aspectRatio": {"width": float("inf"), "height": 1}}
+    assert bluesky._video_from_embed(vid) == {"thumbnail": "t", "playlist": "p"}
