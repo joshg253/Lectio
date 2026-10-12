@@ -21,9 +21,14 @@ from email.utils import format_datetime as _format_rfc2822
 from pathlib import Path
 from urllib.parse import urljoin
 
+import soupsieve
 from bs4 import BeautifulSoup
 
 from services import assert_safe_feed_id, publish_date, url_guard
+
+# soupsieve 3 rejects a complex or nested :has() unless NOSTRICT is passed. Selectors the user types (link-list, content, page-watch,
+# readability) were accepted before, so pass this to keep them working; getattr so an older soupsieve without the flag still imports.
+USER_SELECTOR_FLAGS = getattr(soupsieve, "NOSTRICT", 0)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -214,7 +219,7 @@ def _new_entry_extras(entry_url: str, content_selector: str) -> tuple[str | None
     content = ""
     if content_selector:
         try:
-            region = BeautifulSoup(html, "html.parser").select_one(content_selector)
+            region = BeautifulSoup(html, "html.parser").select_one(content_selector, flags=USER_SELECTOR_FLAGS)
         except Exception:  # noqa: BLE001 — a bad/stale selector must not break the scrape
             region = None
             LOGGER.debug("scrape: content_selector %r failed for %s", content_selector, entry_url, exc_info=True)
@@ -239,7 +244,7 @@ def _resolve_link_anchors(soup: BeautifulSoup, selector: str) -> list:
     if it's an <a> with an href, otherwise pull the descendant anchors — preserving
     document order and dropping duplicates. No selector => every anchor on the page.
     """
-    selected = soup.select(selector) if selector else soup.find_all("a")
+    selected = soup.select(selector, flags=USER_SELECTOR_FLAGS) if selector else soup.find_all("a")
     anchors: list = []
     seen: set[int] = set()
     for el in selected:
@@ -462,7 +467,7 @@ def _scrape_change_detect(conn: sqlite3.Connection, feed: dict) -> bool:
     if selector:
         try:
             soup = BeautifulSoup(html, "html.parser")
-            content = "".join(str(el) for el in soup.select(selector))
+            content = "".join(str(el) for el in soup.select(selector, flags=USER_SELECTOR_FLAGS))
         except Exception:
             content = html
     else:
@@ -572,7 +577,7 @@ def preview_page_feed(source_url: str, mode: str, selector: str | None) -> dict:
     else:
         try:
             soup = BeautifulSoup(html, "html.parser")
-            content = "".join(str(el) for el in soup.select(sel)) if sel else html
+            content = "".join(str(el) for el in soup.select(sel, flags=USER_SELECTOR_FLAGS)) if sel else html
         except Exception:
             content = html
         text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
@@ -638,7 +643,7 @@ def create_scraped_feed(
             if sel:
                 try:
                     soup = BeautifulSoup(html, "html.parser")
-                    content = "".join(str(el) for el in soup.select(sel))
+                    content = "".join(str(el) for el in soup.select(sel, flags=USER_SELECTOR_FLAGS))
                 except Exception:
                     content = html
             else:

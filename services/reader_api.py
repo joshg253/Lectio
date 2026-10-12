@@ -187,8 +187,8 @@ class _LectioReaderStorage(_ReaderStorage):
     fires if the thread isn't scheduled at all)."""
 
     @staticmethod
-    def setup_db(db: sqlite3.Connection) -> None:
-        _reader_storage_setup_db(db)
+    def setup_db(db: sqlite3.Connection, migrate: bool = True) -> None:
+        _reader_storage_setup_db(db, migrate)
         try:
             db.execute("PRAGMA wal_autocheckpoint=200")
             # Wait (up to 10s) for a lock instead of failing instantly with

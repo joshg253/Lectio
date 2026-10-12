@@ -29,6 +29,27 @@ Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the
 
 Some feeds (guitarworld) lead with a literal `"null"` text/plain element before the real HTML. The tag auto-refetch precheck now uses `_richest_content`; the other `content[0]` reads (main.py dedup/merge spots, services/dedup.py, the email full-text path) may misjudge such entries and haven't been checked.
 
+### Use reader's `EntryCounts.unread` (2026-10-12)
+
+reader 3.27 added an `unread` property to `EntryCounts`/`EntrySearchCounts`. Check whether `get_unread_counts_by_feed` and the per-feed
+unread math can use it instead of hand-rolled counting; mind the generation guard on both cache-write paths.
+
+### Status-based refresh branches never fire: reader gives no `http_info` (2026-10-12)
+
+`services/feed_refresh.py` reads `exc.http_info.status` in `_is_fetch_refusal`, `_http_status_of` and the 410 Gone auto-disable. reader
+(3.26 and 3.27 alike) turns any `RetrieveError` into a plain `ParseError` with no `http_info`, so those branches are dead: a 410 feed is
+never auto-disabled and `feed_fetch_history.http_status` stays NULL; refusal detection survives only through its `str(exc)` fallback. The
+status is on `exc.__cause__.response.status_code` (a requests `HTTPError`). Fix: one helper that walks the exception chain, used at all
+three sites, and make the test fakes chain a real `HTTPError` instead of setting `http_info` (`tests/integration/test_fetch_history.py`,
+`tests/services/test_feed_refresh_service.py`).
+
+### GitHub OpenGraph card 429s — watch for recurrence (2026-10-12)
+
+Hugo's feed has an empty description for every release, so the `opengraph.githubassets.com` card is the whole post. The v0.167.0 card
+returned 429 through `/api/img` (and from curl) while v0.166.0's returned 200 from the same container, so it looks like a per-URL
+GitHub-side hiccup, not our upgrade. If it recurs across releases: check whether a failed card fetch is negative-cached (it would stay blank
+after GitHub recovers) and whether the pane should retry.
+
 ### Folder-switch speed — what's left (2026-10-02)
 
 Shipped: no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s

@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Literal, Sequence, cast, overload
+from typing import Any, Callable, Generator, Iterable, Literal, Sequence, cast, overload
 from urllib.parse import parse_qs, parse_qsl, quote, quote_plus, unquote, urlencode, urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
 import feedparser
@@ -39,14 +39,8 @@ def _parse_month_first_pubdate(date_string: str):
 
 feedparser.registerDateHandler(_parse_month_first_pubdate)
 
-# Imported here, ahead of the reader imports below, purely for its side effect:
-# services/__init__.py sets READER_NO_VENDORED_FEEDPARSER so reader parses with
-# the feedparser imported above (and thus with the date handler just registered)
-# rather than its vendored copy. See that module for why.
-# This import's position is load-bearing, not alphabetical — hence the I001.
-import services  # noqa: F401,I001
-
-from fastapi import FastAPI, Form, Query, Request
+# The import block below was never isort-ordered; this suppresses I001 for the whole block.
+from fastapi import FastAPI, Form, Query, Request  # noqa: I001
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -3412,7 +3406,7 @@ def get_starred_archive_connection() -> sqlite3.Connection:
 
 
 @contextmanager
-def archive_conn() -> Iterator[sqlite3.Connection]:
+def archive_conn() -> Generator[sqlite3.Connection]:
     """An archive connection that commits (or rolls back) *and* closes.
 
     ``with sqlite3_connection:`` only wraps a transaction — it leaves the
@@ -21205,7 +21199,7 @@ def build_reader_page(
         # Same vendored KaTeX as the main app's entry pane (see
         # docs/architecture/views.md "Inline LaTeX math (KaTeX)") -- Read Mode
         # has no app.js, so it needs its own copy of the CSS/font link.
-        "<link rel='stylesheet' href='/static/vendor/katex-0.18.9/katex.min.css'>"
+        "<link rel='stylesheet' href='/static/vendor/katex-0.19.0/katex.min.css'>"
         f"<link rel='stylesheet' href='/static/reader.css?v={STATIC_ASSET_VERSION}'>"
         "</head><body>"
         "<header class='reader-bar'>"
@@ -21234,8 +21228,8 @@ def build_reader_page(
         f"<script>window.__READER_NAV__={nav_json};</script>"
         # Before reader.js, which calls renderMathInElement synchronously before
         # its first pagination measurement (see reader.js).
-        "<script src='/static/vendor/katex-0.18.9/katex.min.js'></script>"
-        "<script src='/static/vendor/katex-0.18.9/auto-render.min.js'></script>"
+        "<script src='/static/vendor/katex-0.19.0/katex.min.js'></script>"
+        "<script src='/static/vendor/katex-0.19.0/auto-render.min.js'></script>"
         f"<script src='/static/outbox.js?v={STATIC_ASSET_VERSION}'></script>"
         f"<script src='/static/reader.js?v={STATIC_ASSET_VERSION}'></script>"
         "</body></html>"
@@ -24571,7 +24565,7 @@ def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cool
     capture["raw_html"] = result.html
     soup = BeautifulSoup(result.html, "html.parser")
     try:
-        region = soup.select_one(selector)
+        region = soup.select_one(selector, flags=scraper_service.USER_SELECTOR_FLAGS)
     except Exception:  # noqa: BLE001 — a bad selector falls back to readability
         return None
     if region is None:

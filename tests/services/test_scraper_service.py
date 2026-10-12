@@ -260,3 +260,14 @@ def test_link_list_scrape_heals_relative_links_in_stored_bodies(monkeypatch):
     scraper_service._scrape_link_list(conn, feed, initial=False)
     body = conn.execute("SELECT content FROM scraped_entries LIMIT 1").fetchone()["content"]
     assert 'href="https://basslessons.be/tag/x"' in body
+
+
+def test_link_list_accepts_complex_has_selector(monkeypatch):
+    # soupsieve 3 rejects a complex :has() unless NOSTRICT is passed; a user-typed selector like this
+    # was accepted before the upgrade and must keep resolving rather than raising.
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE)
+    conn = _make_conn()
+    feed = {"id": "f2", "source_url": "https://basslessons.be/", "selector": "ul:has(li a) li:nth-child(2) a"}
+    assert scraper_service._scrape_link_list(conn, feed, initial=False) is True
+    rows = conn.execute("SELECT entry_url FROM scraped_entries").fetchall()
+    assert [r["entry_url"] for r in rows] == ["https://basslessons.be/transcriptions.php?i=1193"]

@@ -31,7 +31,7 @@ import contextvars
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Generator
 
 # user_id values become filesystem path segments, so they must be a strict,
 # traversal-proof charset. Auth/registration must reject anything outside this
@@ -106,7 +106,7 @@ def reset_current_user(token: contextvars.Token) -> None:
 
 
 @contextlib.contextmanager
-def user_context(user_id: str) -> Iterator[str]:
+def user_context(user_id: str) -> Generator[str]:
     """Scope a block of work to ``user_id``.
 
     Use this to bind a user around background work that does not inherit the
