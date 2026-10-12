@@ -1,11 +1,9 @@
 """The whole process must parse feeds with one feedparser: the installed one.
 
-`reader` defaults to its vendored copy (reader._vendor.feedparser), which is
-pinned older than the installed feedparser and — since feedparser 6.0.13 dropped
-the sgmllib3k dependency the vendored copy's bare `import sgmllib` relied on —
-no longer imports at all. services/__init__.py opts out via
-READER_NO_VENDORED_FEEDPARSER; these tests fail loudly if that stops taking
-effect, because the symptom otherwise is feeds quietly parsing differently.
+`reader` stopped vendoring feedparser in 3.27 and imports the installed package
+directly, so main.py's date handler reaches ingest. These tests fail loudly if
+reader ever goes back to a private copy, because the symptom otherwise is feeds
+quietly parsing differently.
 """
 
 from __future__ import annotations

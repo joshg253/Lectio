@@ -19,12 +19,13 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
-# Use the EXACT feedparser module reader uses (it may be the vendored copy,
-# reader._vendor.feedparser). reader's _process_feed decides which bozo
-# exceptions are survivable via isinstance against that module's exception
-# classes; importing the standalone `feedparser` here would yield different
-# classes, so survivable bozos (e.g. NonXMLContentType) would wrongly raise
-# ParseError and break every feed update that returns a body.
+# Take feedparser from reader's own parser module, the same one _process_feed
+# uses (since reader 3.27 that is the installed package). _process_feed decides
+# which bozo exceptions are survivable via isinstance against that module's
+# exception classes, so going through reader keeps them identical even if
+# reader ever goes back to a private copy; a survivable bozo (e.g.
+# NonXMLContentType) would otherwise wrongly raise ParseError and break every
+# feed update that returns a body.
 from reader._parser.feedparser import (
     FeedparserParser,
     _process_feed,

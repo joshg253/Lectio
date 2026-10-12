@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
-from typing import Iterator
+from typing import Generator
 
 from services import tenancy
 
@@ -20,7 +20,7 @@ def configure_test_tenancy(data_dir: Path) -> None:
 
 
 @contextlib.contextmanager
-def unbound_tenancy() -> Iterator[None]:
+def unbound_tenancy() -> Generator[None]:
     """Run a block with no user bound, like a bare background thread, overriding the autouse test-user binding."""
     token = tenancy._current_user.set(None)
     try:

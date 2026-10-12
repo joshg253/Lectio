@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from services import reader_api
 from services.reader_api import ReaderApi, _LectioReaderStorage
 
 
@@ -41,5 +42,33 @@ def test_wal_autocheckpoint_applied(tmp_path):
         _LectioReaderStorage.setup_db(conn)
         row = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
         assert row is not None and row[0] == 200
+    finally:
+        conn.close()
+
+
+def test_connection_goes_through_lectio_setup_db(tmp_path):
+    """reader 3.27 passes ``migrate`` into setup_db on every new connection; the override must accept it
+    and still apply our pragmas. Opening a real connection exercises that path (instantiating alone doesn't)."""
+    storage = _LectioReaderStorage(str(tmp_path / "conn.sqlite"), timeout=5.0)
+    try:
+        conn = storage.get_db()
+        row = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
+        assert row is not None and row[0] == 200
+    finally:
+        storage.factory.close()
+
+
+def test_setup_db_forwards_migrate_flag(tmp_path, monkeypatch):
+    """The override must hand ``migrate`` on to reader's setup_db, not just tolerate it: dropping it would
+    silently re-enable automatic schema migrations for a caller that asked for none."""
+    seen: list[tuple] = []
+    monkeypatch.setattr(reader_api, "_reader_storage_setup_db", lambda db, migrate=True: seen.append((db, migrate)))
+    conn = sqlite3.connect(str(tmp_path / "migrate.sqlite"))
+    try:
+        _LectioReaderStorage.setup_db(conn, migrate=False)
+        _LectioReaderStorage.setup_db(conn)
+        assert [m for _, m in seen] == [False, True]
+        row = conn.execute("PRAGMA busy_timeout").fetchone()
+        assert row is not None and row[0] == 10000
     finally:
         conn.close()

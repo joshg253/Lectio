@@ -29,7 +29,7 @@ import threading
 import time
 import zlib
 from collections import OrderedDict, defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -162,7 +162,7 @@ class StarredArchiveService:
     # ------------------------------------------------------------------
 
     @contextmanager
-    def _archive_conn(self) -> Iterator[sqlite3.Connection]:
+    def _archive_conn(self) -> Generator[sqlite3.Connection]:
         """An archive connection that commits (or rolls back) *and* closes.
 
         ``with sqlite3_connection:`` is a transaction context manager, not a
