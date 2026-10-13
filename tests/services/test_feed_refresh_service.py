@@ -59,6 +59,7 @@ def _make_conn(db_path: Path):
         )
         """
     )
+    conn.execute("CREATE TABLE IF NOT EXISTS disabled_feeds (feed_url TEXT PRIMARY KEY)")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS domain_failure_state (
@@ -1061,7 +1062,8 @@ def test_high_fanout_domain_never_backs_off(tmp_path: Path):
 
 
 def test_410_gone_disables_updates_via_chained_http_error(tmp_path: Path):
-    """reader gives no http_info; the 410 lives on the chained HTTPError and must still auto-disable the feed."""
+    """reader gives no http_info; the 410 lives on the chained HTTPError and must still auto-disable the feed, in reader and in
+    Lectio's own Disabled list, with the 410 recorded."""
     db_path = tmp_path / "meta.sqlite"
     url = "https://gone.example/feed.xml"
 
@@ -1076,6 +1078,28 @@ def test_410_gone_disables_updates_via_chained_http_error(tmp_path: Path):
 
     service.update_feeds([url])
     assert reader.disabled == [url]
+    with _make_conn(db_path) as conn:
+        assert [r[0] for r in conn.execute("SELECT feed_url FROM disabled_feeds")] == [url]
+        row = conn.execute("SELECT last_error, next_retry_at FROM feed_failure_state WHERE feed_url = ?", (url,)).fetchone()
+    assert row and row[0].startswith("410 Gone") and row[1] is None
+
+
+def test_410_gone_with_failed_disable_falls_back_to_normal_backoff(tmp_path: Path):
+    """If reader refuses to disable the feed it must not be recorded as a terminal 410: it stays in normal failure backoff."""
+    db_path = tmp_path / "meta.sqlite"
+    url = "https://gone.example/feed.xml"
+
+    class _Reader(_FailReader):
+        def disable_feed_updates(self, feed_url: str):
+            raise RuntimeError("storage busy")
+
+    service = _build_service(db_path, _Reader({url: 410}), [], [])
+
+    service.update_feeds([url])
+    with _make_conn(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM disabled_feeds").fetchone()[0] == 0
+        row = conn.execute("SELECT next_retry_at FROM feed_failure_state WHERE feed_url = ?", (url,)).fetchone()
+    assert row and row[0] is not None  # backoff scheduled, not the terminal NULL
 
 
 def test_high_fanout_domain_ignores_stale_backoff(tmp_path: Path):

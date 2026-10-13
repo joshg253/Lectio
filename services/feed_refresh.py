@@ -603,35 +603,41 @@ class FeedRefreshService:
                     # immediately instead of backing off and retrying forever.
                     try:
                         if self._http_status_of(exc) == 410:
+                            disabled = False
                             try:
                                 reader.disable_feed_updates(feed_url)
+                                disabled = True
                             except Exception:
-                                pass
-                            self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
-                            error_count += 1
-                            with self._get_meta_connection() as conn:
-                                conn.execute(
-                                    """
-                                        INSERT INTO feed_failure_state
-                                            (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
-                                        VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
-                                        ON CONFLICT(feed_url) DO UPDATE SET
-                                            consecutive_failures = excluded.consecutive_failures,
-                                            next_retry_at = NULL,
-                                            last_error = excluded.last_error,
-                                            last_failure_at = excluded.last_failure_at
-                                        """,
-                                    (feed_url, now_ts),
-                                )
-                                self._record_fetch_history(
-                                    conn,
-                                    feed_url,
-                                    "error",
-                                    http_status=410,
-                                    duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
-                                    error="410 Gone: feed has been permanently removed",
-                                )
-                            continue
+                                self._logger.warning("[refresh] 410 Gone but disabling updates failed for %s", feed_url, exc_info=True)
+                            if disabled:
+                                self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
+                                error_count += 1
+                                with self._get_meta_connection() as conn:
+                                    # Lectio's own Disabled list, so the feed reads as paused in the UI (and is left alone by the
+                                    # escalation re-probe), not only paused inside reader.
+                                    conn.execute("INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)", (feed_url,))
+                                    conn.execute(
+                                        """
+                                            INSERT INTO feed_failure_state
+                                                (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
+                                            VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
+                                            ON CONFLICT(feed_url) DO UPDATE SET
+                                                consecutive_failures = excluded.consecutive_failures,
+                                                next_retry_at = NULL,
+                                                last_error = excluded.last_error,
+                                                last_failure_at = excluded.last_failure_at
+                                            """,
+                                        (feed_url, now_ts),
+                                    )
+                                    self._record_fetch_history(
+                                        conn,
+                                        feed_url,
+                                        "error",
+                                        http_status=410,
+                                        duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                        error="410 Gone: feed has been permanently removed",
+                                    )
+                                continue
                     except Exception:
                         pass
 
