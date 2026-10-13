@@ -51,6 +51,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import escalation_reprobe
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
@@ -6401,16 +6402,27 @@ def get_browser_ua_feed_urls(conn: sqlite3.Connection) -> set[str]:
     return {str(r["feed_url"]) for r in rows}
 
 
+def _flag_escalation_tier(conn: sqlite3.Connection, table: str, feed_url: str, reason: str) -> bool:
+    """INSERT-or-assert one escalation flag. Returns True if newly flagged.
+
+    A flag that is already there is re-asserted rather than ignored: `flagged_at` moves to now (a refusal seen while the re-probe is in
+    flight must not be cleared by it), and a manual flag replaces an automatic one's reason so the re-probe leaves it alone."""
+    cur = conn.execute(f"INSERT OR IGNORE INTO {table} (feed_url, reason) VALUES (?, ?)", (feed_url, reason[:200]))
+    if cur.rowcount > 0:
+        return True
+    if reason == "manual":
+        conn.execute(f"UPDATE {table} SET flagged_at = datetime('now'), reason = 'manual' WHERE feed_url = ?", (feed_url,))
+    else:
+        conn.execute(f"UPDATE {table} SET flagged_at = datetime('now') WHERE feed_url = ?", (feed_url,))
+    return False
+
+
 def flag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -> bool:
     """Mark a feed for browser-identity fetches. Returns True if newly flagged."""
     feed_url = feed_url.strip()
     if not feed_url:
         return False
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO browser_ua_feeds (feed_url, reason) VALUES (?, ?)",
-        (feed_url, reason[:200]),
-    )
-    return cur.rowcount > 0
+    return _flag_escalation_tier(conn, "browser_ua_feeds", feed_url, reason)
 
 
 def unflag_browser_ua_feed(conn: sqlite3.Connection, feed_url: str) -> None:
@@ -6434,11 +6446,7 @@ def flag_proxy_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "") -
     feed_url = feed_url.strip()
     if not feed_url:
         return False
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO proxy_feeds (feed_url, reason) VALUES (?, ?)",
-        (feed_url, reason[:200]),
-    )
-    return cur.rowcount > 0
+    return _flag_escalation_tier(conn, "proxy_feeds", feed_url, reason)
 
 
 def unflag_proxy_feed(conn: sqlite3.Connection, feed_url: str) -> None:
@@ -6462,11 +6470,7 @@ def flag_tailscale_feed(conn: sqlite3.Connection, feed_url: str, reason: str = "
     feed_url = feed_url.strip()
     if not feed_url:
         return False
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO tailscale_feeds (feed_url, reason) VALUES (?, ?)",
-        (feed_url, reason[:200]),
-    )
-    return cur.rowcount > 0
+    return _flag_escalation_tier(conn, "tailscale_feeds", feed_url, reason)
 
 
 def unflag_tailscale_feed(conn: sqlite3.Connection, feed_url: str) -> None:
@@ -6488,11 +6492,7 @@ def flag_flaresolverr_feed(conn: sqlite3.Connection, feed_url: str, reason: str 
     feed_url = feed_url.strip()
     if not feed_url:
         return False
-    cur = conn.execute(
-        "INSERT OR IGNORE INTO flaresolverr_feeds (feed_url, reason) VALUES (?, ?)",
-        (feed_url, reason[:200]),
-    )
-    return cur.rowcount > 0
+    return _flag_escalation_tier(conn, "flaresolverr_feeds", feed_url, reason)
 
 
 def unflag_flaresolverr_feed(conn: sqlite3.Connection, feed_url: str) -> None:
@@ -20249,6 +20249,68 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
     return updated
 
 
+_escalation_reprobe_running: set[str] = set()
+_escalation_reprobe_lock = threading.Lock()
+
+
+def _escalation_reprobe_for_user() -> None:
+    """Re-probe flagged feeds for the bound user, then drop the flag caches so a cleared feed is fetched plainly at once."""
+    # Mode "always" sends every fetch through the proxy by the user's choice; a direct probe would both test the wrong route and
+    # expose the server's own IP to the sites the proxy is there for.
+    if get_proxy_mode() == "always":
+        return
+    started = time.monotonic()
+
+    def _invalidate_flag_caches(_feed_url: str) -> None:
+        _invalidate_browser_ua_cache()
+        _invalidate_proxy_feeds_cache()
+        _invalidate_tailscale_feeds_cache()
+        _invalidate_flaresolverr_feeds_cache()
+        invalidate_problematic_feeds_cache()
+
+    def _is_active(feed_url: str) -> bool:
+        # A short-lived reader per check: the pass runs for hours and must not pin one.
+        with get_reader() as reader:
+            feed = reader.get_feed(feed_url, None)
+        return feed is not None and bool(feed.updates_enabled)
+
+    with get_meta_connection() as conn:
+        result = escalation_reprobe.reprobe_flagged_feeds(
+            conn,
+            LECTIO_HONEST_USER_AGENT,
+            is_active=_is_active,
+            should_continue=lambda: get_proxy_mode() != "always",
+            on_clear=_invalidate_flag_caches,
+        )
+    if result["probed"]:
+        LOGGER.info(
+            "[maintenance] escalation re-probe: %d probed in %.0fs, %d cleared, %d renewed",
+            result["probed"],
+            time.monotonic() - started,
+            result["cleared"],
+            result["renewed"],
+        )
+
+
+def _start_escalation_reprobe(uid: str) -> None:
+    """Run _escalation_reprobe_for_user for *uid* on its own daemon thread, at most one at a time per user."""
+    with _escalation_reprobe_lock:
+        if uid in _escalation_reprobe_running:
+            return
+        _escalation_reprobe_running.add(uid)
+
+    def _run() -> None:
+        try:
+            _run_in_user_context(uid, _escalation_reprobe_for_user)
+        except Exception:
+            LOGGER.exception("[maintenance] escalation re-probe failed for user %r", uid)
+        finally:
+            with _escalation_reprobe_lock:
+                _escalation_reprobe_running.discard(uid)
+
+    threading.Thread(target=_run, name="escalation-reprobe", daemon=True).start()
+
+
 def _daily_maintenance_for_user() -> None:
     """Per-user nightly cleanup for the currently-bound tenancy user."""
 
@@ -20468,6 +20530,11 @@ def _daily_maintenance_for_user() -> None:
     # 7. Record this user's last-ran timestamp.
     with get_meta_connection() as conn:
         set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
+
+    # 8. Step feeds back down the fetch-escalation ladder (see services/escalation_reprobe.py). Last, so it does not contend with the
+    # VACUUMs above for the meta DB, and off this thread: a full pass can run for hours, and this thread also flushes email batches
+    # and rechecks premieres.
+    _start_escalation_reprobe(tenancy.current_user_id())
 
 
 def _evict_img_cache() -> None:
