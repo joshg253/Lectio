@@ -211,7 +211,7 @@ def get_stats():
         counts = reader.get_entry_counts()
         entry_total = counts.total
         entry_read = counts.read
-        entry_unread = entry_total - entry_read
+        entry_unread = counts.unread
 
     reader_db_bytes = _db_bytes(tenancy.reader_db_path())
     meta_db_bytes = _db_bytes(tenancy.meta_db_path())

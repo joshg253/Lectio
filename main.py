@@ -6631,7 +6631,7 @@ def _compute_unread_counts_by_feed() -> dict[str, int]:
         counts: dict[str, int] = {}
         with get_reader() as reader:
             for feed in reader.get_feeds():
-                counts[feed.url] = reader.get_entry_counts(feed=feed.url, read=False).total or 0
+                counts[feed.url] = reader.get_entry_counts(feed=feed.url).unread or 0
         return counts
 
 

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import pytest
+import requests
 import socks
 
 import services.feed_refresh as _feed_refresh_mod
@@ -984,17 +985,13 @@ def test_feed_level_backoff_still_applies_to_new_feed(tmp_path: Path):
     assert reader.updated == []
 
 
-class _NotFoundError(RuntimeError):
-    """Mimics a reader update exception carrying HTTP status via http_info."""
-
-    def __init__(self, status: int):
-        super().__init__(f"HTTP {status}")
-
-        class _Info:
-            def __init__(self, status: int):
-                self.status = status
-
-        self.http_info = _Info(status)
+def _NotFoundError(status: int) -> Exception:
+    """Mimics what reader raises: a plain error with no http_info, chained to a requests HTTPError carrying the response."""
+    response = requests.Response()
+    response.status_code = status
+    err = RuntimeError(f"HTTP {status}")
+    err.__cause__ = requests.HTTPError(f"{status} Error", response=response)
+    return err
 
 
 class _StatusFailReader(_FakeReader):
@@ -1018,7 +1015,7 @@ class _StatusFailReader(_FakeReader):
 
 class _FailReader(_FakeReader):
     """Fails the given URLs. If a url maps to an int it raises with that HTTP
-    status (via http_info); otherwise it raises a transport-style error with no
+    status (on a chained HTTPError); otherwise it raises a transport-style error with no
     http_info (mirroring reader, whose 404s often arrive with status=None)."""
 
     def __init__(self, fails):
@@ -1061,6 +1058,24 @@ def test_high_fanout_domain_never_backs_off(tmp_path: Path):
         feed_row = conn.execute("SELECT consecutive_failures FROM feed_failure_state WHERE feed_url = ?", (feeds[0],)).fetchone()
     assert domain_row is None  # high-fanout host never domain-backed-off
     assert feed_row and feed_row[0] == 1  # dead channel still earns per-feed backoff
+
+
+def test_410_gone_disables_updates_via_chained_http_error(tmp_path: Path):
+    """reader gives no http_info; the 410 lives on the chained HTTPError and must still auto-disable the feed."""
+    db_path = tmp_path / "meta.sqlite"
+    url = "https://gone.example/feed.xml"
+
+    class _Reader(_FailReader):
+        disabled: list[str] = []
+
+        def disable_feed_updates(self, feed_url: str):
+            self.disabled.append(feed_url)
+
+    reader = _Reader({url: 410})
+    service = _build_service(db_path, reader, [], [])
+
+    service.update_feeds([url])
+    assert reader.disabled == [url]
 
 
 def test_high_fanout_domain_ignores_stale_backoff(tmp_path: Path):

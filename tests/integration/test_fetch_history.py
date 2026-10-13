@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
+import requests
 from _tenancy_helpers import configure_test_tenancy
 
 import main
@@ -46,8 +47,10 @@ class _FakeReader:
 
     def update_feed(self, url):
         if url == FEED_ERR:
+            response = requests.Response()
+            response.status_code = 404
             exc = RuntimeError("404 Not Found")
-            exc.http_info = SimpleNamespace(status=404)  # ty: ignore[unresolved-attribute]
+            exc.__cause__ = requests.HTTPError("404", response=response)
             raise exc
         return SimpleNamespace(new=2, modified=0, unmodified=0)
 

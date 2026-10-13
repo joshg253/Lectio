@@ -29,19 +29,9 @@ Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the
 
 Some feeds (guitarworld) lead with a literal `"null"` text/plain element before the real HTML. The tag auto-refetch precheck now uses `_richest_content`; the other `content[0]` reads (main.py dedup/merge spots, services/dedup.py, the email full-text path) may misjudge such entries and haven't been checked.
 
-### Use reader's `EntryCounts.unread` (2026-10-12)
+### HTTP/2-only feed hosts: 426 Upgrade Required (2026-10-12)
 
-reader 3.27 added an `unread` property to `EntryCounts`/`EntrySearchCounts`. Check whether `get_unread_counts_by_feed` and the per-feed
-unread math can use it instead of hand-rolled counting; mind the generation guard on both cache-write paths.
-
-### Status-based refresh branches never fire: reader gives no `http_info` (2026-10-12)
-
-`services/feed_refresh.py` reads `exc.http_info.status` in `_is_fetch_refusal`, `_http_status_of` and the 410 Gone auto-disable. reader
-(3.26 and 3.27 alike) turns any `RetrieveError` into a plain `ParseError` with no `http_info`, so those branches are dead: a 410 feed is
-never auto-disabled and `feed_fetch_history.http_status` stays NULL; refusal detection survives only through its `str(exc)` fallback. The
-status is on `exc.__cause__.response.status_code` (a requests `HTTPError`). Fix: one helper that walks the exception chain, used at all
-three sites, and make the test fakes chain a real `HTTPError` instead of setting `http_info` (`tests/integration/test_fetch_history.py`,
-`tests/services/test_feed_refresh_service.py`).
+One feed host's Apache answers every HTTP/1.1 request with `426 Upgrade Required` and serves only HTTP/2 (curl `--http1.1` gets 426, `--http2` gets 200, whatever the UA). reader fetches through `requests`, which is HTTP/1.1-only, so that feed has failed once a day since at least 2026-10-05. Options: treat a 426 as a page-ladder escalation trigger and fetch it with `httpx[h2]` (httpx is already a dependency; needs the `h2` extra), or accept it as unfixable. Check how many feeds hit 426 before building anything.
 
 ### GitHub OpenGraph card 429s — watch for recurrence (2026-10-12)
 
