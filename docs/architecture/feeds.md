@@ -1110,14 +1110,18 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
 The browser-UA / proxy / Tailscale / FlareSolverr flags only ever climbed, so a block that was temporary left a feed pinned to a route that
 could itself be blocked (one comic feed returned 403 through every tier for 40 days while a plain fetch worked). Nightly maintenance now re-
 probes flagged feeds whose newest flag is 14 days old: one direct honest-UA GET, no proxy, oldest flag first, spaced per host, stopping
-after a 2-hour budget (the rest wait for the next night). It runs on its own thread per user, so it never holds up email batches or the
-other maintenance steps, and each result is committed before the next probe so no write lock spans the network. A parseable (RSS/Atom/JSON
-Feed), non-challenge response clears all four tiers and the failure backoff; a refusal renews `flagged_at`, so the next probe is another 14
-days out. That makes `flagged_at` "last escalated or re-probed", while `reason` still names the original refusal. Never probed: a feed with
-any manual flag (the user's choice), feeds that are unsubscribed, disabled, kept or awaiting replacement (including a 410 Gone auto-
-disable), and every feed when the proxy mode is `always` (a direct probe would test the wrong route and expose the server's IP). Probing
-never adds escalation; that stays with the refresh path, and a clear only drops tiers flagged before the probe was chosen. A 200 challenge
-page does not count as success.
+after a 2-hour budget (the rest wait for the next night) and a 45-second ceiling per probe. It runs on its own thread per user, so it never
+holds up email batches or the other maintenance steps, and each result is committed before the next probe so no write lock spans the
+network. A parseable (RSS/Atom/JSON Feed), non-challenge response clears all four tiers and the failure backoff; a refusal renews
+`flagged_at`, so the next probe is another 14 days out. That makes `flagged_at` "last escalated or re-probed", while `reason` still names
+the original refusal. A clear and a renew only touch tiers flagged strictly before the probe began, and the flag helpers move `flagged_at`
+to now when a refusal re-asserts an existing tier, so a refusal seen while a probe is in flight is never undone by it. Never probed: a feed
+with any manual flag (a manual flag replaces an automatic reason on an existing row), feeds that are unsubscribed, disabled, kept or
+awaiting replacement (a 410 Gone auto-disable also writes `disabled_feeds`), and every feed once the proxy mode is `always` (a direct probe
+would test the wrong route and expose the server's IP); subscription state and proxy mode are re-checked before each probe, and the flag
+caches are dropped as each feed clears. Probing never adds escalation; that stays with the refresh path. A 200 challenge page does not count
+as success. The probe reuses `url_guard`'s per-hop address check, with the same resolve-then-connect gap as the rest of the outbound
+fetchers.
 
 ## Suggesting a replacement for a feed on a known dead-end host
 

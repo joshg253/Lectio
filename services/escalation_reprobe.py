@@ -13,7 +13,7 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Callable, Container
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 import feedparser
@@ -34,16 +34,17 @@ PROBE_SPACING_SECONDS = 1.0
 SAME_HOST_SPACING_SECONDS = 5.0
 _MAX_BODY_BYTES = 2_000_000
 _MAX_REDIRECTS = 5
+# Wall-clock ceiling for one probe: httpx's timeout is per read, so a slow trickle could otherwise outlast the run budget.
+_PROBE_DEADLINE_SECONDS = 45.0
 
 
-def due_feeds(conn: sqlite3.Connection, *, after_days: int = REPROBE_AFTER_DAYS, limit: int = MAX_PER_RUN) -> list[tuple[str, str]]:
-    """(feed_url, newest_flagged_at) for flagged feeds whose newest flag is at least *after_days* old, oldest first.
+def due_feeds(conn: sqlite3.Connection, *, after_days: int = REPROBE_AFTER_DAYS, limit: int | None = None) -> list[str]:
+    """Flagged feeds whose newest flag is at least *after_days* old, oldest first.
 
     Left alone: feeds disabled or awaiting replacement, kept (unsubscribed) feeds, and any feed with a manual flag, since that is the
     user's explicit choice."""
     union = " UNION ALL ".join(f"SELECT feed_url, flagged_at, reason FROM {t}" for t in ESCALATION_TABLES)
-    rows = conn.execute(
-        f"""
+    sql = f"""
         SELECT feed_url, MAX(flagged_at) AS newest FROM ({union})
         WHERE feed_url NOT IN (SELECT feed_url FROM disabled_feeds)
           AND feed_url NOT IN (SELECT feed_url FROM feeds_needing_replacement)
@@ -52,15 +53,17 @@ def due_feeds(conn: sqlite3.Connection, *, after_days: int = REPROBE_AFTER_DAYS,
         GROUP BY feed_url
         HAVING newest <= datetime('now', ?)
         ORDER BY newest
-        LIMIT ?
-        """,
-        (f"-{int(after_days)} days", int(limit)),
-    ).fetchall()
-    return [(str(r[0]), str(r[1])) for r in rows]
+    """
+    params: tuple = (f"-{int(after_days)} days",)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params += (int(limit),)
+    return [str(r[0]) for r in conn.execute(sql, params).fetchall()]
 
 
 def _fetch_capped(feed_url: str, user_agent: str) -> tuple[int, object, bytes]:
     """GET *feed_url* (SSRF-checked at every hop) and read at most _MAX_BODY_BYTES. Returns (status, headers, body)."""
+    deadline = time.monotonic() + _PROBE_DEADLINE_SECONDS
     with url_guard.build_client(timeout=PROBE_TIMEOUT_SECONDS, headers={"User-Agent": user_agent}) as client:
         current = feed_url
         for _ in range(_MAX_REDIRECTS + 1):
@@ -78,6 +81,8 @@ def _fetch_capped(feed_url: str, user_agent: str) -> tuple[int, object, bytes]:
                     body.extend(chunk)
                     if len(body) >= _MAX_BODY_BYTES:
                         break
+                    if time.monotonic() > deadline:
+                        raise TimeoutError(f"probe of {feed_url!r} exceeded {_PROBE_DEADLINE_SECONDS:.0f}s")
                 return resp.status_code, resp.headers, bytes(body[:_MAX_BODY_BYTES])
     raise url_guard.UnsafeURLError(f"too many redirects starting from {feed_url!r}")
 
@@ -87,7 +92,11 @@ def _looks_like_json_feed(body: bytes) -> bool:
         data = json.loads(body)
     except ValueError:
         return False
-    return isinstance(data, dict) and str(data.get("version", "")).startswith("https://jsonfeed.org/")
+    return (
+        isinstance(data, dict)
+        and str(data.get("version", "")).startswith("https://jsonfeed.org/version/")
+        and isinstance(data.get("items"), list)
+    )
 
 
 def probe_direct(feed_url: str, user_agent: str) -> bool:
@@ -108,26 +117,28 @@ def probe_direct(feed_url: str, user_agent: str) -> bool:
     return bool(parsed.entries) or bool(parsed.feed.get("title"))
 
 
-def _clear(conn: sqlite3.Connection, feed_url: str, newest: str) -> None:
-    """Drop every tier flagged no later than *newest*. A tier the refresh path flagged since the probe was chosen survives, and the
-    failure state is left in place with it (it is derived: the next refresh rebuilds it)."""
+def _clear(conn: sqlite3.Connection, feed_url: str, probe_started: str) -> None:
+    """Drop every tier flagged strictly before the probe began. A tier the refresh path (re-)flagged since then survives, and the
+    failure state stays with it (it is derived: the next refresh rebuilds it)."""
     for table in ESCALATION_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE feed_url = ? AND flagged_at <= ?", (feed_url, newest))
+        conn.execute(f"DELETE FROM {table} WHERE feed_url = ? AND flagged_at < ?", (feed_url, probe_started))
     remaining = sum(conn.execute(f"SELECT COUNT(*) FROM {t} WHERE feed_url = ?", (feed_url,)).fetchone()[0] for t in ESCALATION_TABLES)
     if not remaining:
         conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (feed_url,))
 
 
-def _renew(conn: sqlite3.Connection, feed_url: str, newest: str) -> None:
+def _renew(conn: sqlite3.Connection, feed_url: str, probe_started: str) -> None:
     for table in ESCALATION_TABLES:
-        conn.execute(f"UPDATE {table} SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at <= ?", (feed_url, newest))
+        conn.execute(f"UPDATE {table} SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?", (feed_url, probe_started))
 
 
 def reprobe_flagged_feeds(
     conn: sqlite3.Connection,
     user_agent: str,
     *,
-    active_feeds: Container[str] | None = None,
+    is_active: Callable[[str], bool] | None = None,
+    should_continue: Callable[[], bool] | None = None,
+    on_clear: Callable[[str], None] | None = None,
     probe: Callable[[str, str], bool] = probe_direct,
     after_days: int = REPROBE_AFTER_DAYS,
     limit: int = MAX_PER_RUN,
@@ -135,22 +146,30 @@ def reprobe_flagged_feeds(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, int]:
-    """Probe due feeds, oldest flag first, until none are left or *max_seconds* is spent; whatever remains waits for the next run.
+    """Probe due feeds, oldest flag first, until none are left, *limit* are probed or *max_seconds* is spent; whatever remains waits
+    for the next run.
 
-    *active_feeds* is the set of feeds still subscribed with updates enabled; anything else is skipped (None = no filter). Each feed's
-    result is committed before the next probe, so the write lock is never held across the network.
+    *is_active(feed_url)* says whether a feed is still subscribed with updates enabled; others are skipped (None = no filter), and it
+    is asked again right before each probe. *should_continue()* is asked before each probe too, so a setting changed mid-run (the
+    proxy mode) takes effect at once. *on_clear(feed_url)* runs after a feed's flags are dropped. Each feed's result is committed
+    before the next probe, so the write lock is never held across the network.
 
     Returns {"probed", "cleared", "renewed"}."""
     result = {"probed": 0, "cleared": 0, "renewed": 0}
     started = clock()
     last_host_at: dict[str, float] = {}
     last_any_at = float("-inf")
-    for feed_url, newest in due_feeds(conn, after_days=after_days, limit=limit):
-        if active_feeds is not None and feed_url not in active_feeds:
-            continue
+    for feed_url in due_feeds(conn, after_days=after_days):
+        if result["probed"] >= limit:
+            break
         if clock() - started >= max_seconds:
             LOGGER.info("[reprobe] time budget spent after %d feed(s); the rest wait for the next run", result["probed"])
             break
+        if should_continue is not None and not should_continue():
+            LOGGER.info("[reprobe] stopped after %d feed(s): re-probing is no longer allowed", result["probed"])
+            break
+        if is_active is not None and not is_active(feed_url):
+            continue
         host = (urlparse(feed_url).hostname or "").lower()
         wait = max(
             PROBE_SPACING_SECONDS - (clock() - last_any_at),
@@ -158,15 +177,19 @@ def reprobe_flagged_feeds(
         )
         if wait > 0:
             sleep(wait)
+        probe_started = str(conn.execute("SELECT datetime('now')").fetchone()[0])
         ok = probe(feed_url, user_agent)
         last_any_at = last_host_at[host] = clock()
         result["probed"] += 1
         if ok:
-            _clear(conn, feed_url, newest)
+            _clear(conn, feed_url, probe_started)
             result["cleared"] += 1
-            LOGGER.info("[reprobe] %s fetches directly again; escalation cleared", feed_url)
+            # Host only: a feed URL can carry an access token.
+            LOGGER.info("[reprobe] %s fetches directly again; escalation cleared", host or "feed")
         else:
-            _renew(conn, feed_url, newest)
+            _renew(conn, feed_url, probe_started)
             result["renewed"] += 1
         conn.commit()
+        if ok and on_clear is not None:
+            on_clear(feed_url)
     return result

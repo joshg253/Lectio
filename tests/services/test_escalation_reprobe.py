@@ -43,15 +43,17 @@ def _counts(conn, url):
 
 
 def _due(conn, **kw):
-    return [u for u, _ in er.due_feeds(conn, **kw)]
+    return er.due_feeds(conn, **kw)
 
 
 def test_success_clears_every_tier_and_failure_state(conn):
     u = "https://a.example/feed"
-    _flag(conn, u, "browser_ua_feeds", "proxy_feeds", "flaresolverr_feeds")
+    _flag(conn, u, *er.ESCALATION_TABLES)
     conn.execute("INSERT INTO feed_failure_state VALUES (?, 40)", (u,))
-    res = er.reprobe_flagged_feeds(conn, "UA", probe=lambda *_: True, sleep=_no_sleep)
+    cleared: list[str] = []
+    res = er.reprobe_flagged_feeds(conn, "UA", probe=lambda *_: True, sleep=_no_sleep, on_clear=cleared.append)
     assert res == {"probed": 1, "cleared": 1, "renewed": 0}
+    assert cleared == [u]
     assert sum(_counts(conn, u).values()) == 0
     assert conn.execute("SELECT COUNT(*) FROM feed_failure_state").fetchone()[0] == 0
 
@@ -93,28 +95,64 @@ def test_feeds_no_longer_fetched_are_skipped(conn, table):
     assert _due(conn) == []
 
 
-def test_only_active_feeds_are_probed(conn):
-    _flag(conn, "https://live.example/f", "browser_ua_feeds")
-    _flag(conn, "https://unsubscribed.example/f", "browser_ua_feeds")
+def test_only_active_feeds_are_probed_and_inactive_ones_do_not_eat_the_limit(conn):
+    for i in range(3):
+        _flag(conn, f"https://unsubscribed{i}.example/f", "browser_ua_feeds", at=f"2026-01-0{i + 1} 00:00:00")
+    _flag(conn, "https://live.example/f", "browser_ua_feeds", at="2026-01-09 00:00:00")
     seen: list[str] = []
-    er.reprobe_flagged_feeds(
-        conn, "UA", active_feeds={"https://live.example/f"}, probe=lambda u, _ua: seen.append(u) or True, sleep=_no_sleep
-    )
+
+    def _probe(u, _ua):
+        seen.append(u)
+        return True
+
+    er.reprobe_flagged_feeds(conn, "UA", is_active=lambda u: u.startswith("https://live"), probe=_probe, limit=1, sleep=_no_sleep)
     assert seen == ["https://live.example/f"]
-    assert sum(_counts(conn, "https://unsubscribed.example/f").values()) == 1  # untouched
+    assert sum(_counts(conn, "https://unsubscribed0.example/f").values()) == 1  # untouched
 
 
-def test_a_flag_added_after_the_probe_was_chosen_survives_the_clear(conn):
+def test_activity_is_rechecked_right_before_each_probe(conn):
+    _flag(conn, "https://a.example/f", "browser_ua_feeds", at="2026-01-01 00:00:00")
+    _flag(conn, "https://b.example/f", "browser_ua_feeds", at="2026-01-02 00:00:00")
+    state = {"active": True}
+    seen: list[str] = []
+
+    def _probe(u, _ua):
+        seen.append(u)
+        state["active"] = False  # the user unsubscribes the next one while this probe runs
+        return True
+
+    er.reprobe_flagged_feeds(conn, "UA", is_active=lambda _u: state["active"], probe=_probe, sleep=_no_sleep)
+    assert seen == ["https://a.example/f"]
+
+
+def test_run_stops_when_probing_is_no_longer_allowed(conn):
+    for i in range(3):
+        _flag(conn, f"https://h{i}.example/f", "browser_ua_feeds")
+    allowed = [True, False]
+    seen: list[str] = []
+    res = er.reprobe_flagged_feeds(
+        conn,
+        "UA",
+        should_continue=lambda: allowed.pop(0) if allowed else False,
+        probe=lambda u, _ua: seen.append(u) or True,
+        sleep=_no_sleep,
+    )
+    assert res["probed"] == 1 and len(seen) == 1
+
+
+def test_a_flag_added_or_reasserted_during_the_probe_survives_the_clear(conn):
     u = "https://a.example/feed"
-    _flag(conn, u, "browser_ua_feeds")
+    _flag(conn, u, "browser_ua_feeds", "proxy_feeds")
     conn.execute("INSERT INTO feed_failure_state VALUES (?, 3)", (u,))
 
-    def _probe(feed_url, _ua):  # the refresh path escalates while the probe is in flight
-        _flag(conn, feed_url, "proxy_feeds", at="2999-01-01 00:00:00")
+    def _probe(feed_url, _ua):
+        # The refresh path escalates a new tier and re-asserts an existing one (flagged_at moves to now) while the probe is in flight.
+        conn.execute("INSERT INTO tailscale_feeds VALUES (?, datetime('now'), '')", (feed_url,))
+        conn.execute("UPDATE proxy_feeds SET flagged_at = datetime('now') WHERE feed_url = ?", (feed_url,))
         return True
 
     er.reprobe_flagged_feeds(conn, "UA", probe=_probe, sleep=_no_sleep)
-    assert _counts(conn, u) == {"browser_ua_feeds": 0, "proxy_feeds": 1, "tailscale_feeds": 0, "flaresolverr_feeds": 0}
+    assert _counts(conn, u) == {"browser_ua_feeds": 0, "proxy_feeds": 1, "tailscale_feeds": 1, "flaresolverr_feeds": 0}
     assert conn.execute("SELECT COUNT(*) FROM feed_failure_state").fetchone()[0] == 1
 
 
@@ -182,6 +220,12 @@ def test_probe_accepts_a_json_feed(monkeypatch):
     assert er.probe_direct("https://a.example/feed.json", "UA") is True
 
 
+def test_probe_rejects_a_json_object_that_is_not_a_json_feed(monkeypatch):
+    body = json.dumps({"version": "https://jsonfeed.org/version/1.1"}).encode()  # no items
+    _respond(monkeypatch, content=body, content_type="application/json")
+    assert er.probe_direct("https://a.example/feed.json", "UA") is False
+
+
 def test_probe_follows_a_redirect(monkeypatch):
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/old":
@@ -192,9 +236,36 @@ def test_probe_follows_a_redirect(monkeypatch):
     assert er.probe_direct("https://a.example/old", "UA") is True
 
 
-def test_probe_rejects_a_challenge_page_served_as_200(monkeypatch):
+def test_probe_rejects_a_challenge_even_when_the_body_would_parse(monkeypatch):
+    """Challenge detection itself must be what refuses it: the body is a valid feed, the headers say challenge."""
+    _patched_client(
+        monkeypatch,
+        lambda req: httpx.Response(200, content=RSS, headers={"content-type": "application/rss+xml", "x-amzn-waf-action": "challenge"}),
+    )
+    assert er.probe_direct("https://a.example/feed", "UA") is False
+
+
+def test_probe_rejects_a_challenge_body_even_if_the_parser_would_accept_it(monkeypatch):
     html = b"<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>"
     _respond(monkeypatch, content=html, content_type="text/html")
+
+    class _Parsed:
+        entries = [object()]
+        feed = {"title": "x"}
+
+    monkeypatch.setattr(er.feedparser, "parse", lambda _b: _Parsed())
+    assert er.probe_direct("https://a.example/feed", "UA") is False
+
+
+def test_probe_gives_up_on_a_slow_trickle(monkeypatch):
+    class _Slow(httpx.SyncByteStream):
+        def __iter__(self):
+            while True:
+                yield b"x"
+
+    _patched_client(monkeypatch, lambda req: httpx.Response(200, stream=_Slow(), headers={"content-type": "application/rss+xml"}))
+    ticks = iter(range(0, 10_000, 10))
+    monkeypatch.setattr(er.time, "monotonic", lambda: next(ticks))
     assert er.probe_direct("https://a.example/feed", "UA") is False
 
 
