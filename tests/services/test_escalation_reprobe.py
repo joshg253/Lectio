@@ -284,3 +284,41 @@ def test_literal_sql_covers_exactly_the_escalation_tables():
     assert set(er._DELETE_OLDER) == set(er._RENEW_OLDER) == set(er.ESCALATION_TABLES)
     for table in er.ESCALATION_TABLES:
         assert table in er._COUNT_FLAGS and table in er._DUE_FEEDS
+
+
+def test_a_locked_database_is_waited_out_and_does_not_abort_the_run(tmp_path: Path):
+    """The nightly VACUUM takes an exclusive lock: the write retries, and a feed whose write never lands is skipped, not fatal."""
+    db = tmp_path / "meta.sqlite3"
+    setup = _schema(sqlite3.connect(db))
+    for i in range(2):
+        _flag(setup, f"https://h{i}.example/f", "browser_ua_feeds", at=f"2026-01-0{i + 1} 00:00:00")
+    setup.commit()
+    locker = sqlite3.connect(db, timeout=0.1, isolation_level=None)
+    run = sqlite3.connect(db, timeout=0.1)
+    locker.execute("BEGIN IMMEDIATE")  # another writer holds the lock
+    sleeps: list[float] = []
+
+    def _sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 3:
+            locker.execute("COMMIT")  # the lock clears while the run is waiting
+
+    res = er.reprobe_flagged_feeds(run, "UA", probe=lambda *_: True, sleep=_sleep)
+    assert res["cleared"] == 2 and res["probed"] == 2
+    assert [r[0] for r in sqlite3.connect(db).execute("SELECT feed_url FROM browser_ua_feeds")] == []
+
+
+def test_a_write_that_never_lands_skips_that_feed_and_carries_on(tmp_path: Path, monkeypatch):
+    db = tmp_path / "meta.sqlite3"
+    setup = _schema(sqlite3.connect(db))
+    _flag(setup, "https://a.example/f", "browser_ua_feeds", at="2026-01-01 00:00:00")
+    _flag(setup, "https://b.example/f", "browser_ua_feeds", at="2026-01-02 00:00:00")
+    setup.commit()
+    locker = sqlite3.connect(db, timeout=0.1, isolation_level=None)
+    locker.execute("BEGIN IMMEDIATE")
+    monkeypatch.setattr(er, "_WRITE_RETRIES", 2)
+    run = sqlite3.connect(db, timeout=0.1)
+    res = er.reprobe_flagged_feeds(run, "UA", probe=lambda *_: True, sleep=_no_sleep)
+    assert res == {"probed": 0, "cleared": 0, "renewed": 0}  # nothing recorded, no exception
+    locker.execute("ROLLBACK")
+    assert len(sqlite3.connect(db).execute("SELECT feed_url FROM browser_ua_feeds").fetchall()) == 2

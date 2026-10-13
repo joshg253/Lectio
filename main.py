@@ -20463,10 +20463,6 @@ def _daily_maintenance_for_user() -> None:
     except Exception:
         LOGGER.exception("[maintenance] archive orphan sweep failed")
 
-    # 2c. Step feeds back down the fetch-escalation ladder (see services/escalation_reprobe.py). Off this thread: a full pass can run
-    # for hours, and this thread also flushes email batches and rechecks premieres.
-    _start_escalation_reprobe(tenancy.current_user_id())
-
     # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
     # vacuumed once in _run_global_maintenance).
     for label, path in [
@@ -20534,6 +20530,11 @@ def _daily_maintenance_for_user() -> None:
     # 7. Record this user's last-ran timestamp.
     with get_meta_connection() as conn:
         set_setting(conn, "maintenance_last_ran_at", time.strftime("%Y-%m-%d %H:%M %Z"))
+
+    # 8. Step feeds back down the fetch-escalation ladder (see services/escalation_reprobe.py). Last, so it does not contend with the
+    # VACUUMs above for the meta DB, and off this thread: a full pass can run for hours, and this thread also flushes email batches
+    # and rechecks premieres.
+    _start_escalation_reprobe(tenancy.current_user_id())
 
 
 def _evict_img_cache() -> None:

@@ -34,6 +34,9 @@ PROBE_SPACING_SECONDS = 1.0
 SAME_HOST_SPACING_SECONDS = 5.0
 _MAX_BODY_BYTES = 2_000_000
 _MAX_REDIRECTS = 5
+# A write can meet the nightly VACUUM (an exclusive lock): wait it out instead of abandoning the run.
+_WRITE_RETRIES = 12
+_WRITE_RETRY_SECONDS = 20.0
 # Wall-clock ceiling for one probe: httpx's timeout is per read, so a slow trickle could otherwise outlast the run budget.
 _PROBE_DEADLINE_SECONDS = 45.0
 
@@ -156,6 +159,27 @@ def _renew(conn: sqlite3.Connection, feed_url: str, probe_started: str) -> None:
         conn.execute(sql, (feed_url, probe_started))
 
 
+def _write_with_retry(
+    conn: sqlite3.Connection,
+    apply: Callable[[sqlite3.Connection, str, str], None],
+    feed_url: str,
+    probe_started: str,
+    *,
+    sleep: Callable[[float], None],
+) -> None:
+    """Run *apply* and commit it, waiting out "database is locked" (nightly VACUUM, a long maintenance write) up to ~4 minutes."""
+    for attempt in range(_WRITE_RETRIES):
+        try:
+            apply(conn, feed_url, probe_started)
+            conn.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            conn.rollback()
+            if "locked" not in str(exc).lower() or attempt == _WRITE_RETRIES - 1:
+                raise
+            sleep(_WRITE_RETRY_SECONDS)
+
+
 def reprobe_flagged_feeds(
     conn: sqlite3.Connection,
     user_agent: str,
@@ -205,15 +229,20 @@ def reprobe_flagged_feeds(
         ok = probe(feed_url, user_agent)
         last_any_at = last_host_at[host] = clock()
         result["probed"] += 1
+        apply = _clear if ok else _renew
+        try:
+            _write_with_retry(conn, apply, feed_url, probe_started, sleep=sleep)
+        except sqlite3.Error:
+            # Leave this feed's flags as they were (it is probed again next run) and carry on with the rest.
+            LOGGER.warning("[reprobe] could not record the result for %s; leaving its flags as they were", host or "feed", exc_info=True)
+            result["probed"] -= 1
+            continue
         if ok:
-            _clear(conn, feed_url, probe_started)
             result["cleared"] += 1
             # Host only: a feed URL can carry an access token.
             LOGGER.info("[reprobe] %s fetches directly again; escalation cleared", host or "feed")
+            if on_clear is not None:
+                on_clear(feed_url)
         else:
-            _renew(conn, feed_url, probe_started)
             result["renewed"] += 1
-        conn.commit()
-        if ok and on_clear is not None:
-            on_clear(feed_url)
     return result
