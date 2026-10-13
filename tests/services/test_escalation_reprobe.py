@@ -278,3 +278,9 @@ def test_probe_rejects_403_and_non_feed_200(monkeypatch):
 
 def test_probe_rejects_non_http_urls():
     assert er.probe_direct("file:///tmp/x.xml", "UA") is False
+
+
+def test_literal_sql_covers_exactly_the_escalation_tables():
+    assert set(er._DELETE_OLDER) == set(er._RENEW_OLDER) == set(er.ESCALATION_TABLES)
+    for table in er.ESCALATION_TABLES:
+        assert table in er._COUNT_FLAGS and table in er._DUE_FEEDS

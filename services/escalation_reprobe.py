@@ -38,27 +38,52 @@ _MAX_REDIRECTS = 5
 _PROBE_DEADLINE_SECONDS = 45.0
 
 
+# Literal SQL per tier, never assembled from a table name at call time: the statements are reviewable at a glance and the static
+# analyzers stop reading them as string-built queries.
+_DELETE_OLDER = {
+    "browser_ua_feeds": "DELETE FROM browser_ua_feeds WHERE feed_url = ? AND flagged_at < ?",
+    "proxy_feeds": "DELETE FROM proxy_feeds WHERE feed_url = ? AND flagged_at < ?",
+    "tailscale_feeds": "DELETE FROM tailscale_feeds WHERE feed_url = ? AND flagged_at < ?",
+    "flaresolverr_feeds": "DELETE FROM flaresolverr_feeds WHERE feed_url = ? AND flagged_at < ?",
+}
+_RENEW_OLDER = {
+    "browser_ua_feeds": "UPDATE browser_ua_feeds SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?",
+    "proxy_feeds": "UPDATE proxy_feeds SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?",
+    "tailscale_feeds": "UPDATE tailscale_feeds SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?",
+    "flaresolverr_feeds": "UPDATE flaresolverr_feeds SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?",
+}
+_COUNT_FLAGS = """
+    SELECT (SELECT COUNT(*) FROM browser_ua_feeds WHERE feed_url = :u)
+         + (SELECT COUNT(*) FROM proxy_feeds WHERE feed_url = :u)
+         + (SELECT COUNT(*) FROM tailscale_feeds WHERE feed_url = :u)
+         + (SELECT COUNT(*) FROM flaresolverr_feeds WHERE feed_url = :u)
+"""
+_DUE_FEEDS = """
+    WITH flags AS (
+        SELECT feed_url, flagged_at, reason FROM browser_ua_feeds
+        UNION ALL SELECT feed_url, flagged_at, reason FROM proxy_feeds
+        UNION ALL SELECT feed_url, flagged_at, reason FROM tailscale_feeds
+        UNION ALL SELECT feed_url, flagged_at, reason FROM flaresolverr_feeds
+    )
+    SELECT feed_url, MAX(flagged_at) AS newest FROM flags
+    WHERE feed_url NOT IN (SELECT feed_url FROM disabled_feeds)
+      AND feed_url NOT IN (SELECT feed_url FROM feeds_needing_replacement)
+      AND feed_url NOT IN (SELECT feed_url FROM kept_feeds)
+      AND feed_url NOT IN (SELECT feed_url FROM flags WHERE reason = 'manual')
+    GROUP BY feed_url
+    HAVING newest <= datetime('now', ?)
+    ORDER BY newest
+    LIMIT ?
+"""
+
+
 def due_feeds(conn: sqlite3.Connection, *, after_days: int = REPROBE_AFTER_DAYS, limit: int | None = None) -> list[str]:
-    """Flagged feeds whose newest flag is at least *after_days* old, oldest first.
+    """Flagged feeds whose newest flag is at least *after_days* old, oldest first (*limit* None = all).
 
     Left alone: feeds disabled or awaiting replacement, kept (unsubscribed) feeds, and any feed with a manual flag, since that is the
     user's explicit choice."""
-    union = " UNION ALL ".join(f"SELECT feed_url, flagged_at, reason FROM {t}" for t in ESCALATION_TABLES)
-    sql = f"""
-        SELECT feed_url, MAX(flagged_at) AS newest FROM ({union})
-        WHERE feed_url NOT IN (SELECT feed_url FROM disabled_feeds)
-          AND feed_url NOT IN (SELECT feed_url FROM feeds_needing_replacement)
-          AND feed_url NOT IN (SELECT feed_url FROM kept_feeds)
-          AND feed_url NOT IN (SELECT feed_url FROM ({union}) WHERE reason = 'manual')
-        GROUP BY feed_url
-        HAVING newest <= datetime('now', ?)
-        ORDER BY newest
-    """
-    params: tuple = (f"-{int(after_days)} days",)
-    if limit is not None:
-        sql += " LIMIT ?"
-        params += (int(limit),)
-    return [str(r[0]) for r in conn.execute(sql, params).fetchall()]
+    rows = conn.execute(_DUE_FEEDS, (f"-{int(after_days)} days", -1 if limit is None else int(limit))).fetchall()
+    return [str(r[0]) for r in rows]
 
 
 def _fetch_capped(feed_url: str, user_agent: str) -> tuple[int, object, bytes]:
@@ -120,16 +145,15 @@ def probe_direct(feed_url: str, user_agent: str) -> bool:
 def _clear(conn: sqlite3.Connection, feed_url: str, probe_started: str) -> None:
     """Drop every tier flagged strictly before the probe began. A tier the refresh path (re-)flagged since then survives, and the
     failure state stays with it (it is derived: the next refresh rebuilds it)."""
-    for table in ESCALATION_TABLES:
-        conn.execute(f"DELETE FROM {table} WHERE feed_url = ? AND flagged_at < ?", (feed_url, probe_started))
-    remaining = sum(conn.execute(f"SELECT COUNT(*) FROM {t} WHERE feed_url = ?", (feed_url,)).fetchone()[0] for t in ESCALATION_TABLES)
-    if not remaining:
+    for sql in _DELETE_OLDER.values():
+        conn.execute(sql, (feed_url, probe_started))
+    if not conn.execute(_COUNT_FLAGS, {"u": feed_url}).fetchone()[0]:
         conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ?", (feed_url,))
 
 
 def _renew(conn: sqlite3.Connection, feed_url: str, probe_started: str) -> None:
-    for table in ESCALATION_TABLES:
-        conn.execute(f"UPDATE {table} SET flagged_at = datetime('now') WHERE feed_url = ? AND flagged_at < ?", (feed_url, probe_started))
+    for sql in _RENEW_OLDER.values():
+        conn.execute(sql, (feed_url, probe_started))
 
 
 def reprobe_flagged_feeds(
