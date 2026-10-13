@@ -143,10 +143,7 @@ class FeedRefreshService:
         an HTTP 403/415/429/503 or a connection timeout/hang — i.e. something a
         browser identity might get past. 401/404/410 are NOT refusals of this kind
         (auth/missing/gone), so they don't escalate."""
-        status = None
-        http_info = getattr(exc, "http_info", None)
-        if http_info is not None:
-            status = getattr(http_info, "status", None)
+        status = FeedRefreshService._http_status_of(exc)
         if status in (403, 415, 429, 503):
             return True
         detail = str(exc).lower()
@@ -351,10 +348,25 @@ class FeedRefreshService:
 
     @staticmethod
     def _http_status_of(exc: object) -> int | None:
-        """Pull the HTTP status off a reader update exception, if it carries one."""
-        http_info = getattr(exc, "http_info", None)
-        status = getattr(http_info, "status", None)
-        return int(status) if isinstance(status, int) else None
+        """Pull the HTTP status off a reader update exception, if it carries one.
+
+        reader wraps a failed retrieve in a plain ParseError with no ``http_info``; the status then lives on the chained requests
+        ``HTTPError.response``. Check ``http_info`` first, then ``response.status_code``, along the ``__cause__`` chain."""
+        if not isinstance(exc, BaseException):
+            return None
+        seen: set[int] = set()
+        cur: BaseException | None = exc
+        while cur is not None and id(cur) not in seen:
+            seen.add(id(cur))
+            status = getattr(getattr(cur, "http_info", None), "status", None)
+            if not isinstance(status, int):
+                status = getattr(getattr(cur, "response", None), "status_code", None)
+            if isinstance(status, int):
+                return status
+            # Only the explicit `raise ... from` link: an implicit __context__ may be an unrelated earlier error, and this status
+            # drives the destructive 410 auto-disable.
+            cur = cur.__cause__
+        return None
 
     def _record_fetch_history(
         self,
@@ -590,37 +602,42 @@ class FeedRefreshService:
                     # 410 Gone: the feed is permanently removed. Disable updates
                     # immediately instead of backing off and retrying forever.
                     try:
-                        _http_info = getattr(exc, "http_info", None)
-                        if _http_info and getattr(_http_info, "status", None) == 410:
+                        if self._http_status_of(exc) == 410:
+                            disabled = False
                             try:
                                 reader.disable_feed_updates(feed_url)
+                                disabled = True
                             except Exception:
-                                pass
-                            self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
-                            error_count += 1
-                            with self._get_meta_connection() as conn:
-                                conn.execute(
-                                    """
-                                        INSERT INTO feed_failure_state
-                                            (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
-                                        VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
-                                        ON CONFLICT(feed_url) DO UPDATE SET
-                                            consecutive_failures = excluded.consecutive_failures,
-                                            next_retry_at = NULL,
-                                            last_error = excluded.last_error,
-                                            last_failure_at = excluded.last_failure_at
-                                        """,
-                                    (feed_url, now_ts),
-                                )
-                                self._record_fetch_history(
-                                    conn,
-                                    feed_url,
-                                    "error",
-                                    http_status=410,
-                                    duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
-                                    error="410 Gone: feed has been permanently removed",
-                                )
-                            continue
+                                self._logger.warning("[refresh] 410 Gone but disabling updates failed for %s", feed_url, exc_info=True)
+                            if disabled:
+                                self._logger.info("[refresh] 410 Gone — disabled updates for %s", feed_url)
+                                error_count += 1
+                                with self._get_meta_connection() as conn:
+                                    # Lectio's own Disabled list, so the feed reads as paused in the UI (and is left alone by the
+                                    # escalation re-probe), not only paused inside reader.
+                                    conn.execute("INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)", (feed_url,))
+                                    conn.execute(
+                                        """
+                                            INSERT INTO feed_failure_state
+                                                (feed_url, consecutive_failures, next_retry_at, last_error, last_failure_at)
+                                            VALUES (?, 1, NULL, '410 Gone: feed has been permanently removed', ?)
+                                            ON CONFLICT(feed_url) DO UPDATE SET
+                                                consecutive_failures = excluded.consecutive_failures,
+                                                next_retry_at = NULL,
+                                                last_error = excluded.last_error,
+                                                last_failure_at = excluded.last_failure_at
+                                            """,
+                                        (feed_url, now_ts),
+                                    )
+                                    self._record_fetch_history(
+                                        conn,
+                                        feed_url,
+                                        "error",
+                                        http_status=410,
+                                        duration_ms=int((time.perf_counter() - feed_started_at) * 1000),
+                                        error="410 Gone: feed has been permanently removed",
+                                    )
+                                continue
                     except Exception:
                         pass
 
