@@ -51,6 +51,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
+from services import escalation_reprobe
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
@@ -20249,6 +20250,56 @@ def _resign_expired_deviantart_images(content_html: str, feed_url: str, entry_id
     return updated
 
 
+_escalation_reprobe_running: set[str] = set()
+_escalation_reprobe_lock = threading.Lock()
+
+
+def _escalation_reprobe_for_user() -> None:
+    """Re-probe flagged feeds for the bound user, then drop the flag caches so a cleared feed is fetched plainly at once."""
+    # Mode "always" sends every fetch through the proxy by the user's choice; a direct probe would both test the wrong route and
+    # expose the server's own IP to the sites the proxy is there for.
+    if get_proxy_mode() == "always":
+        return
+    started = time.monotonic()
+    with get_reader() as reader:
+        active = {f.url for f in reader.get_feeds(updates_enabled=True)}
+    with get_meta_connection() as conn:
+        result = escalation_reprobe.reprobe_flagged_feeds(conn, LECTIO_HONEST_USER_AGENT, active_feeds=active)
+    if result["probed"]:
+        LOGGER.info(
+            "[maintenance] escalation re-probe: %d probed in %.0fs, %d cleared, %d renewed",
+            result["probed"],
+            time.monotonic() - started,
+            result["cleared"],
+            result["renewed"],
+        )
+    if result["cleared"]:
+        _invalidate_browser_ua_cache()
+        _invalidate_proxy_feeds_cache()
+        _invalidate_tailscale_feeds_cache()
+        _invalidate_flaresolverr_feeds_cache()
+        invalidate_problematic_feeds_cache()
+
+
+def _start_escalation_reprobe(uid: str) -> None:
+    """Run _escalation_reprobe_for_user for *uid* on its own daemon thread, at most one at a time per user."""
+    with _escalation_reprobe_lock:
+        if uid in _escalation_reprobe_running:
+            return
+        _escalation_reprobe_running.add(uid)
+
+    def _run() -> None:
+        try:
+            _run_in_user_context(uid, _escalation_reprobe_for_user)
+        except Exception:
+            LOGGER.exception("[maintenance] escalation re-probe failed for user %r", uid)
+        finally:
+            with _escalation_reprobe_lock:
+                _escalation_reprobe_running.discard(uid)
+
+    threading.Thread(target=_run, name="escalation-reprobe", daemon=True).start()
+
+
 def _daily_maintenance_for_user() -> None:
     """Per-user nightly cleanup for the currently-bound tenancy user."""
 
@@ -20400,6 +20451,10 @@ def _daily_maintenance_for_user() -> None:
             LOGGER.info("[maintenance] archive orphan sweep: removed %d unrecoverable failed capture(s)", swept)
     except Exception:
         LOGGER.exception("[maintenance] archive orphan sweep failed")
+
+    # 2c. Step feeds back down the fetch-escalation ladder (see services/escalation_reprobe.py). Off this thread: a full pass can run
+    # for hours, and this thread also flushes email batches and rechecks premieres.
+    _start_escalation_reprobe(tenancy.current_user_id())
 
     # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
     # vacuumed once in _run_global_maintenance).

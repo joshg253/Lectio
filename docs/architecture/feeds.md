@@ -1105,6 +1105,20 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
   what makes reuse across different URLs on the same host valid at all.
 
 
+## Escalation steps back down (`services/escalation_reprobe.py`)
+
+The browser-UA / proxy / Tailscale / FlareSolverr flags only ever climbed, so a block that was temporary left a feed pinned to a route that
+could itself be blocked (one comic feed returned 403 through every tier for 40 days while a plain fetch worked). Nightly maintenance now re-
+probes flagged feeds whose newest flag is 14 days old: one direct honest-UA GET, no proxy, oldest flag first, spaced per host, stopping
+after a 2-hour budget (the rest wait for the next night). It runs on its own thread per user, so it never holds up email batches or the
+other maintenance steps, and each result is committed before the next probe so no write lock spans the network. A parseable (RSS/Atom/JSON
+Feed), non-challenge response clears all four tiers and the failure backoff; a refusal renews `flagged_at`, so the next probe is another 14
+days out. That makes `flagged_at` "last escalated or re-probed", while `reason` still names the original refusal. Never probed: a feed with
+any manual flag (the user's choice), feeds that are unsubscribed, disabled, kept or awaiting replacement (including a 410 Gone auto-
+disable), and every feed when the proxy mode is `always` (a direct probe would test the wrong route and expose the server's IP). Probing
+never adds escalation; that stays with the refresh path, and a clear only drops tiers flagged before the probe was chosen. A 200 challenge
+page does not count as success.
+
 ## Suggesting a replacement for a feed on a known dead-end host
 
 FeedBurner has stopped 404ing dead feeds; it now serves the origin site's own
