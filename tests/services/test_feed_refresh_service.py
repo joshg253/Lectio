@@ -59,7 +59,7 @@ def _make_conn(db_path: Path):
         )
         """
     )
-    conn.execute("CREATE TABLE IF NOT EXISTS disabled_feeds (feed_url TEXT PRIMARY KEY)")
+    conn.execute("CREATE TABLE IF NOT EXISTS disabled_feeds (feed_url TEXT PRIMARY KEY, reason TEXT NOT NULL DEFAULT '')")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS domain_failure_state (
@@ -1079,7 +1079,7 @@ def test_410_gone_disables_updates_via_chained_http_error(tmp_path: Path):
     service.update_feeds([url])
     assert reader.disabled == [url]
     with _make_conn(db_path) as conn:
-        assert [r[0] for r in conn.execute("SELECT feed_url FROM disabled_feeds")] == [url]
+        assert [tuple(r) for r in conn.execute("SELECT feed_url, reason FROM disabled_feeds")] == [(url, "410 Gone")]
         row = conn.execute("SELECT last_error, next_retry_at FROM feed_failure_state WHERE feed_url = ?", (url,)).fetchone()
     assert row and row[0].startswith("410 Gone") and row[1] is None
 
