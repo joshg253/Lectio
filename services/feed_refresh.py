@@ -615,7 +615,9 @@ class FeedRefreshService:
                                 with self._get_meta_connection() as conn:
                                     # Lectio's own Disabled list, so the feed reads as paused in the UI (and is left alone by the
                                     # escalation re-probe), not only paused inside reader.
-                                    conn.execute("INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)", (feed_url,))
+                                    conn.execute(
+                                        "INSERT OR IGNORE INTO disabled_feeds (feed_url, reason) VALUES (?, '410 Gone')", (feed_url,)
+                                    )
                                     conn.execute(
                                         """
                                             INSERT INTO feed_failure_state

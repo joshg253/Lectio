@@ -23,7 +23,7 @@ def _app() -> FastAPI:
 
 def test_disable_fans_out_per_feed(monkeypatch):
     calls: list[str] = []
-    _mock = lambda u: calls.append(u)  # noqa: E731
+    _mock = lambda u, **kw: calls.append(u)  # noqa: E731
     # routes.feeds did `from main import (...)` at module load, so each of these
     # copied a reference at that time -- patching main's own attribute doesn't
     # reach routes.feeds' copy, both need patching (routes/__init__.py's docstring).
@@ -38,7 +38,7 @@ def test_disable_fans_out_per_feed(monkeypatch):
 
 def test_enable_fans_out(monkeypatch):
     calls: list[str] = []
-    _mock = lambda u: calls.append(u)  # noqa: E731
+    _mock = lambda u, **kw: calls.append(u)  # noqa: E731
     monkeypatch.setattr(main, "enable_feed", _mock)
     monkeypatch.setattr(routes.feeds, "enable_feed", _mock)
     with TestClient(_app()) as c:

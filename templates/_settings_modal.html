@@ -393,11 +393,19 @@
 
         <div id="inactive-feeds-modal" class="feeds-tab-panel" data-feeds-panel="deactivated" hidden>
           {% if inactive_feeds %}
+          {% set auto_feeds = inactive_feeds|selectattr("reason")|list %}
+          {% set own_feeds = inactive_feeds|rejectattr("reason")|list %}
+          {% for group_title, group in (("Disabled automatically", auto_feeds), ("Disabled by you", own_feeds)) %}
+          {% if group %}
+          {% if auto_feeds and own_feeds %}<h4 class="inactive-feed-group">{{ group_title }}</h4>{% endif %}
           <ul class="inactive-feed-list">
-            {% for feed in inactive_feeds %}
+            {% for feed in group %}
             <li class="inactive-feed-row">
               {% if feed.folder_name %}<span class="inactive-feed-folder">{{ feed.folder_name }}</span>{% endif %}
-              <span class="inactive-feed-name">{{ feed.feed_title }}</span>
+              <button type="button" class="inactive-feed-name"
+                data-feed-properties-url="{{ feed.feed_url }}" title="{{ feed.feed_url }}">{{ feed.feed_title }}</button>
+              <span class="inactive-feed-reason{% if feed.reason %} inactive-feed-auto{% endif %}"
+                >Disabled ({{ feed.disabled_label }})</span>
               <form method="post" action="/feeds/enable" style="display:contents">
                 <input type="hidden" name="feed_url" value="{{ feed.feed_url }}" />
                 {% if feed.folder_id %}<input type="hidden" name="folder_id" value="{{ feed.folder_id }}" />{% endif %}
@@ -406,6 +414,8 @@
             </li>
             {% endfor %}
           </ul>
+          {% endif %}
+          {% endfor %}
           {% else %}
           <p class="muted">No deactivated feeds.</p>
           {% endif %}

@@ -1806,6 +1806,10 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
     ]
     _was_needs_replacement = old_url in get_feeds_needing_replacement()
     with get_meta_connection() as conn:
+        # Disabled by the system (410 Gone, ...) rather than paused by the user: the reason belonged to the old URL.
+        _was_system_disabled = (
+            conn.execute("SELECT 1 FROM disabled_feeds WHERE feed_url = ? AND reason != ''", (old_url,)).fetchone() is not None
+        )
         for table in _feed_url_tables:
             try:
                 conn.execute(f"UPDATE {table} SET feed_url = ? WHERE feed_url = ?", (new_url, old_url))
@@ -1841,8 +1845,8 @@ def change_feed_url_route(old_url: str = Form(...), new_url: str = Form(...), fo
         # A URL change on a needs-replacement feed IS the replacement: clear the
         # dead-triage flag (migrated to new_url above) so it leaves the worklist.
         conn.execute("DELETE FROM feeds_needing_replacement WHERE feed_url IN (?, ?)", (old_url, new_url))
-    if _was_needs_replacement:
-        # It was disabled while dead; the working replacement should fetch again.
+    if _was_needs_replacement or _was_system_disabled:
+        # It was disabled while dead (by triage or by the system); the working replacement should fetch again.
         enable_feed(new_url)
 
     # A feed that moved to a new HOST moved the site with it. Seed the same
@@ -2900,7 +2904,7 @@ def bulk_feed_action(
     try:
         if action == "disable":
             for u in urls:
-                disable_feed(u)
+                disable_feed(u, claim=False)
                 count += 1
         elif action == "enable":
             for u in urls:

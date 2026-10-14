@@ -1746,7 +1746,7 @@ def _sync_deviantart_watchlist_locked(token: str, uid: str, auto_resume_round: i
                 newly_unwatched,
             ).fetchall()
         for row in rows:
-            disable_feed(deviantart_service.feed_file_url(str(row["id"])))
+            disable_feed(deviantart_service.feed_file_url(str(row["id"])), reason="unwatched on DeviantArt")
         LOGGER.info(
             "[deviantart] %d newly-unwatched artist(s) paused (updates disabled, not unsubscribed): %s",
             len(rows),
@@ -4125,6 +4125,12 @@ def ensure_meta_schema() -> None:
             )
             """
         )
+        # Why a feed is disabled: '' = the user paused it; anything else is the system's own reason ("410 Gone", ...). Rows that
+        # predate the column are the user's, which is what the default says.
+        try:
+            conn.execute("ALTER TABLE disabled_feeds ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass  # column already exists
         # Feeds unsubscribed-but-retained for their curation (starred/tagged
         # entries). Kept feeds are hidden from the feed tree / All Feeds /
         # Uncategorized and have updates disabled, but their reader feed and
@@ -6499,19 +6505,38 @@ def unflag_flaresolverr_feed(conn: sqlite3.Connection, feed_url: str) -> None:
     conn.execute("DELETE FROM flaresolverr_feeds WHERE feed_url = ?", (feed_url.strip(),))
 
 
-def disable_feed(feed_url: str) -> None:
+def _disabled_label(reason: str, disabled_at: str) -> str:
+    """ "manual, Oct 12, 2026 3:00am" or "automatic: 410 Gone, Oct 12, 2026 3:00am" for the Inactive Feeds list.
+
+    disabled_at is SQLite's UTC datetime('now'); it is shown in the server's local time like every other timestamp in the UI."""
+    who = f"automatic: {reason}" if reason else "manual"
+    try:
+        when = format_datetime_for_ui(datetime.strptime(disabled_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc))
+    except ValueError:
+        when = None
+    return f"{who}, {when}" if when else who
+
+
+def disable_feed(feed_url: str, reason: str = "", *, claim: bool = True) -> None:
     """Disable a feed (no fetching) without unsubscribing. Pause and Disable are the
     same state: this sets both Lectio's disabled_feeds row AND reader's
     updates_enabled flag, so the Settings tree and Feed Properties agree and the
-    scheduler skips it regardless of which one is consulted."""
+    scheduler skips it regardless of which one is consulted.
+
+    *reason* is empty when the user paused the feed and a short label when the system did ("410 Gone"). A system reason never
+    overwrites an existing row, and a user's own single-feed pause claims a system-disabled feed (so it stops reading as automatic).
+    Bulk and triage actions pass claim=False: they add rows but leave an existing automatic reason standing."""
     feed_url = feed_url.strip()
     if not feed_url:
         return
+    reason = reason.strip()[:200]
     with get_meta_connection() as conn:
         conn.execute(
-            "INSERT OR IGNORE INTO disabled_feeds (feed_url) VALUES (?)",
-            (feed_url,),
+            "INSERT OR IGNORE INTO disabled_feeds (feed_url, reason) VALUES (?, ?)",
+            (feed_url, reason),
         )
+        if not reason and claim:
+            conn.execute("UPDATE disabled_feeds SET reason = '' WHERE feed_url = ?", (feed_url,))
     try:
         with get_reader() as reader:
             reader.disable_feed_updates(feed_url)
@@ -6528,6 +6553,9 @@ def enable_feed(feed_url: str) -> None:
         return
     with get_meta_connection() as conn:
         conn.execute("DELETE FROM disabled_feeds WHERE feed_url = ?", (feed_url,))
+        # A 410 auto-disable leaves a terminal failure record; re-enabling is the user's call to try again, so drop it rather
+        # than show the feed as permanently gone.
+        conn.execute("DELETE FROM feed_failure_state WHERE feed_url = ? AND last_error LIKE '410 Gone%'", (feed_url,))
         # Clear the backoff so the feed is checked next cycle, not after the old
         # retry window.
         conn.execute(
@@ -22197,7 +22225,7 @@ def _home_inner(
         # Build inactive feed list (feed_url + folder membership).
         inactive_feed_rows = conn.execute(
             """
-            SELECT df.feed_url, df.disabled_at, ff.folder_id, f.name AS folder_name
+            SELECT df.feed_url, df.disabled_at, df.reason, ff.folder_id, f.name AS folder_name
             FROM disabled_feeds df
             LEFT JOIN folder_feeds ff ON ff.feed_url = df.feed_url
             LEFT JOIN folders f ON f.id = ff.folder_id
@@ -22296,6 +22324,8 @@ def _home_inner(
             "feed_url": str(r["feed_url"]),
             "feed_title": feed_title_map.get(str(r["feed_url"]), str(r["feed_url"])),
             "disabled_at": str(r["disabled_at"] or ""),
+            "reason": str(r["reason"] or ""),
+            "disabled_label": _disabled_label(str(r["reason"] or ""), str(r["disabled_at"] or "")),
             "folder_id": r["folder_id"],
             "folder_name": str(r["folder_name"] or ""),
         }

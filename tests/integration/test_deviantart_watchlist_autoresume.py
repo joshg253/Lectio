@@ -168,13 +168,13 @@ def test_reconcile_pauses_a_newly_unwatched_artists_feed(configured):
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
     fake, _ = _fake_create(fail_from=99, retry_after=None)
     configured.setattr(deviantart_service, "create_deviantart_feed", fake)
-    disabled: list[str] = []
-    configured.setattr(main, "disable_feed", lambda url: disabled.append(url))
+    disabled: list[tuple[str, str]] = []
+    configured.setattr(main, "disable_feed", lambda url, reason="": disabled.append((url, reason)))
 
     result = main.sync_deviantart_watchlist()
 
     assert result["unwatched"] == ["zoe"]
-    assert disabled == [deviantart_service.feed_file_url("x")]
+    assert disabled == [(deviantart_service.feed_file_url("x"), "unwatched on DeviantArt")]
     with main.get_meta_connection() as conn:
         assert main.get_setting(conn, main.SETTING_DEVIANTART_UNWATCHED_DIRTY) == "1"
 
@@ -200,8 +200,8 @@ def test_reconcile_does_not_repause_an_already_reported_artist(configured):
     configured.setattr(deviantart_service, "list_watching", lambda tok, user: ["alice"])
     fake, _ = _fake_create(fail_from=99, retry_after=None)
     configured.setattr(deviantart_service, "create_deviantart_feed", fake)
-    disabled: list[str] = []
-    configured.setattr(main, "disable_feed", lambda url: disabled.append(url))
+    disabled: list[tuple[str, str]] = []
+    configured.setattr(main, "disable_feed", lambda url, reason="": disabled.append((url, reason)))
 
     result = main.sync_deviantart_watchlist()
 

@@ -1105,6 +1105,18 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
   what makes reuse across different URLs on the same host valid at all.
 
 
+## Who disabled a feed (`disabled_feeds.reason`)
+
+A pause the user chose and one the system made look the same, and the user needs to tell them apart (a topic parked for now versus a site
+that is gone). `disabled_feeds` carries `reason`: empty means the user paused it, anything else is the system's own short label (`410 Gone`,
+`unwatched on DeviantArt`). `disable_feed(url, reason="")` never lets a system reason overwrite an existing row, and a user's own single-
+feed pause claims a system-disabled feed, while bulk disable and "needs replacement" triage pass `claim=False` and leave an automatic reason
+standing; `disabled_at` is kept across all of these. Changing a feed's URL drops a system disable (the reason belonged to the old URL) and
+re-enables the new one; a user's pause is kept. The Inactive Feeds list groups "Disabled automatically" above "Disabled by you" (headings
+only when both exist) and labels each row `Disabled (manual, <date>)` or `Disabled (automatic: <reason>, <date>)`. Enabling a feed drops its
+terminal 410 failure record so it gets a clean retry. Rows that predate the column default to the user's, and the column is added by the
+idempotent per-user schema pass.
+
 ## Escalation steps back down (`services/escalation_reprobe.py`)
 
 The browser-UA / proxy / Tailscale / FlareSolverr flags only ever climbed, so a block that was temporary left a feed pinned to a route that

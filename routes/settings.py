@@ -931,7 +931,7 @@ def mark_feed_needs_replacement(request: Request, feed_url: str = Form(...)):
     feed_url = feed_url.strip()
     if not feed_url:
         return JSONResponse({"ok": False, "error": "Missing feed URL."}, status_code=400)
-    disable_feed(feed_url)  # stop fetching
+    disable_feed(feed_url, claim=False)  # stop fetching; an automatic disable keeps saying so
     with get_meta_connection() as conn:
         conn.execute(
             "INSERT OR IGNORE INTO feeds_needing_replacement (feed_url) VALUES (?)",

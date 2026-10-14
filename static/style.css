@@ -1378,8 +1378,18 @@ body[data-single-mode="1"] #folders-collapse-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* A button (opens Feed Properties), reset to read as the plain name it used to be. */
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  font: inherit;
   font-size: 0.88rem;
+  color: inherit;
+  cursor: pointer;
 }
+.inactive-feed-name:hover { text-decoration: underline; }
 .inactive-feed-enable-btn {
   flex-shrink: 0;
   padding: 0.2rem 0.6rem;
@@ -9166,3 +9176,21 @@ body.has-audio-player .panes { height: calc(100vh - var(--gap-h, 3.4rem)); }
 .entry-tags-aliases-btn:hover {
   color: var(--ink);
 }
+.inactive-feed-group {
+  margin: 0.9rem 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.inactive-feed-reason {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.inactive-feed-reason.inactive-feed-auto { color: var(--ink); }
