@@ -57,6 +57,10 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
 
+### YouTube descriptions render hashtag lines as headings (2026-10-14)
+A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
+the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
+
 ## Tier 3 — sized, no open decision, ready to build
 
 Empty.

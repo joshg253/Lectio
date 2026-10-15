@@ -360,6 +360,10 @@ keeping services free of main/DB imports.
   `_shopify_vendor_tags`'s `<prefix>_vendor` matching but for `<prefix>_tags`,
   splitting the value on whitespace instead of taking it whole (a leading `#`
   is stripped by the shared `_clean_tag_values`, same as any other tag).
+- **YouTube description hashtags count.** The channel RSS ships the description as the entry summary and creators type `#tags` into it.
+  `_youtube_description_hashtags` scans it for `yt:video:` entries only (a `#` in other feeds' prose or code is not a tag), skips URL
+  fragments, entities and tags over 30 characters, drops the Shorts markers, and keeps the first 20.
+  Older entries were filled by `scripts/backfill_youtube_hashtags.py` (additive).
 - **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
   stored **raw** and normalized only at display, because the raw text is the
   foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
