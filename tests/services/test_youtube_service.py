@@ -18,8 +18,9 @@ class _ReaderCtx:
 
 
 class _FakeEntry:
-    def __init__(self, link: str):
+    def __init__(self, link: str, added=None):
         self.link = link
+        self.added = added
 
 
 class _FakeReader:
@@ -536,3 +537,154 @@ def test_fetch_and_cache_members_only_preserves_existing_duration_row(tmp_path: 
     assert row["duration_seconds"] == 360
     assert row["duration_display"] == "6:00"
     assert row["members_only"] == 1
+
+
+def test_failed_chunk_is_not_cached_as_a_negative(tmp_path: Path, monkeypatch):
+    """A timeout/quota failure on one 50-id chunk used to be stored as a 6-hour "no duration" row for every id in it, so
+    several-hour-old videos stayed length-less. Failed ids must stay uncached (retried next refresh); an id a successful
+    chunk simply doesn't return is still a real negative."""
+    import httpx
+
+    db_path = tmp_path / "yt.sqlite"
+    ids = [f"{i:011d}" for i in range(51)]  # 50 + 1 -> two chunks
+    entries = [_FakeEntry(f"https://www.youtube.com/watch?v={v}") for v in ids]
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    calls = {"n": 0}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # First chunk: answers every id except the last (private/deleted).
+            return {"items": [{"id": v, "contentDetails": {"duration": "PT1M"}} for v in ids[:49]]}
+
+    def _fake_get(url, params=None, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _Resp()
+        raise httpx.ReadTimeout("slow")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader(entries)),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+
+    with get_meta_connection() as conn:
+        stored = {r[0]: r[1] for r in conn.execute("SELECT video_id, duration_seconds FROM youtube_video_duration")}
+    assert stored[ids[0]] == 60
+    assert stored[ids[49]] is None  # in the answered chunk, not returned: a real negative
+    assert ids[50] not in stored  # in the failed chunk: left for the next refresh
+
+
+def _service_with_negative(tmp_path: Path, monkeypatch, *, entry, fetched_minutes_ago: int):
+    """A service whose one video has a no-duration row fetched N minutes ago; returns (service, ids the batch was asked for)."""
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, duration_seconds, duration_display, fetched_at)"
+            " VALUES (?, NULL, NULL, datetime('now', ?))",
+            ("ABCDEFGHIJK", f"-{fetched_minutes_ago} minutes"),
+        )
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([entry])),
+        user_agent="LectioTest/1.0",
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(service, "get_video_durations_batch", lambda ids: asked.extend(ids) or {})
+    return service, asked
+
+
+def test_young_entry_negative_retries_after_thirty_minutes(tmp_path: Path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    entry = _FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK")
+    entry.added = datetime.now(timezone.utc) - timedelta(hours=2)
+    service, asked = _service_with_negative(tmp_path, monkeypatch, entry=entry, fetched_minutes_ago=45)
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+    assert asked == ["ABCDEFGHIJK"]
+
+
+def test_old_entry_negative_waits_the_long_window(tmp_path: Path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    entry = _FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK")
+    entry.added = datetime.now(timezone.utc) - timedelta(days=3)
+    service, asked = _service_with_negative(tmp_path, monkeypatch, entry=entry, fetched_minutes_ago=45)
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=t")
+    assert asked == []  # a genuinely length-less old video isn't re-polled every half hour
+
+
+def test_failed_ids_back_off_between_refreshes(tmp_path: Path, monkeypatch):
+    from datetime import datetime, timezone
+
+    entry = _FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK")
+    entry.added = datetime.now(timezone.utc)
+    db_path = tmp_path / "yt.sqlite"
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([entry])),
+        user_agent="LectioTest/1.0",
+    )
+    calls: list[list[str]] = []
+
+    def _batch(ids):
+        calls.append(list(ids))
+        out = _youtube_service._BatchResult()
+        out["OTHERVIDEO1"] = (60, "1:00", None, None)  # non-empty, so the all-failed early return doesn't hide the id
+        out.failed.update(ids)
+        return out
+
+    from services import youtube as _youtube_service
+
+    monkeypatch.setattr(service, "get_video_durations_batch", _batch)
+    feed = "https://www.youtube.com/feeds/videos.xml?channel_id=t"
+    service.fetch_and_store_durations_for_feed(feed)
+    service.fetch_and_store_durations_for_feed(feed)
+    assert calls == [["ABCDEFGHIJK"]]  # the second refresh skipped it
+
+
+def test_refresh_upcoming_keeps_row_when_its_chunk_failed(tmp_path: Path, monkeypatch):
+    from services import youtube as _youtube_service
+
+    db_path = tmp_path / "yt.sqlite"
+
+    def get_meta_connection():
+        return _make_db_conn(db_path)
+
+    with get_meta_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration"
+            "(video_id, duration_seconds, duration_display, live_broadcast_content, scheduled_start_time, fetched_at)"
+            " VALUES ('UPCOMING004', NULL, NULL, 'upcoming', '2026-09-20T18:00:00Z', datetime('now'))"
+        )
+    service = YouTubeDurationService(
+        get_durations_connection=get_meta_connection,
+        get_reader=lambda: _ReaderCtx(_FakeReader([])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+
+    def _batch(ids):
+        out = _youtube_service._BatchResult()
+        out["SOMETHINGELS"] = (60, "1:00", None, None)
+        out.failed.update(ids)
+        return out
+
+    monkeypatch.setattr(service, "get_video_durations_batch", _batch)
+    service.refresh_upcoming_videos()
+    with get_meta_connection() as conn:
+        row = conn.execute("SELECT live_broadcast_content, scheduled_start_time FROM youtube_video_duration").fetchone()
+    assert (row[0], row[1]) == ("upcoming", "2026-09-20T18:00:00Z")

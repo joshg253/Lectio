@@ -18,6 +18,8 @@ from collections.abc import Callable, Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from services import entry_content
+
 LOGGER = logging.getLogger(__name__)
 
 # One floor for every title-based dedup signal (fuzzy, exact title, the safe
@@ -228,11 +230,7 @@ def _safe_dedup_norm_title(t: str | None) -> str:
 
 
 def _safe_dedup_norm_body(entry) -> str:
-    raw = ""
-    if entry.content:
-        raw = entry.content[0].value or ""
-    if not raw:
-        raw = entry.summary or ""
+    raw = entry_content.entry_body(entry)
     text = _SAFE_DEDUP_TAG_RE.sub(" ", raw)
     text = html.unescape(text)
     return " ".join(text.split())[:_SAFE_DEDUP_BODY_CHARS].lower()

@@ -9,6 +9,8 @@ import threading
 import time
 from typing import Any
 
+from services import entry_content
+
 
 class GReaderService:
     _TOKEN_LIFETIME = 90 * 24 * 3600  # 90 days
@@ -137,11 +139,7 @@ class GReaderService:
         feed_title: str,
         feed_link: str,
     ) -> dict[str, Any]:
-        content = ""
-        if entry.content:
-            content = entry.content[0].value or ""
-        elif entry.summary:
-            content = entry.summary or ""
+        content = entry_content.entry_body(entry)
 
         pub = entry.published or entry.updated
         pub_ts = int(pub.timestamp()) if pub else 0

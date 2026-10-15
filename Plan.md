@@ -25,13 +25,9 @@ Reddit is retiring `.rss` feeds with no replacement for non-mod use, and API acc
 
 Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the forum HTML 403s, only the `/rss/` URL works) and a filtered Slickdeals feed (PC and laptop deals). No replacement for r/GameDeals or r/VinylDeals; vinyl.deals has no feed and its rows are `onclick` handlers, so the page scraper can't read it without a new row mode (skipped).
 
-### Direct `content[0]` reads (2026-10-03)
-
-Some feeds (guitarworld) lead with a literal `"null"` text/plain element before the real HTML. The tag auto-refetch precheck now uses `_richest_content`; the other `content[0]` reads (main.py dedup/merge spots, services/dedup.py, the email full-text path) may misjudge such entries and haven't been checked.
-
 ### HTTP/2-only feed hosts: 426 Upgrade Required (2026-10-12)
 
-One feed host's Apache answers every HTTP/1.1 request with `426 Upgrade Required` and serves only HTTP/2 (curl `--http1.1` gets 426, `--http2` gets 200, whatever the UA). reader fetches through `requests`, which is HTTP/1.1-only, so that feed has failed once a day since at least 2026-10-05. Options: treat a 426 as a page-ladder escalation trigger and fetch it with `httpx[h2]` (httpx is already a dependency; needs the `h2` extra), or accept it as unfixable. Check how many feeds hit 426 before building anything.
+Counted 2026-10-14: one feed across all users fails with `426` (an Apache host that serves only HTTP/2; `requests` is HTTP/1.1-only), so an `httpx[h2]` path isn't worth building yet. Revisit if a second host shows up: treat a 426 as a page-ladder escalation trigger and fetch it with `httpx[h2]`.
 
 ### GitHub OpenGraph card 429s — watch for recurrence (2026-10-12)
 
@@ -42,24 +38,21 @@ after GitHub recovers) and whether the pane should retry.
 
 ### Folder-switch speed — what's left (2026-10-02)
 
-Shipped: no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s
+Shipped: the saved-unread badge cache (unread generation + `saved_entries` count/max-rowid signature, 15s TTL, cleared by tag writes and `apply_star_state`), a partial index on `entry_lead_images(feed_url) WHERE locked_until IS NOT NULL`, no underfill retry on a short raw fetch or a first page within 10% of full, Saved unread as one set intersection, a 15s
 tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1 MB. Left:
-- Saved badges are still recomputed per request (~100ms). A cache keyed on the unread generation plus a saved generation bumped by
-  star/tag/archive writes, with a background refresh, would take it to ~0 without going stale.
-- A partial index on `entry_lead_images(feed_url) WHERE locked_until IS NOT NULL` makes the locked-comics lookup free; today it scans
-  150k rows (~55ms). Needs the per-user schema migration.
 - GIL starvation was confirmed with `py-spy` (78% of GIL time in `purge_tombstoned_entries`, fixed). The 1ms switch interval is a
   belt-and-braces measure; revert it to the 5ms default if it ever shows a throughput cost. Re-profile before considering a
   separate refresh process.
 - `lectio:saved` has ~4.7k tombstones and no publisher window, so the nightly sweep never removes them. Harmless now that the purge
   is one query per feed.
 - `_has_manual_tags_cache` is keyed per user but not per DB; the tagged-key entry is path-checked, the `"any"` entry is not.
-- `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it.
+- `img_cache` is still 2.6 GB on disk after deleting 1.25 GB of oversized pinned rows; a `VACUUM` reclaims it (exclusive lock on the live DB: run it deliberately, after a WAL checkpoint).
 
 ### Re-fetch follow-ups (2026-10-02)
 
-- The page ladder's 6h host cooldown trips on a single URL exhausting every tier, which silences autofetch for the whole host. Consider
-  requiring two consecutive exhausted fetches (existing tests assume one).
+- The page ladder's 6h host cooldown trips on a single URL exhausting every tier, which silences autofetch for the whole host. Requiring
+  two consecutive exhausted fetches would soften that but sends one more request at a host that is blocking us; weigh against the
+  good-web-citizen rule before changing (existing tests assume one).
 - Lazy-loaded embeds recovered from the raw page are appended at the end of the article, not placed where they were. A per-site
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.

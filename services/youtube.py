@@ -3,10 +3,25 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from typing import Any
 
 import httpx
+
+
+class _BatchResult(dict):
+    """videos.list results, plus the ids of chunks that FAILED (timeout, quota, 5xx).
+
+    An id missing from a chunk that succeeded means YouTube has no such video (private, deleted), and is a real negative. An id
+    in ``failed`` was never answered, so it must not be cached as "no duration" for the retry window.
+    """
+
+    failed: set[str]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = set()
 
 
 class YouTubeDurationService:
@@ -21,8 +36,17 @@ class YouTubeDurationService:
     # A "no duration" result (API error/quota, or a live/upcoming stream with no
     # length yet) must NOT be cached forever — otherwise a transient failure
     # permanently blanks the [duration] title prefix. Retry such negatives after
-    # this long so they self-heal once the API recovers / the stream ends.
-    _NEGATIVE_RETRY_SECONDS = 6 * 3600
+    # this long so they self-heal once the API recovers / the stream ends. A video
+    # whose entry is under a day old retries on the short window (a fresh upload
+    # can be missing from the API for a little while); an older one has had its
+    # chance and is a genuinely length-less video (deleted, private), which stays
+    # on the long window so it can't cost a videos.list unit on every refresh.
+    _NEGATIVE_RETRY_SECONDS = 30 * 60
+    _OLD_NEGATIVE_RETRY_SECONDS = 6 * 3600
+    _YOUNG_VIDEO_SECONDS = 24 * 3600
+    # After a failed videos.list call (timeout/quota) leave those ids alone this
+    # long, so a quota outage isn't re-hit on every feed refresh.
+    _FAILED_BACKOFF_SECONDS = 10 * 60
 
     def __init__(
         self,
@@ -50,6 +74,8 @@ class YouTubeDurationService:
         # Absent (not False) means "never checked", so a check costs a fetch
         # once per video, ever, not on some retry schedule.
         self._members_only_cache: dict[str, bool] = {}
+        # video_id -> time.monotonic() before which a failed fetch is not retried.
+        self._failed_until: dict[str, float] = {}
         # Resolves the API key per call — in multi mode this returns the current
         # user's key (with env fallback); None falls back to the env var.
         self._api_key_provider = api_key_provider
@@ -197,7 +223,10 @@ class YouTubeDurationService:
             # rows with blanks; skip this tick, a context with a real key
             # will pick it up on a later one.
             return 0
+        failed = getattr(results, "failed", set())
         for vid in video_ids:
+            if vid in failed:
+                continue  # never answered: keep the cached "upcoming" row
             seconds, display, live_broadcast_content, scheduled_start_time = results.get(vid, (None, None, None, None))
             self._cache[vid] = (seconds, display)
             self._live_cache[vid] = (live_broadcast_content, scheduled_start_time)
@@ -220,6 +249,7 @@ class YouTubeDurationService:
         # subscription sets (which left ~13% of videos perpetually duration-less).
         to_fetch: list[str] = []
         seen: set[str] = set()
+        now_mono = time.monotonic()
         for entry in entries:
             if not entry.link:
                 continue
@@ -227,6 +257,8 @@ class YouTubeDurationService:
             if not video_id or video_id in seen:
                 continue
             seen.add(video_id)
+            if self._failed_until.get(video_id, 0.0) > now_mono:
+                continue  # its last fetch failed moments ago
             cached = self._cache.get(video_id)
             if cached is not None and cached[0] is not None:
                 continue  # known positive in memory
@@ -237,7 +269,7 @@ class YouTubeDurationService:
             # Absent, or a cached negative. Refetch only when there's no row yet or
             # the negative has gone stale (don't re-hit the API every refresh for
             # genuinely length-less videos).
-            if row is not None and not self._negative_is_stale(row[2]):
+            if row is not None and not self._negative_is_stale(row[2], young=self._entry_is_young(entry)):
                 self._cache[video_id] = (None, None)
                 continue
             to_fetch.append(video_id)
@@ -254,7 +286,11 @@ class YouTubeDurationService:
             # with no key would blank its live status/scheduled time on
             # every feed refresh that touches it.
             return
+        failed = getattr(results, "failed", set())
         for vid in to_fetch:
+            if vid in failed:
+                self._failed_until[vid] = now_mono + self._FAILED_BACKOFF_SECONDS
+                continue  # never answered: not a "no duration" result
             seconds, display, live_broadcast_content, scheduled_start_time = results.get(vid, (None, None, None, None))
             self._cache[vid] = (seconds, display)
             self._live_cache[vid] = (live_broadcast_content, scheduled_start_time)
@@ -266,7 +302,7 @@ class YouTubeDurationService:
         ride along for free on the same call as contentDetails). Each value is
         (duration_seconds, duration_display, live_broadcast_content, scheduled_start_time).
         Ids the API returns no item for are absent from the result."""
-        out: dict[str, tuple[int | None, str | None, str | None, str | None]] = {}
+        out = _BatchResult()
         api_key = self._api_key_provider() if self._api_key_provider else os.getenv("YOUTUBE_API_KEY")
         if not api_key:
             return out
@@ -302,8 +338,9 @@ class YouTubeDurationService:
                             scheduled_start_time,
                         )
             except Exception:
-                # A failed chunk (timeout/quota) just yields no entries for those ids;
-                # they stay absent and are retried next refresh.
+                # A failed chunk (timeout/quota) yields no entries for those ids; they are reported in .failed so the caller
+                # leaves them uncached and they are retried on the next refresh instead of waiting out the negative window.
+                out.failed.update(chunk)
                 continue
         return out
 
@@ -364,7 +401,18 @@ class YouTubeDurationService:
             return None
         return (row["duration_seconds"], row["duration_display"], row["fetched_at"])
 
-    def _negative_is_stale(self, fetched_at: str | None) -> bool:
+    def _entry_is_young(self, entry: Any) -> bool:
+        """True when the entry first arrived (or was published) within the last day; unknown counts as old."""
+        import datetime as _dt
+
+        when = getattr(entry, "added", None) or getattr(entry, "published", None)
+        if not isinstance(when, _dt.datetime):
+            return False
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=_dt.timezone.utc)
+        return (_dt.datetime.now(_dt.timezone.utc) - when).total_seconds() < self._YOUNG_VIDEO_SECONDS
+
+    def _negative_is_stale(self, fetched_at: str | None, *, young: bool = True) -> bool:
         """True if a cached no-duration row is old enough to retry (or unparseable)."""
         if not fetched_at:
             return True
@@ -379,7 +427,7 @@ class YouTubeDurationService:
         else:
             return True  # unparseable → allow a retry
         age = (_dt.datetime.now(_dt.timezone.utc) - when).total_seconds()
-        return age >= self._NEGATIVE_RETRY_SECONDS
+        return age >= (self._NEGATIVE_RETRY_SECONDS if young else self._OLD_NEGATIVE_RETRY_SECONDS)
 
     def _get_live_status_db(self, video_id: str) -> tuple[str | None, str | None] | None:
         with self._get_durations_connection() as conn:

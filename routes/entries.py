@@ -223,7 +223,7 @@ from main import (
     upsert_entry_read_state,
     url_guard,
 )
-from services import tenancy
+from services import entry_content, tenancy
 from services.redirects import local_url
 
 router = APIRouter()
@@ -2597,7 +2597,7 @@ def email_entry(
     if full_text:
         # Full text wants the article body, not the (often much shorter) feed
         # summary — opposite preference order from the snippet case below.
-        raw = (entry.content[0].value if entry.content else "") or entry.summary or ""
+        raw = entry_content.entry_body(entry)
         raw = _email_full_body(feed_url, entry_id, link, raw)
         excerpt = html_sanitize.plain_text_full(raw)
         # The HTML part renders the sanitized article body directly — real
@@ -2607,7 +2607,7 @@ def email_entry(
         if raw:
             excerpt_html = _sanitize_html_allowlist(raw)
     else:
-        raw = entry.summary or (entry.content[0].value if entry.content else "")
+        raw = entry_content.entry_body(entry, prefer_summary=True)
         excerpt = html_sanitize.plain_text_excerpt(raw)
 
     ok, error = send_article_email(
