@@ -263,6 +263,10 @@ site behaves exactly as before:
   plugin names the body, that slice goes through the whole-body extractor. The Sound Publishing papers (Renton/Kent/Issaquah Reporter)
   need it — their photo gallery is slides with almost no text, so density scoring dropped the photos and kept the page around them.
 
+- **`strip_selectors` on a CMS carousel**: howtogeek.com (Valnet) renders each gallery four times (main slides, thumbnail strip, expanded
+  strip, lightbox swiper) and hides three with JS; Reader view has no JS, so a 13-photo gallery showed 52 images. The plugin strips the
+  three duplicate lists. Other Valnet sites likely share the markup (`.valnet-gallery`) but are unverified.
+
 - **`embed_at_top`** places that embed after the article's first heading rather
   than at the end: the scans are a reference you scroll, the video is the point.
 
