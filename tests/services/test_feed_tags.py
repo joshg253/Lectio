@@ -1285,3 +1285,30 @@ def test_rel_tag_anchors_beat_generic_keywords_meta_and_byline_is_skipped():
     tags = extract_page_tags(html, "https://gg.deals/x/")
     assert "Subscriptions" in tags and "Xbox Game Pass new games" in tags
     assert "Uplay" not in tags and "Daria Beres" not in tags
+
+
+def test_youtube_description_hashtags_captured_from_yt_entries_only():
+    from services.feed_tags import extract_feed_entry_tags
+
+    text = "Great album https://x.test/p#frag it&#39;s #MachineHead #DOOM #shorts #machinehead end #" + "a" * 40
+    yt = {"id": "yt:video:abc", "summary": text}
+    assert extract_feed_entry_tags(yt) == ["MachineHead", "DOOM"]
+    assert extract_feed_entry_tags({"id": "https://blog.test/1", "summary": text}) == []
+
+
+def test_youtube_hashtags_skip_anchors_dedupe_before_cap_and_cap_at_twenty():
+    from services.feed_tags import extract_feed_entry_tags
+
+    text = '<a href="#top">x</a> [j](#chapters) \n#One #one ' + " ".join(f"#t{chr(97 + i)}x" for i in range(25))
+    tags = extract_feed_entry_tags({"id": "yt:video:abc", "summary": text})
+    assert tags[0] == "One" and "top" not in tags and "chapters" not in tags
+    assert len(tags) == 20
+
+
+def test_youtube_hashtags_keep_short_and_digit_led_tags_and_cap_after_cleaning():
+    from services.feed_tags import extract_feed_entry_tags
+
+    text = "#C #3DPrinting #2024 #39 " + " ".join(f"#about #t{chr(97 + i)}x" for i in range(25))
+    tags = extract_feed_entry_tags({"id": "yt:video:abc", "summary": text})
+    assert tags[:2] == ["C", "3DPrinting"] and "2024" not in tags and "39" not in tags
+    assert len(tags) == 20

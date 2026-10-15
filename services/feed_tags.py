@@ -139,8 +139,29 @@ def extract_feed_entry_tags(raw_entry: object) -> list[str]:
 
     values.extend(_shopify_vendor_tags(raw_entry))
     values.extend(_prefixed_hashtag_field_tags(raw_entry))
+    values.extend(_youtube_description_hashtags(raw_entry))
 
     return _clean_tag_values(values)
+
+
+# YouTube creators type #hashtags into the description (the channel RSS ships it as the entry summary). Only YouTube entries are scanned:
+# on other feeds a "#" in prose or code is not a tag. The lookbehind skips URL fragments, HTML entities (&#39;) and anchors
+# (href="#top"); a run-together sentence tag is dropped by length. #shorts is already the Shorts signal, not a topic.
+_YT_HASHTAG_RE = re.compile(r"(?<![\w&/#=\x22'(])#((?!_)(?=\w*[^\W\d_])\w{1,30})(?!\w)")
+_YT_SKIP_HASHTAGS = frozenset({"shorts", "short", "ytshorts", "youtubeshorts"})
+_MAX_YT_HASHTAGS = 20
+
+
+def _youtube_description_hashtags(raw_entry: object) -> list[str]:
+    if not hasattr(raw_entry, "get"):
+        return []
+    mapping = cast(Mapping[Any, Any], raw_entry)
+    if not str(mapping.get("id") or "").startswith("yt:video:"):
+        return []
+    text = str(mapping.get("summary") or "")
+    tags = [m.group(1) for m in _YT_HASHTAG_RE.finditer(text) if m.group(1).lower() not in _YT_SKIP_HASHTAGS]
+    # Clean before capping so junk and duplicates cannot use up the slots.
+    return _clean_tag_values(tags, cap=_MAX_YT_HASHTAGS)
 
 
 # Shopify's product namespace (http://jadedpixel.com/-/spec/shopify) carries the
