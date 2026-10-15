@@ -361,12 +361,56 @@ class TexasBluesAlleyPlugin:
         )
 
 
+@dataclass(frozen=True)
+class HowToGeekPlugin:
+    """howtogeek.com (Valnet CMS): every inline gallery ships its images four times.
+
+    A ``.valnet-gallery`` is a splide carousel for the JS to drive: the main slides, a thumbnail strip, an "expanded" thumbnail strip and
+    a lightbox swiper, each a full ``<img>`` list of the same N photos. Without the JS they all render, so a 13-photo gallery showed 52
+    images in Reader view. Only the main slides are kept.
+    """
+
+    _HOST = "howtogeek.com"
+
+    def _host_matches(self, source_url: str) -> bool:
+        try:
+            host = (urlparse(source_url).netloc or "").lower()
+        except ValueError:
+            return False
+        host = host.split(":", 1)[0].rstrip(".")
+        return host == self._HOST or host.endswith("." + self._HOST)
+
+    def handles(self, *, source_url: str) -> bool:
+        return self._host_matches(source_url)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        # Scoped to the gallery: a lone `.lightbox__swipper` also appears outside any `.valnet-gallery` on the same pages.
+        return (
+            ".valnet-gallery .gallery-thumbnails",
+            ".valnet-gallery .gallery-thumbnails-expanded",
+            ".valnet-gallery .lightbox__swipper",
+        )
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return False
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        return None
+
+
 DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
     TexasBluesAlleyPlugin(),
     PaizoBlogPlugin(),
     DeveloperAndroidPlugin(),
     SoundPublishingPlugin(),
+    HowToGeekPlugin(),
 )
 
 

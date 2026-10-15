@@ -334,3 +334,47 @@ def test_texasbluesalley_mux_player_becomes_an_iframe_embed():
     assert out and "https://player.mux.com/PhGxAXXG97l7v2S16Rqd9oIPH00p5x4OtBWwedlnxNZw" in out
     assert plugins.embed_at_top(url)
     assert plugins.extra_embed_html(url, "<body>no player</body>") is None
+
+
+def test_howtogeek_gallery_keeps_only_the_main_slides():
+    import main
+
+    def slides(cls, prefix):
+        return "".join(f'<li class="splide__slide {cls}"><img src="https://img.example/{prefix}{i}.png"></li>' for i in range(3))
+
+    url = "https://www.howtogeek.com/some-ranked-list/"
+    page = (
+        "<html><head><title>Ranked</title></head><body><article><p>" + "A long enough paragraph of article prose. " * 20 + "</p>"
+        '<div class="valnet-gallery"><section class="splide splide-gallery"><ul class="splide__list">'
+        + slides("gallery-main-img", "m")
+        + "</ul></section>"
+        '<section class="splide gallery-thumbnails"><ul>' + slides("gallery-thumbnail-img", "t") + "</ul></section>"
+        '<section class="splide gallery-thumbnails-expanded"><ul>' + slides("gallery-thumbnail-img-expanded", "e") + "</ul></section>"
+        '<div class="splide__track lightbox__swipper"><ul>' + slides("gallery-main-img", "l") + "</ul></div></div>"
+        "<p>" + "More article prose follows the gallery here. " * 20 + "</p></article></body></html>"
+    )
+    _, article_html = main.extract_readability_article(page, url)
+    assert article_html.count("<img") == 3
+    assert "/m0.png" in article_html
+    assert not any(f"/{c}0.png" in article_html for c in "tel")
+
+    # The same markup on another site is left alone, and a lightbox outside a gallery survives.
+    _, other = main.extract_readability_article(page, "https://example.com/some-ranked-list/")
+    assert other.count("<img") == 12
+    lone = page.replace('<div class="valnet-gallery">', '<div class="x">', 1)
+    _, kept = main.extract_readability_article(lone, url)
+    assert kept.count("<img") == 12
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://howtogeek.com/a/", True),
+        ("https://www.howtogeek.com/a/", True),
+        ("https://nothowtogeek.com/a/", False),
+        ("https://howtogeek.com.evil.test/a/", False),
+        ("https://example.com/?u=howtogeek.com", False),
+    ],
+)
+def test_howtogeek_plugin_host_matching(url, expected):
+    assert plugins.HowToGeekPlugin().handles(source_url=url) is expected
