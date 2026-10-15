@@ -1303,3 +1303,12 @@ def test_youtube_hashtags_skip_anchors_dedupe_before_cap_and_cap_at_twenty():
     tags = extract_feed_entry_tags({"id": "yt:video:abc", "summary": text})
     assert tags[0] == "One" and "top" not in tags and "chapters" not in tags
     assert len(tags) == 20
+
+
+def test_youtube_hashtags_keep_short_and_digit_led_tags_and_cap_after_cleaning():
+    from services.feed_tags import extract_feed_entry_tags
+
+    text = "#C #3DPrinting #2024 #39 " + " ".join(f"#about #t{chr(97 + i)}x" for i in range(25))
+    tags = extract_feed_entry_tags({"id": "yt:video:abc", "summary": text})
+    assert tags[:2] == ["C", "3DPrinting"] and "2024" not in tags and "39" not in tags
+    assert len(tags) == 20

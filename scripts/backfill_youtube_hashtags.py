@@ -31,7 +31,7 @@ def _backfill_user(uid: str, apply: bool) -> int:
     meta = sqlite3.connect(str(tenancy.meta_db_path()), timeout=30.0)
     pairs: list[tuple[str, str, list[str]]] = []
     for feed_url, entry_id, summary in reader.execute(
-        "SELECT feed, id, summary FROM entries WHERE id LIKE 'yt:video:%' AND summary LIKE '%#%'"
+        "SELECT feed, id, summary FROM entries WHERE id LIKE 'yt:video:%' AND (summary LIKE '%#%' OR summary LIKE '%<h_>%')"
     ):
         tags = extract_feed_entry_tags({"id": entry_id, "summary": _HEADING_RE.sub("#", summary)})
         if tags:

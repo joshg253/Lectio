@@ -57,6 +57,12 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
 
+### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
+Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
+extraction is empty, so a feed that drops all of an entry's tags never clears the stored `source='feed'` rows; (2) `entry_feed_tags` is
+keyed `(feed_url, entry_id, tag)`, so a feed tag equal to a page tag is ignored on insert and vanishes if the page row is later removed;
+(3) a failed meta-DB write during parse is logged and not retried, and a 304 never re-parses.
+
 ### YouTube descriptions render hashtag lines as headings (2026-10-14)
 A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
 the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
