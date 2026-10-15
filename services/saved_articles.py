@@ -29,6 +29,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, unquote_plus, urldefrag, urlparse
 
+from services import entry_content
+
 LOGGER = logging.getLogger(__name__)
 
 # "We do not know when this was published." Deliberately a real date rather than
@@ -750,7 +752,7 @@ def _merge_save_into_entry(
         new_title, article_html = "", ""
 
     if article_html:
-        current = (entry.content[0].value if getattr(entry, "content", None) else "") or entry.summary or ""
+        current = entry_content.entry_body(entry)
         if len(article_html) > len(current):
             try:
                 replace_entry_content(

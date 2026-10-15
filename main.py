@@ -51,7 +51,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from services import escalation_reprobe
+from services import entry_content, escalation_reprobe
 from services import bluesky
 from services import flaresolverr as flaresolverr_service
 from services import page_fetch
@@ -4100,6 +4100,10 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE entry_lead_images ADD COLUMN locked_until REAL")
         except Exception:
             pass
+        # The locked-comics lookup asks for every non-NULL row library-wide; a handful, but a full scan of ~150k rows (~55ms) without this.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entry_lead_images_locked ON entry_lead_images(feed_url) WHERE locked_until IS NOT NULL"
+        )
         try:
             conn.execute("ALTER TABLE feed_strategy_cache ADD COLUMN image_alt TEXT")
         except Exception:
@@ -7595,11 +7599,7 @@ def _apply_hide_paywalled(refreshed_feed_urls: set[str]) -> int:
         with get_reader() as reader:
             for feed_u in targets:
                 for entry in reader.get_entries(feed=feed_u, read=False):
-                    body = ""
-                    if getattr(entry, "content", None):
-                        body = str(entry.content[0].value or "")
-                    elif entry.summary:
-                        body = str(entry.summary)
+                    body = entry_content.entry_body(entry)
                     if is_paywall_stub(body, str(entry.link or "")):
                         to_mark.append((feed_u, str(entry.id)))
             for feed_u, entry_id in to_mark:
@@ -14768,6 +14768,8 @@ def apply_star_state(feed_url: str, entry_id: str, saved: bool) -> None:
                 (feed_url, entry_id),
             )
         conn.commit()
+    with _has_manual_tags_lock:
+        _has_manual_tags_cache.pop("saved_unread", None)
 
     # "On star, also send to…" — fire configured destinations once, only on a
     # genuine new star (rowcount), off-request so the star stays snappy.
@@ -14991,6 +14993,24 @@ def get_saved_unread_count() -> int:
     Saved Articles badge. Kept sets span hundreds of feeds, so this is a single
     set intersection rather than a per-feed or per-chunk query loop, which got
     slower under concurrent refresh writes (home-route gap_block, 2026-09-01)."""
+    # Served from a short cache keyed on the unread generation plus a cheap saved_entries signature, so a read-state change, a
+    # star or an unstar recomputes at once. Tag writes clear the whole _has_manual_tags_cache, and the TTL bounds anything the
+    # signature can't see (a delete and an insert of the newest row between two reads leave the same count and max rowid).
+    db_path = str(tenancy.reader_db_path())
+    with get_meta_connection() as conn:
+        _n, _max_rowid = conn.execute("SELECT COUNT(*), MAX(rowid) FROM saved_entries").fetchone()
+    sig = (get_unread_counts_generation(), int(_n or 0), int(_max_rowid or 0), db_path)
+    with _has_manual_tags_lock:
+        cached = _has_manual_tags_cache.get("saved_unread")
+    if cached and cached[0] == sig and time.time() - cached[1] < _TAGGED_KEYS_CACHE_TTL_SECONDS:
+        return cached[2]
+    count = _compute_saved_unread_count()
+    with _has_manual_tags_lock:
+        _has_manual_tags_cache["saved_unread"] = (sig, time.time(), count)
+    return count
+
+
+def _compute_saved_unread_count() -> int:
     kept: set[tuple[str, str]] = set()
     with get_meta_connection() as conn:
         for row in conn.execute("SELECT feed_url, entry_id FROM saved_entries"):
@@ -17264,39 +17284,12 @@ def _apply_entry_media(content_html, entry, feed_url: str, entry_id: str):
 
 
 def _visible_word_count(value: str | None) -> int:
-    """Words a reader would actually SEE, with escaped markup counted as markup.
-
-    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` is a paragraph and a line break spelled as
-    text; unescaping before stripping tags scores it 0, which is what it looks
-    like on screen.
-    """
-    if not value:
-        return 0
-    return len(re.sub(r"<[^>]+>", " ", html.unescape(value)).split())
+    return entry_content.visible_word_count(value)
 
 
 def _richest_content(entry, chosen):
-    """Pick the content element with the most visible text.
-
-    reader's ``get_content`` returns the FIRST html element, and a feed may put
-    a lesser one first. pcgamer does both: on some entries an escaped
-    ``&lt;p&gt;&lt;br&gt;&lt;/p&gt;`` (29 characters, zero words) precedes the
-    5,364-character article, so the entry rendered as a stray open and close tag;
-    on others a 77-word author blurb precedes the 464-word piece, so the entry
-    rendered as the bio alone.
-
-    "Skip it only when it is empty" was tried first and is not enough — the blurb
-    is not empty, it is just not the article. Among several representations of
-    one entry the fullest is the one a reader wants, so the choice is by visible
-    word count, html preferred, with reader's own pick as the tie-break.
-    """
-    candidates = [c for c in (getattr(entry, "content", None) or []) if _visible_word_count(getattr(c, "value", None))]
-    if not candidates:
-        return chosen  # nothing has text; leave reader's choice alone
-    html_ones = [c for c in candidates if getattr(c, "is_html", False)]
-    best = max(html_ones or candidates, key=lambda c: _visible_word_count(c.value))
-    chosen_words = _visible_word_count(getattr(chosen, "value", None)) if chosen is not None else 0
-    return chosen if chosen_words >= _visible_word_count(best.value) else best
+    """See ``services.entry_content.richest_content``."""
+    return entry_content.richest_content(entry, chosen)
 
 
 def _resolve_entry_content_html(entry):
@@ -18983,7 +18976,7 @@ def _migrate_curation(reader, conn: sqlite3.Connection, remove_url: str, keep_ur
             if e and e.published:
                 ed["published"] = e.published
             if e and getattr(e, "content", None):
-                ed["content"] = [{"value": e.content[0].value}]
+                ed["content"] = [{"value": entry_content.entry_body(e)}]
             elif e and e.summary:
                 ed["summary"] = e.summary
             try:
@@ -19098,7 +19091,7 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
     else:
         src_title = src.title or ""
         src_link = src.link or entry_id
-        src_content_html = (src.content[0].value if getattr(src, "content", None) else "") or src.summary or ""
+        src_content_html = entry_content.entry_body(src)
         src_read = bool(src.read)
     if reader.get_feed(target_url, None) is None:
         result["error"] = "Target feed not found."
@@ -19174,7 +19167,7 @@ def _move_entry_to_feed(reader, conn: sqlite3.Connection, feed_url: str, entry_i
         _tgt = reader.get_entry((target_url, target_id), None)
         _tgt_body = ""
         if _tgt is not None:
-            _tgt_body = (_tgt.content[0].value if getattr(_tgt, "content", None) else "") or _tgt.summary or ""
+            _tgt_body = entry_content.entry_body(_tgt)
         if _src_body and len(_src_body) > len(_tgt_body):
             saved_articles_service.replace_entry_content(
                 reader,
@@ -23653,7 +23646,7 @@ def migrate_entry_to_new_host(reader, conn, feed, old_id, new_id, new_link) -> s
         if _src_effective_date:
             ed["published"] = _src_effective_date
         if getattr(src, "content", None):
-            ed["content"] = [{"value": src.content[0].value}]
+            ed["content"] = [{"value": entry_content.entry_body(src)}]
         elif src.summary:
             ed["summary"] = src.summary
         reader.add_entry(ed)
@@ -24800,7 +24793,7 @@ def _refresh_captured_article_for_current_user(
                 entry = reader.get_entry((feed_url, entry_id), None)
                 body = ""
                 if entry is not None:
-                    body = (entry.content[0].value if getattr(entry, "content", None) else "") or entry.summary or ""
+                    body = entry_content.entry_body(entry)
                 if not lead_image_service._extract_first_image_url_from_html(body, str(getattr(entry, "link", "") or feed_url)):
                     lead_image_service.store_entry_lead_image(feed_url, entry_id, old_lead)
         except Exception:  # noqa: BLE001 — never fail a good re-fetch over this

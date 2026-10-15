@@ -138,7 +138,22 @@ def test_saved_unread_count_counts_only_unread_starred(configured):
     # Reading the starred entry drops the count to zero.
     with main.get_reader() as reader:
         reader.set_entry_read((FEED, "e1"), True)
+    main.invalidate_unread_counts_cache()  # what every real read-state path does; the badge is cached on this generation
     assert main.get_saved_unread_count() == 0
+
+
+def test_saved_unread_count_follows_star_and_unstar_through_the_cache(configured):
+    assert main.get_saved_unread_count() == 1
+    main.apply_star_state(FEED, "e3", True)  # unread, newly starred
+    assert main.get_saved_unread_count() == 2
+    main.apply_star_state(FEED, "e1", False)
+    assert main.get_saved_unread_count() == 1
+
+
+def test_saved_unread_count_is_served_from_cache_until_invalidated(configured, monkeypatch):
+    assert main.get_saved_unread_count() == 1
+    monkeypatch.setattr(main, "_compute_saved_unread_count", lambda: pytest.fail("recomputed"))
+    assert main.get_saved_unread_count() == 1
 
 
 def test_search_matches_all_terms(configured):
@@ -166,3 +181,9 @@ def test_search_needs_no_index_to_be_built(configured):
     such warm-up any more — a fresh install searches at full speed."""
     posts = main.list_entries_for_feeds({FEED}, search_query="post e1", read_filter="all")
     assert any(p["id"] == "e1" for p in posts)
+
+
+def test_saved_unread_count_follows_a_tag_write_through_the_cache(configured):
+    assert main.get_saved_unread_count() == 1  # e1 starred and unread; e3 unstarred
+    main.set_manual_tags_for_entry(FEED, "e3", "later")  # unread, newly kept by tag
+    assert main.get_saved_unread_count() == 2

@@ -14,6 +14,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from services import entry_content
+
 
 def _iso(ts: datetime | None) -> str:
     if ts is None:
@@ -140,7 +142,7 @@ class MinifluxService:
             "created_at": _iso(pub),
             "changed_at": _iso(updated),
             "published_at": _iso(pub),
-            "content": ((entry.content[0].value if entry.content else None) or entry.summary or ""),
+            "content": entry_content.entry_body(entry),
             "author": (", ".join(a.name for a in entry.authors if a.name) if getattr(entry, "authors", None) else ""),
             "starred": starred,
             "reading_time": 0,

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
-from services import tenancy
+from services import entry_content, tenancy
 
 
 class FeverService:
@@ -184,11 +184,7 @@ class FeverService:
             entry = reader.get_entry((row["feed_url"], row["entry_id"]), None)
             if entry is None:
                 continue
-            content = ""
-            if entry.content:
-                content = entry.content[0].value or ""
-            elif entry.summary:
-                content = entry.summary or ""
+            content = entry_content.entry_body(entry)
             pub = entry.published or entry.updated
             items.append(
                 {
