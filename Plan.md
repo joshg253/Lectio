@@ -353,7 +353,7 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   but not dedup. Cosmetic until something else needs to touch them.
 - **`ensure_meta_schema`** (main.py:3626, ~1,332 lines) — long but linear (CREATE + idempotent
   ALTERs), low churn. A by-area split is cosmetic.
-- **Stack updates: tag-only base image pin** — `python:3.14-slim` and `uv:latest` are floating tags, so a cached base layer can go stale
+- **Stack updates: tag-only base image pin** — `python:3.15-slim` and `uv:latest` are floating tags, so a cached base layer can go stale
   between rebuilds. Either `--pull` in `make rebuild` or a digest pin bumped in the weekly sweep. Checked 2026-09-30: both current.
 - **Stack updates: sibling containers** (searxng, traefik, tailscale, browserless, redis, gluetun) run `:latest` from separate compose
   projects and were behind the registry on 2026-09-30. Pull and recreate by hand (restarts the VPN, tailscale, and traefik).
@@ -406,7 +406,8 @@ fall back to a body image. Not broken — just where a future "odd body image" r
 ### Free-threaded Python is blocked by lxml
 
 lxml hasn't declared free-threading support, forcing the GIL back on at import. Recheck when it
-does; nothing else blocks it.
+does; nothing else blocks it. Rechecked 2026-10-15 on 3.15.0t: lxml and Pillow now ship `cp315t`
+wheels, but `import lxml.etree` still re-enables the GIL, so the blocker is unchanged.
 
 ### Methodology: diagnosing refresh-contention/latency stalls
 

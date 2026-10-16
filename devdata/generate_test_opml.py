@@ -1,6 +1,6 @@
 """Generate a minimal OPML file for automated test fixtures."""
 # /// script
-# requires-python = ">=3.14"
+# requires-python = ">=3.15"
 # dependencies = []
 # ///
 
