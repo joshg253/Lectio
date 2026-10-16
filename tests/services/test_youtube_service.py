@@ -716,3 +716,58 @@ def test_members_only_placeholder_row_does_not_block_the_duration_fetch(tmp_path
     assert requested == [["ABCDEFGHIJK"]]
     row = service._get_duration_row("ABCDEFGHIJK")
     assert row is not None and row[0] == 125
+
+
+def _placeholder_then_entries(tmp_path: Path, monkeypatch, handler):
+    """A service whose video has only the members-only placeholder row, with videos.list answered by *handler*."""
+    import httpx
+
+    db_path = tmp_path / "yt.sqlite"
+    monkeypatch.setattr("services.youtube.httpx.get", handler)
+    entry = _FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK", added=_now_utc())
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([entry])),
+        user_agent="LectioTest/1.0",
+        api_key_provider=lambda: "fake-key",
+    )
+    with service._get_durations_connection() as conn:
+        conn.execute(
+            "INSERT INTO youtube_video_duration(video_id, members_only, fetched_at) VALUES ('ABCDEFGHIJK', 0, '1970-01-01 00:00:00')"
+        )
+    return service, httpx
+
+
+def test_a_failed_batch_backs_off_instead_of_retrying_every_refresh(tmp_path: Path, monkeypatch):
+    calls: list[int] = []
+
+    def boom(*a, **kw):
+        calls.append(1)
+        raise RuntimeError("timeout")
+
+    service, _ = _placeholder_then_entries(tmp_path, monkeypatch, boom)
+    feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCx"
+    service.fetch_and_store_durations_for_feed(feed)
+    service.fetch_and_store_durations_for_feed(feed)
+    assert len(calls) == 1
+
+
+def test_a_successful_answer_with_no_item_is_cached_as_a_negative(tmp_path: Path, monkeypatch):
+    calls: list[int] = []
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"items": []}
+
+    def empty(*a, **kw):
+        calls.append(1)
+        return _Resp()
+
+    service, _ = _placeholder_then_entries(tmp_path, monkeypatch, empty)
+    feed = "https://www.youtube.com/feeds/videos.xml?channel_id=UCx"
+    service.fetch_and_store_durations_for_feed(feed)
+    service.fetch_and_store_durations_for_feed(feed)
+    assert len(calls) == 1  # the second refresh is inside the negative-retry window

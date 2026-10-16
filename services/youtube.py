@@ -18,10 +18,14 @@ class _BatchResult(dict):
     """
 
     failed: set[str]
+    # True once there was an API key to ask with. Without one nothing was asked, so an empty result means "no answer", not
+    # "YouTube has none of these videos".
+    asked: bool
 
     def __init__(self) -> None:
         super().__init__()
         self.failed = set()
+        self.asked = False
 
 
 class YouTubeDurationService:
@@ -280,9 +284,9 @@ class YouTubeDurationService:
         if not to_fetch:
             return
         results = self.get_video_durations_batch(to_fetch)
-        if not results:
-            # No API key for this tenancy context (or every id failed at
-            # once) — never overwrite existing cached rows with blanks. This
+        if not results and not getattr(results, "asked", False):
+            # No API key for this tenancy context (nothing was asked; a
+            # whole-batch failure is handled below) — never overwrite existing cached rows with blanks. This
             # matters most for an "upcoming" video: its duration is always
             # None by design, so unlike a genuinely-unfetched video it never
             # ages out of to_fetch, and without this guard a background user
@@ -309,6 +313,7 @@ class YouTubeDurationService:
         api_key = self._api_key_provider() if self._api_key_provider else os.getenv("YOUTUBE_API_KEY")
         if not api_key:
             return out
+        out.asked = True
         for i in range(0, len(video_ids), 50):
             chunk = video_ids[i : i + 50]
             try:
