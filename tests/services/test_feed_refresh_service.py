@@ -1231,3 +1231,51 @@ def test_a_raising_progress_hook_never_breaks_a_refresh(tmp_path):
     svc.update_feeds(["https://a.test/feed"], enhance=False)
 
     assert reader.updated == ["https://a.test/feed"]
+
+
+def test_update_feeds_skips_feeds_another_pass_is_updating(tmp_path):
+    """Two passes over the same feed would insert the same new entries twice and fail both on the entries primary key."""
+    service = _build_service(tmp_path / "r.sqlite", object(), [], [])
+    seen: list[list[str]] = []
+    service._update_feeds = lambda urls, **_kw: seen.append(list(urls))  # type: ignore[method-assign]
+    claimed = service._claim_feeds(["https://a.xml", "https://b.xml"])
+    service.update_feeds(["https://b.xml", "https://c.xml", "https://c.xml"])
+    assert seen == [["https://c.xml"]]
+    service._release_feeds(claimed)
+    service.update_feeds(["https://b.xml"])
+    assert seen[-1] == ["https://b.xml"]
+
+
+def test_update_feeds_releases_claims_when_the_pass_raises(tmp_path):
+    service = _build_service(tmp_path / "r.sqlite", object(), [], [])
+
+    def boom(urls, **_kw):
+        raise RuntimeError("x")
+
+    service._update_feeds = boom  # type: ignore[method-assign]
+    try:
+        service.update_feeds(["https://a.xml"])
+    except RuntimeError:
+        pass
+    assert service._claim_feeds(["https://a.xml"]) == ["https://a.xml"]
+
+
+def test_update_feeds_returns_the_skipped_feeds(tmp_path):
+    service = _build_service(tmp_path / "r.sqlite", object(), [], [])
+    service._update_feeds = lambda urls, **_kw: None  # type: ignore[method-assign]
+    claimed = service._claim_feeds(["https://a.xml"])
+    assert service.update_feeds(["https://a.xml", "https://b.xml"]) == ["https://a.xml"]
+    service._release_feeds(claimed)
+    assert service.update_feeds(["https://a.xml"]) == []
+
+
+def test_in_flight_claims_are_per_user(tmp_path):
+    from services import tenancy
+
+    service = _build_service(tmp_path / "r.sqlite", object(), [], [])
+    with tenancy.user_context("u_one"):
+        assert service._claim_feeds(["https://a.xml"]) == ["https://a.xml"]
+    with tenancy.user_context("u_two"):
+        assert service._claim_feeds(["https://a.xml"]) == ["https://a.xml"]  # another user's pass doesn't block this one
+    with tenancy.user_context("u_one"):
+        assert service._claim_feeds(["https://a.xml"]) == []

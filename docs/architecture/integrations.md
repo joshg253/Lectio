@@ -124,6 +124,18 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   distinct 429 so the UI can tell the user to fall back to manual add on youtube.com
   (default 10k units/day ≈ 200 inserts; resets midnight Pacific). The OAuth app stays
   in **Testing** mode (refresh tokens expire ~7 days → occasional reconnect).
+  **Duplicate check on every add path.** The API happily inserts the same video twice, and a copy costs 50 units to add and
+  a manual cleanup to remove, so each path asks YouTube first: auto-add and star-to-playlist call `video_in_playlist` (one
+  `playlistItems.list` with the `videoId` filter, 1 unit); the bulk add calls `existing_videos_for_batch`. That lists a playlist
+  of 150 items or fewer in full (one to three pages) and otherwise runs the filtered lookup per video, 8 at a time. The lookups
+  are read-only, so they overlap safely; the inserts stay sequential to keep playlist order. This scales with the batch, not
+  the playlist (listing a 5,000-item queue took 30+ seconds). A 404 `videoNotFound` means a deleted or private video and counts
+  as "not present", not a failure, since one dead video must not push the batch onto the slow path; any other lookup failure
+  falls back to the full listing rather than guess. A short-window rate limit (`RateLimited`, a `QuotaExceeded` subclass) on the
+  concurrent lookups falls back the same way instead of marking the day's quota exhausted, and a failed lookup cancels the queued ones. No cache of playlist contents: these playlists are queues cleaned on
+  youtube.com, so a remembered copy would go stale, and a stale copy risks the duplicate we're avoiding. The worker threads
+  don't inherit the tenancy context the quota meter needs, so lookups are billed once from the calling thread. Reusing one HTTP
+  client across inserts was measured and declined: it saves ~30 ms of a ~500 ms insert.
 - **Auto add-to-playlist automation** (`youtube_playlist` rule type) — builds on the
   OAuth integration above to add new entries' videos to a playlist at refresh time.
 ### Rule keywords: one matcher, comma-separated OR terms

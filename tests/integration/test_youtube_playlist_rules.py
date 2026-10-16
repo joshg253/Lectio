@@ -206,6 +206,7 @@ def test_auto_add_feeds_scope_covers_each_selected_feed(env, monkeypatch):
     FEED2 = "https://www.youtube.com/feeds/videos.xml?channel_id=UCDEF"
     VID2 = "abcdEFGHijk"
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     # Two feeds, one entry each.
     _add_entry(entry_id="e1", link=f"https://www.youtube.com/watch?v={VID}")
@@ -248,6 +249,7 @@ def test_duration_filter_min_only_adds_long_videos(env, monkeypatch):
     _add_entry(entry_id="s", link=f"https://www.youtube.com/watch?v={SHORTV}")
     _add_entry(entry_id="l", link=f"https://www.youtube.com/watch?v={LONGV}")
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(
@@ -270,6 +272,7 @@ def test_duration_unknown_is_skipped_when_filtered(env, monkeypatch):
     NOID = "unknownVID0"  # 11 chars, no cached duration
     _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     with main.get_meta_connection() as conn:
         main.add_highlight_keyword(
@@ -300,6 +303,7 @@ def test_rule_persists_fields(env):
 
 def test_auto_add_inserts_and_marks_read(env, monkeypatch):
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append((tok, pl, vid)))
     _add_entry()
     _add_rule(mark_read=True)
@@ -313,6 +317,7 @@ def test_auto_add_inserts_and_marks_read(env, monkeypatch):
 
 def test_no_double_add_on_second_run(env, monkeypatch):
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     _add_entry()
     _add_rule()
@@ -321,8 +326,21 @@ def test_no_double_add_on_second_run(env, monkeypatch):
     assert calls == [VID]
 
 
+def test_auto_add_skips_a_video_already_in_the_playlist(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda tok, pl, vid: True)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED, "e1")).read is True  # on the playlist counts as handled
+
+
 def test_shorts_excluded_by_default(env, monkeypatch):
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: calls.append(a))
     _add_entry(link=f"https://www.youtube.com/shorts/{VID}")
     _add_rule(include_shorts=False)
@@ -332,6 +350,7 @@ def test_shorts_excluded_by_default(env, monkeypatch):
 
 def test_shorts_included_when_opted_in(env, monkeypatch):
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     _add_entry(link=f"https://www.youtube.com/shorts/{VID}")
     _add_rule(include_shorts=True)
@@ -342,6 +361,7 @@ def test_shorts_included_when_opted_in(env, monkeypatch):
 def test_not_connected_is_noop(env, monkeypatch):
     monkeypatch.setattr(automation_rules, "get_youtube_oauth_token", lambda: "")
     called = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: called.append(a))
     _add_entry()
     _add_rule()
@@ -352,6 +372,8 @@ def test_not_connected_is_noop(env, monkeypatch):
 def test_quota_exceeded_releases_claim_for_retry(env, monkeypatch):
     def _boom(tok, pl, vid):
         raise yt.QuotaExceeded("quota")
+
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
 
     monkeypatch.setattr(yt, "add_video_to_playlist", _boom)
     _add_entry()
@@ -395,6 +417,7 @@ def _last_check_setting():
 
 
 def test_watermark_is_persisted_after_a_run(env, monkeypatch):
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: None)
     _add_entry()
     _add_rule()
@@ -413,6 +436,7 @@ def test_persisted_watermark_catches_what_a_fixed_window_would_have_missed(env, 
     video forever. With a watermark from 30 minutes ago (last run), a video
     added 20 minutes ago is still well within the checked range."""
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     _add_entry()
     _backdate_entry(20)
@@ -433,6 +457,7 @@ def test_entry_older_than_the_watermark_is_not_reprocessed(env, monkeypatch):
     """The watermark still excludes genuinely old entries -- it's a real
     cutoff, not "check everything every time"."""
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     _add_entry()
     _backdate_entry(10)
@@ -454,6 +479,7 @@ def test_first_run_with_no_watermark_uses_the_fifteen_minute_default(env, monkey
     shipped) falls back to the original fixed window -- it must not suddenly
     bulk-add every matching video ever ingested the first time it runs."""
     calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
     _add_entry()
     _backdate_entry(20)

@@ -205,7 +205,7 @@ def _run_yt_playlist_batch_add(
             playlist_id = created["id"]
             existing: set[str] = set()  # brand-new playlist — nothing to dedupe against
         else:
-            existing = youtube_oauth_service.list_playlist_video_ids(token, playlist_id)
+            existing = youtube_oauth_service.existing_videos_for_batch(token, playlist_id, video_ids)
     except youtube_oauth_service.QuotaExceeded:
         mark_yt_quota_exhausted()
         _yt_playlist_job_update(job, {"running": False, "done": True, "error": "quota"})

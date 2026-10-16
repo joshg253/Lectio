@@ -137,3 +137,147 @@ def test_create_playlist_returns_normalized(monkeypatch):
     monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
     out = yt.create_playlist("tok", "TV")
     assert out == {"id": "PLnew", "title": "TV", "count": 0}
+
+
+def _lookup_handler(present: set[str], counts: dict[str, int], calls: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        calls.append(path)
+        if path.endswith("/playlists"):
+            return httpx.Response(200, json={"items": [{"contentDetails": {"itemCount": counts[request.url.params["id"]]}}]})
+        vid = request.url.params.get("videoId")
+        if vid is not None:
+            return httpx.Response(200, json={"items": [{"id": "x"}] if vid in present else []})
+        return httpx.Response(200, json={"items": [{"contentDetails": {"videoId": v}} for v in sorted(present)]})
+
+    return handler
+
+
+def test_find_videos_in_playlist_returns_only_the_present_ones(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(_lookup_handler({"a", "c"}, {}, calls)))
+    assert yt.find_videos_in_playlist("tok", "PL1", ["a", "b", "c", "a"]) == {"a", "c"}
+    assert len(calls) == 3  # one lookup per distinct video
+
+
+def test_find_videos_in_playlist_bills_once_per_lookup_from_the_calling_thread(monkeypatch):
+    billed: list[int] = []
+    monkeypatch.setattr(yt, "_quota_sink", billed.append)
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(_lookup_handler(set(), {}, [])))
+    yt.find_videos_in_playlist("tok", "PL1", ["a", "b", "c"])
+    assert billed == [3]
+
+
+def test_find_videos_in_playlist_surfaces_quota_exceeded(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": {"errors": [{"reason": "quotaExceeded"}]}})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with pytest.raises(yt.QuotaExceeded):
+        yt.find_videos_in_playlist("tok", "PL1", ["a", "b"])
+
+
+def test_existing_videos_lists_a_small_playlist_in_full(monkeypatch):
+    calls: list[str] = []
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(_lookup_handler({"a", "z"}, {"PL1": 40}, calls)))
+    assert yt.existing_videos_for_batch("tok", "PL1", ["a", "b"]) == {"a", "z"}
+
+
+def test_existing_videos_checks_per_video_for_a_large_playlist(monkeypatch):
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(200, json={"items": [{"contentDetails": {"itemCount": 5000}}]})
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": [{"id": "x"}] if request.url.params["videoId"] == "a" else []})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.existing_videos_for_batch("tok", "PL1", ["a", "b"]) == {"a"}
+    assert all("videoId" in p and p["maxResults"] == "1" for p in seen)  # never paged through the playlist
+
+
+def test_existing_videos_falls_back_to_the_full_list_when_lookups_fail(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(200, json={"items": [{"contentDetails": {"itemCount": 5000}}]})
+        if "videoId" in request.url.params:
+            return httpx.Response(500, json={})
+        return httpx.Response(200, json={"items": [{"contentDetails": {"videoId": "a"}}]})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.existing_videos_for_batch("tok", "PL1", ["a", "b"]) == {"a"}
+
+
+def test_video_in_playlist_looks_up_one_video_for_one_unit(monkeypatch):
+    seen: list[dict] = []
+    billed: list[int] = []
+    monkeypatch.setattr(yt, "_quota_sink", billed.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": [{"id": "x"}] if request.url.params["videoId"] == "a" else []})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.video_in_playlist("tok", "PL1", "a") is True
+    assert yt.video_in_playlist("tok", "PL1", "b") is False
+    assert seen[0]["playlistId"] == "PL1" and seen[0]["videoId"] == "a" and seen[0]["maxResults"] == "1"
+    assert billed == [1, 1]
+
+
+def test_unavailable_video_counts_as_not_present_and_does_not_fail_the_lookup(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params["videoId"] == "gone":
+            return httpx.Response(404, json={"error": {"errors": [{"reason": "videoNotFound"}]}})
+        return httpx.Response(200, json={"items": [{"id": "x"}]})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.find_videos_in_playlist("tok", "PL1", ["gone", "a"]) == {"a"}
+    assert yt.video_in_playlist("tok", "PL1", "gone") is False
+
+
+def test_missing_playlist_still_fails_the_lookup(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"errors": [{"reason": "playlistNotFound"}]}})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with pytest.raises(RuntimeError):
+        yt.video_in_playlist("tok", "PL1", "a")
+
+
+def test_lookups_stop_after_a_quota_error_instead_of_sending_the_rest(monkeypatch):
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params["videoId"])
+        return httpx.Response(403, json={"error": {"errors": [{"reason": "quotaExceeded"}]}})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    ids = [f"v{i}" for i in range(200)]
+    with pytest.raises(yt.QuotaExceeded):
+        yt.find_videos_in_playlist("tok", "PL1", ids)
+    assert len(calls) < len(ids)
+
+
+def test_a_rate_limit_falls_back_to_the_full_list_instead_of_raising_quota(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(200, json={"items": [{"contentDetails": {"itemCount": 5000}}]})
+        if "videoId" in request.url.params:
+            return httpx.Response(403, json={"error": {"errors": [{"reason": "rateLimitExceeded"}]}})
+        return httpx.Response(200, json={"items": [{"contentDetails": {"videoId": "a"}}]})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    assert yt.existing_videos_for_batch("tok", "PL1", ["a", "b"]) == {"a"}
+    assert issubclass(yt.RateLimited, yt.QuotaExceeded)
+
+
+def test_a_daily_quota_error_still_raises_through_existing_videos_for_batch(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/playlists"):
+            return httpx.Response(200, json={"items": [{"contentDetails": {"itemCount": 5000}}]})
+        return httpx.Response(403, json={"error": {"errors": [{"reason": "quotaExceeded"}]}})
+
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with pytest.raises(yt.QuotaExceeded):
+        yt.existing_videos_for_batch("tok", "PL1", ["a", "b"])
