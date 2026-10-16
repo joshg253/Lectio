@@ -89,7 +89,9 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   once per the hide-members-only pass (an entry stays in the unread loop, and
   therefore gets re-offered a check, only until it's marked read or a check
   succeeds). A fetch failure caches nothing, leaving the row for the next refresh to
-  retry rather than pinning a wrong answer.
+  retry rather than pinning a wrong answer. When the check creates the row (no duration
+  fetched yet), it stamps `fetched_at` with the epoch so the duration fetch reads it as a
+  stale negative; a current timestamp would block the duration for 30 minutes to 6 hours.
 - **YouTube embed host (per-user)** — both `youtube.com` and `youtube-nocookie.com`
   are allowlisted; which one a YouTube *embed* uses is the viewer's choice, applied
   at **render** (not ingest, since sanitization bakes content into each user's

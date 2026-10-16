@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services.youtube import YouTubeDurationService
+
+
+def _now_utc():
+    return datetime.now(timezone.utc)
 
 
 class _ReaderCtx:
@@ -688,3 +693,26 @@ def test_refresh_upcoming_keeps_row_when_its_chunk_failed(tmp_path: Path, monkey
     with get_meta_connection() as conn:
         row = conn.execute("SELECT live_broadcast_content, scheduled_start_time FROM youtube_video_duration").fetchone()
     assert (row[0], row[1]) == ("upcoming", "2026-09-20T18:00:00Z")
+
+
+def test_members_only_placeholder_row_does_not_block_the_duration_fetch(tmp_path: Path, monkeypatch):
+    """A members-only check that runs before the first duration fetch creates the row; the next refresh must still fetch the duration."""
+    db_path = tmp_path / "yt.sqlite"
+    monkeypatch.setattr("services.youtube.httpx.get", lambda *a, **kw: _FakeResponse("<html>a normal video page</html>"))
+    service = YouTubeDurationService(
+        get_durations_connection=lambda: _make_db_conn(db_path),
+        get_reader=lambda: _ReaderCtx(_FakeReader([_FakeEntry("https://www.youtube.com/watch?v=ABCDEFGHIJK", added=_now_utc())])),
+        user_agent="LectioTest/1.0",
+    )
+    service.fetch_and_cache_members_only("ABCDEFGHIJK")
+    requested: list[list[str]] = []
+
+    def fake_batch(ids):
+        requested.append(list(ids))
+        return {"ABCDEFGHIJK": (125, "2:05", "none", None)}
+
+    monkeypatch.setattr(service, "get_video_durations_batch", fake_batch)
+    service.fetch_and_store_durations_for_feed("https://www.youtube.com/feeds/videos.xml?channel_id=UCx")
+    assert requested == [["ABCDEFGHIJK"]]
+    row = service._get_duration_row("ABCDEFGHIJK")
+    assert row is not None and row[0] == 125

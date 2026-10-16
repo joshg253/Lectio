@@ -159,7 +159,10 @@ class YouTubeDurationService:
 
     def fetch_and_cache_members_only(self, video_id: str) -> bool | None:
         """Fetch video_id's watch page, detect its "Members only" badge, and
-        persist the result so it is never fetched again. Returns None (and
+        persist the result so it is never fetched again. When the video has no
+        duration row yet, the placeholder row is stamped with the epoch so the
+        duration fetch treats it as a stale negative, not a fresh "API said no
+        duration" that would block it for 30 minutes to 6 hours. Returns None (and
         caches nothing) on a fetch failure, so a transient network error simply
         leaves the video uncached for the next caller to retry — there is no
         separate negative-retry timer to maintain.
@@ -189,7 +192,7 @@ class YouTubeDurationService:
             conn.execute(
                 """
                 INSERT INTO youtube_video_duration (video_id, members_only, fetched_at)
-                VALUES (?, ?, datetime('now'))
+                VALUES (?, ?, '1970-01-01 00:00:00')
                 ON CONFLICT(video_id) DO UPDATE SET members_only = excluded.members_only
                 """,
                 (video_id, int(is_members_only)),
