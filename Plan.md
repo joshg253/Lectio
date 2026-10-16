@@ -78,6 +78,10 @@ Empty.
 Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
 on more investigation. Once answered, each drops into Tier 2 or 3.
 
+- **YouTube playlist duplicate finder** — a dry-run report of videos that appear more than once in a chosen playlist (list with
+  `part=snippet`, group by `videoId`), then an explicit, nothing-pre-checked delete of the extra copies via `playlistItems.delete`
+  (50 units each, stops on quota). Every add path now checks first, so this only cleans strays that already exist. Open: confirm
+  on a real playlist that list order keeps the earliest copy before any delete runs. Raised 2026-10-16.
 - **Single-post pages: raw/full-page capture quality** — some "feeds" are one standing document (a single tutorial page) saved via a
   manufactured feed; readability can return a small fraction of the page, or the wrong node. Deferred by Josh 2026-09-24; needs a
   concrete example page before it can be scoped. (Workflow half superseded: such pages get filed into a related feed by auto-filing.)

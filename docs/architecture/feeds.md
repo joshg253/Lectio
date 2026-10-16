@@ -835,6 +835,14 @@ shape alone, before deleting).
   (`_HIGH_FANOUT_PACE_SECONDS`) so a big serial burst isn't throttled into
   spurious 404s (YouTube 404s a ~700-request burst though each feed is fine
   singly) — a polite-client measure, feeds to other hosts interleave at full speed.
+- **Folder refresh is a background job, and passes don't overlap** — `POST /refresh` only starts a per-user job
+  (`_folder_refresh_jobs`, one at a time) and redirects; a folder of hundreds of feeds takes minutes, longer than a reverse
+  proxy waits. `_folderRefreshWatch` (app.js) polls `GET /api/refresh/status`, from a page load and after the `r` shortcut's
+  async refresh alike, and re-renders the panes in place when the job finishes (no full reload, so an open article survives;
+  localStorage marks the job handled). `update_feeds` claims each feed in an in-memory in-flight set keyed by user and skips
+  any feed another pass (scheduler, manual refresh, WebSub) is already updating, returning the skipped feeds: two passes
+  inserting the same new entries collide on `entries.id` and fail both feeds. `/refresh/feed` reports a skipped feed instead of
+  "complete"; a WebSub push or scheduler tick that finds its feed claimed relies on the next scheduled pass.
 - **`bypass_backoff`** (`FeedRefreshService.update_feeds`) — skips the feed- and
   domain-level backoff checks above. Wired only into the single-feed manual
   `/refresh/feed` route: a deliberate click on one feed is a single polite

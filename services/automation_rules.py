@@ -1178,6 +1178,11 @@ def _apply_youtube_playlist_rules(
                             if not claimed:
                                 continue
                             try:
+                                # The claim above only knows what THIS rule added; the video may be on the playlist from a
+                                # manual or batch add, and a duplicate costs 50 units and never goes away on its own.
+                                if youtube_oauth_service.video_in_playlist(token, playlist_id, vid):
+                                    entry_added_any = True  # on the playlist is as good as added: mark-read still applies
+                                    continue
                                 youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
                                 added_total += 1
                                 entry_added_any = True

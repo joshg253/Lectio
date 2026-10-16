@@ -49,6 +49,7 @@ def env(tmp_path, monkeypatch):
 def test_noop_when_nothing_configured(env, monkeypatch):
     calls = []
     monkeypatch.setattr(main, "_instapaper_save_url", lambda *a: calls.append(a) or (True, None))
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: calls.append(a))
     main._run_on_star_destinations(FEED, "e1")
     assert calls == []
@@ -58,6 +59,7 @@ def test_instapaper_and_playlist_fire(env, monkeypatch):
     ip, pl = [], []
     monkeypatch.setattr(main, "is_instapaper_configured", lambda: True)
     monkeypatch.setattr(main, "_instapaper_save_url", lambda u, p, url, title: ip.append(url) or (True, None))
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
     monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, plid, vid: pl.append((plid, vid)))
     with main.get_meta_connection() as conn:
         main.set_setting(conn, main.SETTING_INSTAPAPER_USERNAME, "u")
@@ -94,3 +96,13 @@ def test_quire_skipped_when_no_project(env, monkeypatch):
         main.set_setting(conn, main.SETTING_STAR_SEND_QUIRE, "1")  # no project picked
     main._run_on_star_destinations(FEED, "e1")
     assert tasks == []
+
+
+def test_playlist_add_skips_a_video_already_in_the_playlist(env, monkeypatch):
+    pl = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda tok, plid, vid: True)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, plid, vid: pl.append((plid, vid)))
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_STAR_SEND_YT_PLAYLIST, "PL1")
+    main._run_on_star_destinations(FEED, "e1")
+    assert pl == []

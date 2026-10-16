@@ -4347,6 +4347,54 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       _ytMarkBatchJobConsumed(job.job_id);
     }
 
+    // A folder refresh runs in a background job (see /refresh), so the response lands before it finishes. Poll until it is done,
+    // then re-render the panes in place (no full reload, so an open article or half-typed note survives). Shared by the page-load
+    // path (context menu: a real navigation) and the async path (the `r` shortcut). A job that finished moments before a page
+    // loaded gets one re-render; localStorage marks it handled, and if storage is blocked the worst case is a repeat re-render.
+    let _folderRefreshWatching = false;
+    async function _folderRefreshWatch() {
+      if (_folderRefreshWatching) return;
+      _folderRefreshWatching = true;
+      const handled = (id) => { try { return localStorage.getItem('lectio-refresh-handled') === id; } catch (_e) { return false; } };
+      const markHandled = (id) => { try { localStorage.setItem('lectio-refresh-handled', id); } catch (_e) { /* best effort */ } };
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      try {
+        let failures = 0;
+        for (let tick = 0; tick < 600; tick++) {
+          let job;
+          try {
+            const r = await fetch('/api/refresh/status', { credentials: 'same-origin' });
+            job = await r.json();
+            failures = 0;
+          } catch (_e) {
+            if (++failures >= 5) return;  // a blip is retried; a dead endpoint is not polled forever
+            await sleep(3000);
+            continue;
+          }
+          if (!job || !job.ok || !job.job_id || handled(job.job_id)) return;
+          if (job.running) {
+            showToastMessage(`Refreshing ${job.total ?? ''} feeds…`);
+            await sleep(3000);
+            continue;
+          }
+          markHandled(job.job_id);
+          if (job.age_seconds !== null && job.age_seconds < 120) {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('message');  // the "Refreshing…" notice belongs to the request, not the finished job
+            if (typeof loadScopePanesWithoutFullRefresh === 'function') {
+              await loadScopePanesWithoutFullRefresh(url.toString(), false);
+              showToastMessage('Refresh complete.');
+            } else {
+              window.location.assign(url.toString());
+            }
+          }
+          return;
+        }
+      } finally {
+        _folderRefreshWatching = false;
+      }
+    }
+
     async function _ytBulkAddToPlaylist(posts, choice) {
       try {
         // Starts a background job server-side — it checks the playlist's
@@ -9282,6 +9330,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     try { initBskyVideoPlayers(document.querySelector('.pane-entry')); } catch (e) {}
     try { loadEntryAttachments(); } catch (e) {}
     if (_ytAccountFeaturesEnabled) _ytResumeBatchJobOnLoad();
+    _folderRefreshWatch();
 
     // --- Post multi-select (checkboxes) -----------------------------------
     // The checkbox is the only thing that ADDS to the selection — checking
@@ -19991,6 +20040,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
       if (typeof loadScopePanesWithoutFullRefresh === 'function') {
         await loadScopePanesWithoutFullRefresh(finalUrl, false);
+        _folderRefreshWatch();  // not awaited: a big folder takes minutes
         return;
       }
 

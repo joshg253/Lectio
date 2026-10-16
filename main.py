@@ -24126,27 +24126,92 @@ def refresh(
             list_feed_url,
             normalized_tag,
         )
-    with get_meta_connection() as conn:
-        scraper_service.refresh_all_scraped_feeds(conn)
-        devto_service.refresh_all_devto_feeds(conn)
-        # Only touch DeviantArt when it's actually configured — avoids needless work
-        # (and the access-token settings lookup) for the common no-DA setup.
-        _da_cid, _da_secret = get_deviantart_credentials()
-        if _da_cid and _da_secret:
-            deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
-    feed_refresh_service.update_feeds(feed_urls, enhance=False)
-    _run_automation_after_refresh(feed_urls)
-    invalidate_unread_counts_cache()
-    # Lead images / durations are network-heavy; fetch them off the request path
-    # so the redirect (and updated "new" badges) returns promptly.
-    _spawn_feed_enhancement(feed_urls)
+    job = _folder_refresh_job_state(create=True)
+    with _folder_refresh_jobs_lock:
+        if job.get("running"):
+            return RedirectResponse(
+                url=local_url(
+                    f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                    f"{quote_plus('A refresh is already running.')}"
+                ),
+                status_code=303,
+            )
+        job.update({"running": True, "done": False, "job_id": secrets.token_hex(8), "total": len(feed_urls), "finished_at": None})
+    uid = tenancy.current_user_id()
+    try:
+        threading.Thread(target=_run_in_user_context, args=(uid, _run_folder_refresh, list(feed_urls), job), daemon=True).start()
+    except Exception:
+        with _folder_refresh_jobs_lock:
+            job["running"] = False  # the worker's own finally never ran, so the job would read as running forever
+        raise
     return RedirectResponse(
         url=(
             local_url(
-                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message={quote_plus('Refresh complete.')}"
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}&message="
+                f"{quote_plus(f'Refreshing {len(feed_urls)} feeds…')}"
             )
         ),
         status_code=303,
+    )
+
+
+# One folder refresh at a time per user. A big folder (hundreds of feeds) takes minutes, longer than a reverse proxy waits, so the
+# request only starts the job; the page polls /api/refresh/status and reloads when it finishes.
+_folder_refresh_jobs = _PerUserDict()
+_folder_refresh_jobs_lock = threading.Lock()
+
+
+@overload
+def _folder_refresh_job_state(create: Literal[True]) -> dict: ...
+@overload
+def _folder_refresh_job_state(create: bool = False) -> dict | None: ...
+def _folder_refresh_job_state(create: bool = False) -> dict | None:
+    with _folder_refresh_jobs_lock:
+        job = _folder_refresh_jobs.get("job")
+        if job is None and create:
+            job = {"running": False}
+            _folder_refresh_jobs["job"] = job
+        return job
+
+
+def _run_folder_refresh(feed_urls: list[str], job: dict) -> None:
+    try:
+        with get_meta_connection() as conn:
+            scraper_service.refresh_all_scraped_feeds(conn)
+            devto_service.refresh_all_devto_feeds(conn)
+            # Only touch DeviantArt when it's actually configured — avoids needless work
+            # (and the access-token settings lookup) for the common no-DA setup.
+            _da_cid, _da_secret = get_deviantart_credentials()
+            if _da_cid and _da_secret:
+                deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
+        feed_refresh_service.update_feeds(feed_urls, enhance=False)
+        _run_automation_after_refresh(set(feed_urls))
+        invalidate_unread_counts_cache()
+        # Lead images / durations are network-heavy; fetch them off this thread too.
+        _spawn_feed_enhancement(feed_urls)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("[refresh] background folder refresh failed")
+    finally:
+        with _folder_refresh_jobs_lock:
+            job.update({"running": False, "done": True, "finished_at": time.time()})
+
+
+@app.get("/api/refresh/status")
+def refresh_status():
+    job = _folder_refresh_job_state()
+    if job is None:
+        return JSONResponse({"ok": True, "running": False})
+    with _folder_refresh_jobs_lock:
+        snap = dict(job)
+    finished_at = snap.get("finished_at")
+    return JSONResponse(
+        {
+            "ok": True,
+            "running": bool(snap.get("running")),
+            "job_id": snap.get("job_id"),
+            "total": snap.get("total"),
+            "age_seconds": None if finished_at is None else max(0, int(time.time() - finished_at)),
+        }
     )
 
 
@@ -24201,7 +24266,17 @@ def refresh_feed(
     # A deliberate click on one feed must actually attempt a fetch, not silently
     # no-op behind a backoff window the user has no visibility into — see
     # FeedRefreshService.update_feeds' bypass_backoff docstring.
-    feed_refresh_service.update_feeds([feed_url], enhance=False, bypass_backoff=True)
+    skipped = feed_refresh_service.update_feeds([feed_url], enhance=False, bypass_backoff=True)
+    if skipped:
+        # Another pass (a folder refresh, the scheduler) is updating this feed right now; a second concurrent fetch would collide
+        # with it, so say so rather than report a refresh that didn't happen.
+        return RedirectResponse(
+            url=local_url(
+                f"/?folder_id={folder_id}{list_feed_query}{tag_query}{sort_query}{entry_query}"
+                f"&message={quote_plus('This feed is already being refreshed; try again in a moment.')}"
+            ),
+            status_code=303,
+        )
     _run_automation_after_refresh({feed_url})
     invalidate_unread_counts_cache()
     _spawn_feed_enhancement([feed_url])
@@ -24254,6 +24329,8 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
                 body += str(getattr(entry, "summary", "") or "")
                 for vid in youtube_embeds.video_ids_in_text(link, body):
                     try:
+                        if youtube_oauth_service.video_in_playlist(token, playlist_id, vid):
+                            continue  # already there (the API would add a second copy)
                         youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
                     except youtube_oauth_service.QuotaExceeded:
                         mark_yt_quota_exhausted()

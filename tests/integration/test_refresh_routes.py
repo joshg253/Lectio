@@ -24,9 +24,21 @@ def _dummy_meta_connection() -> sqlite3.Connection:
     return conn
 
 
+class _InlineThread:
+    """Runs the folder refresh's background thread to completion inside start()."""
+
+    def __init__(self, target, args=(), daemon=None):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
 def test_refresh_route_success_updates_folder_scope(monkeypatch):
     app = _build_refresh_app()
     captured: dict[str, object] = {}
+    monkeypatch.setattr(main.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(main, "_run_automation_after_refresh", lambda urls: None)
 
     monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_connection)
@@ -61,7 +73,39 @@ def test_refresh_route_success_updates_folder_scope(monkeypatch):
     assert captured["enhance"] is False
     assert captured["invalidated"] is True
     assert captured["enhanced"] == ["https://a.xml", "https://b.xml"]
-    assert "message=Refresh+complete." in response.headers["location"]
+    assert "message=Refreshing+2+feeds" in response.headers["location"]
+
+
+def test_refresh_route_does_not_start_a_second_job_while_one_runs(monkeypatch):
+    app = _build_refresh_app()
+    started: list[object] = []
+    monkeypatch.setattr(main.threading, "Thread", lambda *a, **kw: started.append(1))
+    monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
+    monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_connection)
+    monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _folder_id: {"https://a.xml"})
+    main._folder_refresh_job_state(create=True)["running"] = True
+    try:
+        with TestClient(app) as client:
+            response = client.post("/refresh", data={"folder_id": "1"}, follow_redirects=False)
+    finally:
+        main._folder_refresh_job_state(create=True)["running"] = False
+
+    assert response.status_code == 303
+    assert started == []
+    assert "already+running" in response.headers["location"]
+
+
+def test_refresh_status_reports_running_then_finished(monkeypatch):
+    app = FastAPI()
+    app.get("/api/refresh/status")(main.refresh_status)
+    job = main._folder_refresh_job_state(create=True)
+    job.update({"running": True, "job_id": "j1", "total": 3, "finished_at": None})
+    with TestClient(app) as client:
+        running = client.get("/api/refresh/status").json()
+        job.update({"running": False, "finished_at": main.time.time()})
+        done = client.get("/api/refresh/status").json()
+    assert (running["running"], running["job_id"], running["total"], running["age_seconds"]) == (True, "j1", 3, None)
+    assert done["running"] is False and done["age_seconds"] < 5
 
 
 def test_refresh_route_throttled_skips_update(monkeypatch):
@@ -218,3 +262,45 @@ def test_an_explicit_non_default_sort_still_survives_a_refresh(monkeypatch):
         )
     assert "sort_dir=desc" in response.headers["location"]
     assert "sort_by=received" in response.headers["location"]
+
+
+def test_refresh_feed_route_says_so_when_the_feed_is_already_being_refreshed(monkeypatch):
+    app = _build_refresh_app()
+    called = {"automation": False}
+    monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
+    monkeypatch.setattr(main.feed_refresh_service, "update_feeds", lambda *_a, **_k: ["https://feed.example/rss.xml"])
+    monkeypatch.setattr(main, "_run_automation_after_refresh", lambda urls: called.__setitem__("automation", True))
+    with TestClient(app) as client:
+        response = client.post(
+            "/refresh/feed",
+            data={"folder_id": "2", "feed_url": "https://feed.example/rss.xml", "entry_id": "e1"},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert "already+being+refreshed" in response.headers["location"]
+    assert called["automation"] is False
+
+
+def test_folder_refresh_job_clears_running_when_the_worker_raises(monkeypatch):
+    job = main._folder_refresh_job_state(create=True)
+    job["running"] = True
+    monkeypatch.setattr(main, "get_meta_connection", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    main._run_folder_refresh(["https://a.xml"], job)
+    assert job["running"] is False and job["done"] is True
+
+
+def test_refresh_route_releases_the_job_when_the_thread_cannot_start(monkeypatch):
+    app = _build_refresh_app()
+
+    def _no_threads(*a, **kw):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(main.threading, "Thread", _no_threads)
+    monkeypatch.setattr(main, "check_and_mark_manual_refresh", lambda: 0)
+    monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_connection)
+    monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _folder_id: {"https://a.xml"})
+    main._folder_refresh_job_state(create=True)["running"] = False
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/refresh", data={"folder_id": "1"}, follow_redirects=False)
+    assert response.status_code == 500
+    assert main._folder_refresh_job_state(create=True)["running"] is False

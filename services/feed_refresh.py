@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -11,7 +12,7 @@ from urllib.parse import urlparse
 
 import socks  # pysocks — for isinstance checks distinguishing a dead proxy from a refused fetch
 
-from services import bot_challenge
+from services import bot_challenge, tenancy
 
 
 def _feed_domain(feed_url: str) -> str:
@@ -59,6 +60,13 @@ _HIGH_FANOUT_PACE_SECONDS = 0.7
 _MANUAL_REFRESH_IGNORE_UPDATE_AFTER_WITHIN_SECONDS = 90 * 60
 
 
+def _tenant_key() -> str:
+    try:
+        return tenancy.current_user_id()
+    except tenancy.TenancyUnboundError:
+        return ""
+
+
 class FeedRefreshService:
     """Encapsulates feed refresh orchestration and failure backoff state."""
 
@@ -87,6 +95,8 @@ class FeedRefreshService:
         self._fetch_and_store_lead_images = fetch_and_store_lead_images
         self._format_datetime_for_ui = format_datetime_for_ui
         self._logger = logger
+        self._in_flight: set[tuple[str, str]] = set()
+        self._in_flight_lock = threading.Lock()
         self._refresh_debug_enabled = refresh_debug_enabled
         self._failed_feed_backoff_base_seconds = failed_feed_backoff_base_seconds
         self._failed_feed_backoff_max_seconds = failed_feed_backoff_max_seconds
@@ -391,7 +401,32 @@ class FeedRefreshService:
         except Exception:
             self._logger.debug("[refresh] fetch-history insert failed for %s", feed_url, exc_info=True)
 
-    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> None:
+    def _claim_feeds(self, feed_urls: Iterable[str]) -> list[str]:
+        """Return the feeds in *feed_urls* no other pass is updating right now, and mark them in flight."""
+        user_id = _tenant_key()
+        with self._in_flight_lock:
+            claimed = [u for u in dict.fromkeys(feed_urls) if (user_id, u) not in self._in_flight]
+            self._in_flight.update((user_id, u) for u in claimed)
+        return claimed
+
+    def _release_feeds(self, feed_urls: Iterable[str]) -> None:
+        user_id = _tenant_key()
+        with self._in_flight_lock:
+            self._in_flight.difference_update((user_id, u) for u in feed_urls)
+
+    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> list[str]:
+        """Update *feed_urls*, skipping any feed another pass (scheduler, manual refresh) is already updating: two passes inserting
+        the same new entries collide on the entries primary key and fail both feeds. Returns the skipped feeds (usually empty)."""
+        requested = list(dict.fromkeys(feed_urls))
+        claimed = self._claim_feeds(requested)
+        try:
+            self._update_feeds(claimed, enhance=enhance, bypass_backoff=bypass_backoff)
+        finally:
+            self._release_feeds(claimed)
+        claimed_set = set(claimed)
+        return [u for u in requested if u not in claimed_set]
+
+    def _update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> None:
         """*bypass_backoff* skips the feed- and domain-level backoff checks (not
         reader's own update_after, which reflects the server's own Retry-After/
         Cache-Control — a real instruction from the site, not just our pacing).
