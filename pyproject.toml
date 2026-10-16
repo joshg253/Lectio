@@ -3,7 +3,7 @@ name = "lectio"
 version = "0.1.0"
 description = "Browser-based RSS and Atom reader"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
     "aiosqlite",
     "fastapi",
