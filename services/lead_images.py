@@ -2770,6 +2770,12 @@ class LeadImageService:
         candidates: list[str] = []
         plugin_candidate_attrs = self._plugin_extra_candidate_attrs(source_url)
 
+        # A scraper that found a smaller picture for this image (a post's thumbnail that links to a different full-size picture)
+        # leaves it here, so the list thumbnail comes from it while the post shows the full-size src.
+        thumb = attrs.get("data-lectio-thumb")
+        if thumb:
+            candidates.append(thumb)
+
         for attr_name in plugin_candidate_attrs:
             value = attrs.get(attr_name)
             if value:

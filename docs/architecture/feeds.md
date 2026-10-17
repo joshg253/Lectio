@@ -569,6 +569,16 @@ copy with the site chrome around it (36KB for a 1KB lesson). Relative `href`/`sr
 for the title. texasbluesalley.com's video is a JS-only `<mux-player>`; `TexasBluesAlleyPlugin` turns its public playback id into a
 `player.mux.com` iframe, prepended to a selected region (its first heading there is a section label, not a title).
 
+A site with no wrapper around a post (posts are bare text and `<br>` between a header block and a share block) can't be named by one
+selector, so `content_selector` also accepts `START >> END` (`scraper_service.select_region`): everything beside START up to the first
+following sibling that is or contains END, in a `<div>`. A thumbnail link to a full-size image becomes the full-size image (a run of adjacent ones is sized to 320 px inside its own
+`<div>`, so the stylesheet's wrapping-row rule tiles them; a lone one sits in a `<span>` so text-separated images never read as a row); a post's small leading picture rides on that image as
+`data-lectio-thumb`, which `LeadImageService._collect_img_candidate_urls` prefers, so the list thumbnail is the small picture and the
+body shows only the full-size one. The sanitizer's `<img>` allowlist keeps the attribute (it is only ever read as a URL). An image-only anchor's title comes from its
+`title=` then `<img alt>`; the URL fallback ranks below any real title, and stored URL titles heal on the next scrape. The generated RSS
+escapes `&` in links. The re-fetch sanitizes the selected region (it is rendered `| safe`) and keeps a scraped entry's own title rather than the page's `<title>`. A site whose page scan returns
+its header banner for picture-less posts gets a lead-image plugin that skips the scan (`RichWhitehouseLeadImagePlugin`).
+
 `publish_date.from_visible_text` needed a second tier for this. Its matcher wants
 an element whose `class`/`id` says `date`/`posted`/`byline`, which utility-CSS
 frameworks never provide — the byline lives in

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import types
 from pathlib import Path
 
 import main
@@ -216,7 +217,7 @@ def test_extract_selected_region_keeps_only_the_selected_block(monkeypatch):
 
     monkeypatch.setattr(main.page_fetcher, "fetch", lambda *a, **k: _Result())
     cap: dict = {}
-    assert main._extract_selected_region("https://x.test/p", "#a", cap) == ("Lesson", '<div id="a"><p>body</p></div>')
+    assert main._extract_selected_region("https://x.test/p", "#a", cap) == ("Lesson", "<div><p>body</p></div>")
     assert main._extract_selected_region("https://x.test/p", "#missing", cap) is None
     assert cap["raw_html"] == _Result.html
 
@@ -231,3 +232,31 @@ def test_selected_region_embed_goes_before_the_region_not_after_its_first_headin
     _title, body = extracted
     assert body.startswith('<p class="lectio-embed"><iframe')
     assert body.index("player.mux.com/abc123") < body.index("desc") < body.index("Tags")
+
+
+def test_scraped_entry_title_is_the_stored_entry_title_not_the_page_title(monkeypatch):
+    class _Reader:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_entry(self, key, default=None):
+            return types.SimpleNamespace(title="  Real Post Title ") if key[1] == "e1" else default
+
+    monkeypatch.setattr(main, "get_reader", lambda: _Reader())
+    assert main._scraped_entry_title("file:///f.xml", "e1") == "Real Post Title"
+    assert main._scraped_entry_title("file:///f.xml", "missing") == ""
+
+
+def test_extract_selected_region_is_sanitized(monkeypatch):
+    """The stored region is rendered with `| safe`: scripts and handlers must not survive a re-fetch."""
+
+    class _Result:
+        html = "<html><body><div id='a'><p>body</p><script>alert(1)</script><img src='x.png' onerror='alert(2)'></div></body></html>"
+
+    monkeypatch.setattr(main.page_fetcher, "fetch", lambda *a, **k: _Result())
+    extracted = main._extract_selected_region("https://x.test/p", "#a", {})
+    assert extracted is not None
+    assert "<script" not in extracted[1] and "onerror" not in extracted[1] and "body" in extracted[1]

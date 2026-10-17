@@ -391,3 +391,9 @@ def test_display_time_instagram_rebuild_for_already_stored_bodies():
     out = H.instagram_embeds(stored)
     assert 'src="https://www.instagram.com/p/DUuhUllEoXn/embed/"' in out and "sandbox=" in out
     assert H.instagram_embeds("<p>nothing</p>") == "<p>nothing</p>"
+
+
+def test_img_keeps_the_scrapers_thumbnail_hint():
+    """The lead-image scan reads data-lectio-thumb from ingested content, so ingest must not strip it."""
+    out = H.sanitize_html('<img src="https://e.com/b.png" data-lectio-thumb="https://e.com/s.png" onerror="x()">')
+    assert 'data-lectio-thumb="https://e.com/s.png"' in out and "onerror" not in out

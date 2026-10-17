@@ -34,6 +34,7 @@ from services.lead_image_plugins import (
     FutureSiteLeadImagePlugin,
     GunnerkriggPlugin,
     PennyArcadePlugin,
+    RichWhitehouseLeadImagePlugin,
     SMBCPlugin,
     StandardEbooksLeadImagePlugin,
     WordPressComicPlugin,
@@ -694,6 +695,15 @@ def test_penny_arcade_only_applies_to_comic_entries():
         entry_link="https://www.penny-arcade.com/news/post/2026/05/01/example",
         cached_url="https://www.penny-arcade.com/static/panels/something.jpg",
     )
+
+
+def test_richwhitehouse_never_takes_the_header_banner_as_a_lead_image():
+    plugin = RichWhitehouseLeadImagePlugin()
+    link = "https://www.richwhitehouse.com/index.php?postid=78"
+    assert plugin.should_skip_source_lookup(entry_link=link)
+    assert plugin.should_bypass_cached_url(entry_link=link, cached_url="https://www.richwhitehouse.com/images/rwlogox.jpg")
+    assert not plugin.should_bypass_cached_url(entry_link=link, cached_url="https://www.richwhitehouse.com/projimg/a.png")
+    assert not plugin.should_skip_source_lookup(entry_link="https://example.com/post")
 
 
 # ---------------------------------------------------------------------------
