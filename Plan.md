@@ -10,22 +10,12 @@ decision, real features not blocking anything today, and deliberately-deferred b
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1-3 are empty (2026-09-28). Everything left needs a product decision (Tier 4's first list), is undecided (`/api/*` split),
-or is a deliberately unstarted project (shared rendering core, Tier 5).
+Tiers 1 and 3 are empty (2026-10-17). Tier 2 is small cleanups and watch items; Tier 4 and beyond needs a product decision, is undecided
+(`/api/*` split), or is a deliberately unstarted project (shared rendering core, Tier 5).
 
 ## Tier 1 — actively impeding unread-clearing
 
-### README cleanup — after the FakeFeedz/YouTube work lands (2026-10-16)
-
-Docs-only, straight to `main` in its own commit, separate from code changes.
-
-1. Move the long Automation bullet (auto-read age, page-tag capture, teaser fetch) and the IsThereAnyDeal bullet to
-   `docs/wiki/Features-details.md`; leave one or two sentences in the README.
-2. Trim "Development": keep the lint hook, `make test` and `make rebuild`; move the CI, dependency audit, CodeQL, scratch-cleanup and
-   backups bullets to `docs/development.md` with a one-line link.
-3. Fix stale facts: the "Technical overview" table and "SQLite × 3" still describe single `lectio.db`/`lectio_meta.sqlite` files; point
-   at `docs/architecture/tenancy.md` for the per-user layout.
-4. The banner says setup docs are forthcoming, but `docs/deployment.md` exists: link it.
+Empty.
 
 ## Tier 2 — small, fast, independent wins
 
