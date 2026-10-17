@@ -1102,7 +1102,11 @@ def _content_hide_settings() -> tuple[set[str], set[str]]:
 
 
 def _hidden_by_content_setting(feed_url: str, hiding_feeds: set[str]) -> bool:
-    return feed_url in hiding_feeds or ("*" in hiding_feeds and "youtube.com/feeds/videos.xml" in feed_url)
+    # YouTube feeds only, even for the per-feed pref: the column has no host constraint, and a stale one on another feed must not suppress
+    # a video merely embedded there (the hide passes and the list scope it the same way).
+    if "youtube.com/feeds/videos.xml" not in feed_url:
+        return False
+    return feed_url in hiding_feeds or "*" in hiding_feeds
 
 
 def _apply_youtube_playlist_rules(

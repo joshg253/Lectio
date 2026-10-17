@@ -593,8 +593,11 @@ def test_members_only_skipped_when_hidden_globally(env, monkeypatch):
     assert _run_with(monkeypatch, members_only=True) == []
 
 
-def test_global_hide_leaves_a_video_embedded_in_a_non_youtube_feed_alone(env, monkeypatch):
+def test_hide_settings_leave_a_video_embedded_in_a_non_youtube_feed_alone(env, monkeypatch):
     other = "https://blog.example.test/feed"
+    with main.get_meta_connection() as conn:  # a stale per-feed pref on a non-YouTube feed
+        main.upsert_feed_display_pref(conn, other, "hide_members_only", 1)
+        main.upsert_feed_display_pref(conn, other, "hide_unpremiered", 1)
     reader = main.get_reader()
     reader.add_feed(other, allow_invalid_url=True)
     reader.add_entry(
