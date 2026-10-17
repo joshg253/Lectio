@@ -246,11 +246,17 @@ another rule's drops. `++` feed rules are never flagged.
   `/shorts/`), inserts each via `playlistItems.insert`, and optionally marks the post
   read. The rule's keyword is an **optional filter** — empty = every new video in
   scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
-  `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the
-  `/shorts/` link), `yt_mark_read` (default on), and `yt_min_minutes`/`yt_max_minutes`
+  `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the `/shorts/` link;
+  **it overrides Hide Shorts**, the rule being a deliberate per-rule opt-in), `yt_mark_read` (default on), and
+  `yt_min_minutes`/`yt_max_minutes`
   (0 = no limit). The **duration filter** reuses the cached video length (the same
   store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
   video whose duration isn't cached yet is skipped that run and retried once it is.
+  **Content settings:** a video the feed's (or the global) *hide unpremiered* / *hide members-only* setting hides is never added; the
+  rule has no setting of its own for those, so the content setting wins. For a feed that hides unpremiered videos the rule first fetches
+  live status for its videos (the scheduler runs automation before the duration/live-status pass, so a new premiere is otherwise unknown).
+  Members-only uses the cached verdict only (the hide pass fetches it), never a fetch of its own. A skipped video is not revisited: the
+  watermark moves past it, so an unpremiered video is not added once it airs.
   Durations are fetched in **batches of 50 ids per `videos.list` call** — that endpoint
   bills **1 quota unit per call, not per video**, so a large subscription set (10k+
   videos) costs ~200 units instead of ~10k. (Per-video fetching previously blew the

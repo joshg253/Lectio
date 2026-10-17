@@ -501,3 +501,9 @@ Related, same area, both predating the gg.deals work: a FlareSolverr *outage* (e
 ### Valnet gallery duplicates on sibling sites
 `HowToGeekPlugin` strips the duplicate carousel lists on howtogeek.com only. XDA, MakeUseOf, Screen Rant and other Valnet sites probably
 ship the same `.valnet-gallery` markup; verify one article per site before adding hosts.
+
+### Automation pass returns early without mark-read/dedup/email/tag-filter rules
+`_run_automation_after_refresh` returns when no enabled `mark_as_read`, `deduplicate`, `email_article` or `tag_filter` rule exists, before the webhook, Instapaper, save-article, Quire and YouTube playlist dispatchers run. A user whose only rules are those types never gets them fired (repro: only a playlist rule, then the full pass adds nothing). Fix by skipping just the rule loop, then check what users with only those rule types would suddenly start firing.
+
+### Auto add-to-playlist: hidden unpremiered videos
+A hidden unpremiered video is skipped for good (the watermark moves past it); revisit it after it airs if wanted. The duration filter's "retried once cached" has the same watermark problem for a video whose duration isn't cached on the first pass.
