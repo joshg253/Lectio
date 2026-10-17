@@ -1154,11 +1154,11 @@ def _parse_duration_equals(term: str) -> tuple[str, float, float] | None:
     value = term[1:].strip()
     if value == "0":
         return "none", 0.0, 0.0
-    range_match = re.match(r"^(.+?)-(.+)$", value)
-    if not range_match:
+    lo_text, dash, hi_text = value.partition("-")  # first hyphen, like the browser's parser; no regex on user input
+    if not dash or not lo_text.strip() or not hi_text.strip():
         return None
-    lo = _parse_duration_filter_seconds(range_match.group(1).strip())
-    hi = _parse_duration_filter_seconds(range_match.group(2).strip())
+    lo = _parse_duration_filter_seconds(lo_text.strip())
+    hi = _parse_duration_filter_seconds(hi_text.strip())
     return None if lo is None or hi is None else ("range", lo, hi)
 
 
