@@ -489,3 +489,129 @@ def test_first_run_with_no_watermark_uses_the_fifteen_minute_default(env, monkey
     main._run_youtube_playlist_rules_after_refresh({FEED})
 
     assert calls == []
+
+
+def _hide_pref(key: str) -> None:
+    with main.get_meta_connection() as conn:
+        main.upsert_feed_display_pref(conn, FEED, key, 1)
+
+
+def _run_with(monkeypatch, *, unpremiered=False, members_only=None):
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    monkeypatch.setattr(automation_rules, "_is_youtube_unpremiered", lambda entry: unpremiered)
+    monkeypatch.setattr(automation_rules.youtube_duration_service, "get_cached_members_only", lambda vid: members_only)
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    return calls
+
+
+def test_unpremiered_video_added_when_feed_does_not_hide_it(env, monkeypatch):
+    assert _run_with(monkeypatch, unpremiered=True) == [VID]
+
+
+def test_unpremiered_video_skipped_when_feed_hides_it(env, monkeypatch):
+    _hide_pref("hide_unpremiered")
+    assert _run_with(monkeypatch, unpremiered=True) == []
+
+
+def test_unpremiered_video_skipped_when_hidden_globally(env, monkeypatch):
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_YT_HIDE_UNPREMIERED_GLOBAL, "1")
+    monkeypatch.setattr(
+        main, "get_runtime_setting", lambda key, default=None: "1" if key == main.SETTING_YT_HIDE_UNPREMIERED_GLOBAL else default
+    )
+    assert _run_with(monkeypatch, unpremiered=True) == []
+
+
+def test_members_only_video_skipped_when_feed_hides_it(env, monkeypatch):
+    _hide_pref("hide_members_only")
+    assert _run_with(monkeypatch, members_only=True) == []
+
+
+def test_members_only_video_added_when_not_hidden_or_not_members_only(env, monkeypatch):
+    assert _run_with(monkeypatch, members_only=True) == [VID]
+
+
+def test_hidden_members_only_but_not_known_to_be_members_only_is_added(env, monkeypatch):
+    _hide_pref("hide_members_only")
+    assert _run_with(monkeypatch, members_only=None) == [VID]
+
+
+def test_include_shorts_still_wins_over_hide_shorts(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _hide_pref("hide_shorts")
+    _add_entry(link=f"https://www.youtube.com/shorts/{VID}")
+    _add_rule(include_shorts=True)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == [VID]
+
+
+def _global_hide(monkeypatch, *keys):
+    real = main.get_runtime_setting
+    monkeypatch.setattr(main, "get_runtime_setting", lambda key, default="": "1" if key in keys else real(key, default))
+
+
+def test_unpremiered_skipped_from_the_real_live_status_cache(env, monkeypatch):
+    """Not patching _is_youtube_unpremiered: the cached live status of an upcoming video is what makes it skipped."""
+    svc = automation_rules.youtube_duration_service
+    monkeypatch.setattr(svc, "_live_cache", {VID: ("upcoming", None)})
+    monkeypatch.setattr(svc, "fetch_and_store_durations_for_feed", lambda feed_url: None)
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _hide_pref("hide_unpremiered")
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []
+
+
+def test_live_status_fetched_first_only_for_feeds_that_hide_unpremiered(env, monkeypatch):
+    fetched = []
+    svc = automation_rules.youtube_duration_service
+    monkeypatch.setattr(svc, "fetch_and_store_durations_for_feed", lambda feed_url: fetched.append(feed_url))
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: None)
+    _add_entry()
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert fetched == []
+
+    _hide_pref("hide_unpremiered")
+    _add_entry("e2", link="https://www.youtube.com/watch?v=aaaaaaaaaaa")
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert fetched == [FEED]
+
+
+def test_members_only_skipped_when_hidden_globally(env, monkeypatch):
+    _global_hide(monkeypatch, main.SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL)
+    assert _run_with(monkeypatch, members_only=True) == []
+
+
+def test_global_hide_leaves_a_video_embedded_in_a_non_youtube_feed_alone(env, monkeypatch):
+    other = "https://blog.example.test/feed"
+    reader = main.get_reader()
+    reader.add_feed(other, allow_invalid_url=True)
+    reader.add_entry(
+        {
+            "feed_url": other,
+            "id": "b1",
+            "title": "Post",
+            "link": "https://blog.example.test/p",
+            "summary": f"https://www.youtube.com/watch?v={VID}",
+        }
+    )
+    _global_hide(monkeypatch, main.SETTING_YT_HIDE_MEMBERS_ONLY_GLOBAL, main.SETTING_YT_HIDE_UNPREMIERED_GLOBAL)
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    monkeypatch.setattr(automation_rules, "_is_youtube_unpremiered", lambda entry: True)
+    monkeypatch.setattr(automation_rules.youtube_duration_service, "get_cached_members_only", lambda vid: True)
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({other})
+    assert calls == [VID]

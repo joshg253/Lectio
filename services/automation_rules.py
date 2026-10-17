@@ -52,6 +52,7 @@ from main import (
     _flush_email_batch_for_rule,
     _instapaper_save_url,
     _is_youtube_short,
+    _is_youtube_unpremiered,
     _quire_add_entry,
     _resolve_dedup_feed_urls,
     _star_entry_for_current_user,
@@ -86,6 +87,8 @@ from main import (
     rule_scope_folder_ids,
     set_setting,
     youtube_duration_service,
+    youtube_hide_members_only_global,
+    youtube_hide_unpremiered_global,
 )
 from services import dedup, html_sanitize, youtube_embeds
 from services import youtube_oauth as youtube_oauth_service
@@ -1079,6 +1082,29 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 _YT_PLAYLIST_AUTO_PER_RUN_CAP = 25
 
 
+def _content_hide_settings() -> tuple[set[str], set[str]]:
+    """Feeds (plus every YouTube feed, when the per-user global toggle is on) hiding unpremiered / members-only videos.
+
+    Read as ``(unpremiered_feeds, members_only_feeds)``; ``{"*"}`` stands for "every YouTube channel feed".
+    """
+    with get_meta_connection() as conn:
+        rows = conn.execute(
+            "SELECT feed_url, hide_unpremiered, hide_members_only FROM feed_display_prefs"
+            " WHERE hide_unpremiered = 1 OR hide_members_only = 1"
+        ).fetchall()
+    unpremiered = {str(r["feed_url"]) for r in rows if r["hide_unpremiered"]}
+    members_only = {str(r["feed_url"]) for r in rows if r["hide_members_only"]}
+    if youtube_hide_unpremiered_global():
+        unpremiered.add("*")
+    if youtube_hide_members_only_global():
+        members_only.add("*")
+    return unpremiered, members_only
+
+
+def _hidden_by_content_setting(feed_url: str, hiding_feeds: set[str]) -> bool:
+    return feed_url in hiding_feeds or ("*" in hiding_feeds and "youtube.com/feeds/videos.xml" in feed_url)
+
+
 def _apply_youtube_playlist_rules(
     refreshed_feed_urls: set[str],
     cutoff: datetime,
@@ -1098,6 +1124,10 @@ def _apply_youtube_playlist_rules(
     """
     added_total = 0
     now_str = datetime.now().isoformat()
+    # The rule's own Include Shorts wins over Hide Shorts (a deliberate per-rule opt-in); unpremiered and members-only have no
+    # per-rule setting, so a feed's (or the global) hide setting applies and the video is not added.
+    hide_unpremiered_feeds, hide_members_only_feeds = _content_hide_settings()
+    live_status_fetched: set[str] = set()
 
     for rule in yt_rules:
         if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
@@ -1124,6 +1154,15 @@ def _apply_youtube_playlist_rules(
                     in_scope = feed_in_rule_scope(scope, scope_id, feed_url, _folder_set)
                     if not in_scope:
                         continue
+                    # The scheduler runs automation BEFORE the duration/live-status pass, so a brand-new premiere has no cached status
+                    # yet and would read as "not unpremiered". Fetch it now for feeds that hide such videos (a no-op for ids already
+                    # cached, one videos.list call per 50 otherwise).
+                    if feed_url not in live_status_fetched and _hidden_by_content_setting(feed_url, hide_unpremiered_feeds):
+                        live_status_fetched.add(feed_url)
+                        try:
+                            youtube_duration_service.fetch_and_store_durations_for_feed(feed_url)
+                        except Exception:  # noqa: BLE001 -- unknown status just means the video is not treated as unpremiered
+                            LOGGER.warning("[yt-playlist-auto] live-status fetch failed for %s", feed_url, exc_info=True)
 
                     for entry in reader.get_entries(feed=feed_url):
                         if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
@@ -1135,6 +1174,8 @@ def _apply_youtube_playlist_rules(
                         if keyword and not _entry_matches_rule(entry, keyword, is_regex, search_in):
                             continue
                         if not include_shorts and _is_youtube_short(entry):
+                            continue
+                        if _hidden_by_content_setting(str(entry.feed_url or ""), hide_unpremiered_feeds) and _is_youtube_unpremiered(entry):
                             continue
                         link = str(entry.link or "")
                         body = "".join((c.value or "") for c in (entry.content or []))
@@ -1148,6 +1189,12 @@ def _apply_youtube_playlist_rules(
                         for vid in vids:
                             if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
                                 break
+                            # Cached verdict only (the after-refresh hide pass fetches it for opted-in feeds); never a network call here.
+                            if (
+                                _hidden_by_content_setting(fu, hide_members_only_feeds)
+                                and youtube_duration_service.get_cached_members_only(vid) is True
+                            ):
+                                continue
                             # Duration filter (minutes; 0 = no limit). The video's
                             # length comes from the same cache that powers the
                             # [duration] title prefix; an unknown duration is skipped
