@@ -558,6 +558,7 @@ def mark_folder_as_read(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     filter_term: str = Form(default=""),
+    loaded_before: float | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     normalized_read_filter_mr = normalize_read_filter(read_filter)
@@ -577,6 +578,7 @@ def mark_folder_as_read(
         star_only=star_only,
         tag=tag,
         post_filter=_filter_term_predicate(filter_term, folder_id),
+        loaded_before=loaded_before,
     )
     with unread_counts_cache_lock:
         _bump_unread_counts_generation()
@@ -2979,6 +2981,7 @@ def mark_feed_as_read(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     filter_term: str = Form(default=""),
+    loaded_before: float | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count, undo_token = _mark_entries_as_read_for_view(
@@ -2989,6 +2992,7 @@ def mark_feed_as_read(
         star_only=star_only,
         tag=tag,
         post_filter=_filter_term_predicate(filter_term, folder_id),
+        loaded_before=loaded_before,
     )
     with unread_counts_cache_lock:
         _bump_unread_counts_generation()

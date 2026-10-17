@@ -78,3 +78,7 @@ def test_filtered_delta_pages_by_match_count_and_reports_where_to_resume(tenant)
     assert found
     nxt = int(found.group(1))
     assert nxt > 1
+
+
+def test_list_renders_the_load_time_mark_read_sends_back(tenant):
+    assert re.search(r'data-view-loaded-at="\d+\.\d+"', _get())

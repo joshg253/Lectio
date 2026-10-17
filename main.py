@@ -8,6 +8,7 @@ import html
 import io
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -18391,6 +18392,7 @@ def _mark_entries_as_read_for_view(
     tag: str | None = None,
     older_than_cutoff: datetime | None = None,
     post_filter: Callable[[dict], bool] | None = None,
+    loaded_before: float | None = None,
 ) -> tuple[int, str | None]:
     """Mark as read only the entries the current filtered view actually shows —
     tag, star_only, read_filter, and every hide_* display preference
@@ -18414,6 +18416,9 @@ def _mark_entries_as_read_for_view(
 
     post_filter is the posts list's "Filter this view" predicate; it needs enriched rows (chip tags, titles), so the
     cheap enrich=False pass is used only without it.
+
+    loaded_before (epoch seconds, the moment the list page was rendered) leaves out entries stored after it: a post that
+    arrived while the list sat open was never in front of the user, so a blanket mark-read must not swallow it.
     """
     if not feed_urls:
         return 0, None
@@ -18442,10 +18447,17 @@ def _mark_entries_as_read_for_view(
         return 0, None
 
     to_sync: list[tuple[str, str]] = []
+    added_cutoff = datetime.fromtimestamp(loaded_before, tz=timezone.utc) if loaded_before and math.isfinite(loaded_before) else None
     with get_reader() as reader:
         for feed_url in feed_urls:
             for entry in reader.get_entries(feed=feed_url, read=False):
                 if (entry.feed_url, entry.id) not in allowed_ids:
+                    continue
+                if (
+                    added_cutoff is not None
+                    and entry.added is not None
+                    and entry.added.replace(tzinfo=entry.added.tzinfo or timezone.utc) > added_cutoff
+                ):
                     continue
                 if older_than_cutoff is not None:
                     date = entry_effective_date(entry)
@@ -22472,6 +22484,8 @@ def _home_inner(
     except Exception:
         limit = 250
 
+    # Stamped before the list query: a post stored while it runs is newer than the stamp, so mark-read leaves it alone.
+    view_loaded_at = time.time()
     posts_start = time.perf_counter()
     gap_ms = int((posts_start - gap_start) * 1000)
     LOGGER.info(
@@ -22820,6 +22834,7 @@ def _home_inner(
         # a full/initial fetch, or it would get appended below real posts.
         "is_chunk_delta_fetch": bool(chunk and chunk_delta),
         "view_exhausted": view_exhausted,
+        "view_loaded_at": view_loaded_at,
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,

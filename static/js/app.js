@@ -10358,6 +10358,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       for (const [key, value] of formData.entries()) {
         body.append(key, String(value));
       }
+      // Posts that arrived after the list rendered were never shown, so the server leaves them unread (every mark-read path comes through here).
+      const loadedAt = document.querySelector('.posts')?.getAttribute('data-view-loaded-at') || '';
+      if (loadedAt && !body.has('loaded_before')) body.append('loaded_before', loadedAt);
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const headers = {

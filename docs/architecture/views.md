@@ -46,6 +46,11 @@ the paging instead of retrying.
 Mark as read follows the filter too: the menu forms carry `filter_term` (added when the dropdown opens, first item relabeled "Current
 view") and `_mark_entries_as_read_for_view` takes the same predicate as `post_filter`.
 
+Mark as read also leaves alone posts that arrived after the list was rendered: the menu forms send `loaded_before` (the page's
+`data-view-loaded-at`, epoch seconds) and the server skips any entry whose `added` is later, whatever its post date. Older posts the view
+has not scrolled in yet are still marked; a post that came in while the page sat open was never in front of the user. Every mark-read path sends it (`submitMarkReadAsync`),
+including the right-click menus. A row paged in after the stamp whose `added` is later is dimmed optimistically but left unread by the server.
+
 **The filter owns its own class.** `post-item-filtered`, never
 `post-item-hidden` — the latter belongs to the scroll-chunking reveal, and "move
 all shown" keys off it. One shared class turns a filtered bulk move into a

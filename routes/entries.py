@@ -2275,6 +2275,7 @@ def mark_entries_older_than_read(
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
     filter_term: str = Form(default=""),
+    loaded_before: float | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     with get_meta_connection() as conn:
@@ -2291,6 +2292,7 @@ def mark_entries_older_than_read(
         tag=tag,
         older_than_cutoff=cutoff,
         post_filter=_view_filter_predicate(filter_term, folder_id=folder_id) if filter_term.strip() else None,
+        loaded_before=loaded_before,
     )
     if marked_count:
         _bump_unread_counts_generation()
