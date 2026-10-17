@@ -14567,6 +14567,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
         const ytShortsWrap = document.createElement('label');
         ytShortsWrap.className = 'hl-draft-cc-wrap';
+        ytShortsWrap.title = 'Overrides Hide Shorts for this rule. Unpremiered and members-only videos your settings hide are never added.';
         const ytShortsCheck = document.createElement('input');
         ytShortsCheck.type = 'checkbox';
         ytShortsCheck.checked = !!prefill.yt_include_shorts;
