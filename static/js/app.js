@@ -18326,8 +18326,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           for (const e of data.entries) {
             setSelectedFromData(e.feedUrl, e.entryId, e.videoId);
           }
+          // The server resolves the view by its read filter, but a list worked through one post at a time keeps the rows
+          // it marked read on screen (resume filter), so on an unread view the server can come back empty while the pane
+          // is full. Whatever is on screen is part of the view too.
+          document.querySelectorAll('.posts .post-item:not(.post-item-filtered)').forEach(el => setPostSelected(el, true));
           updateSelectionCounter();
-          showToastMessage(data.count ? `Selected ${data.count} post${data.count === 1 ? '' : 's'}.` : 'Nothing to select.');
+          const total = Math.max(data.count || 0, selectedPosts.size);
+          showToastMessage(total ? `Selected ${total} post${total === 1 ? '' : 's'}.` : 'Nothing to select.');
         } catch (_) {
           showToastMessage('Select all failed — network error.');
         }
