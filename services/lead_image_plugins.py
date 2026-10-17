@@ -378,6 +378,34 @@ class DresdenCodakPlugin:
 
 
 @dataclass(frozen=True)
+class RichWhitehouseLeadImagePlugin:
+    """A post's pictures are in its body; the page's only other image is the site header banner, which the page scan would otherwise
+    take as the lead image of every post that has no picture of its own."""
+
+    host: str = "richwhitehouse.com"
+    _BANNER = "rwlogox"
+
+    def _is_target(self, entry_link: str) -> bool:
+        host = (urlparse(entry_link).netloc or "").lower().split(":", 1)[0]
+        return host == self.host or host.endswith("." + self.host)
+
+    def should_bypass_cached_url(self, *, entry_link: str, cached_url: str) -> bool:
+        return self._is_target(entry_link) and self._BANNER in cached_url
+
+    def should_skip_source_lookup(self, *, entry_link: str) -> bool:
+        return self._is_target(entry_link)
+
+    def extra_candidate_attrs(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def source_score_adjustment(self, *, source_url: str, attrs: dict[str, str], resolved_url: str) -> int:
+        return 0
+
+    def fallback_lead_image_url(self, *, entry_link: str, content_html: str | None, summary: str | None) -> str | None:
+        return None
+
+
+@dataclass(frozen=True)
 class PennyArcadePlugin:
     """For comic entries, use og:image (full comic) instead of the first-panel
     image that body-scanning picks up from the source page."""
@@ -1330,6 +1358,7 @@ DEFAULT_LEAD_IMAGE_PLUGINS: tuple[LeadImagePlugin, ...] = (
     GunnerkriggPlugin(),
     DresdenCodakPlugin(),
     PennyArcadePlugin(),
+    RichWhitehouseLeadImagePlugin(),
     SMBCPlugin(),
     MisfilePlugin(),
     JohnnyWanderPlugin(),

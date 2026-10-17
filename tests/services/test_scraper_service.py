@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
+from bs4 import BeautifulSoup
 
 from services import scraper_service
 
@@ -176,6 +177,38 @@ def test_link_list_scrape_prefers_real_title_and_heals_duration_titles(monkeypat
     assert conn.execute("SELECT title FROM scraped_entries").fetchone()["title"] == "Open Strings Unlock Little Wing's Potential"
 
 
+# The same card with no hidden badge: the thumbnail anchor has NO text, so its title used to fall back
+# to the URL, which (longer, has letters) outranked the real caption title.
+_IMAGE_ONLY_ANCHOR_PAGE = """
+<html><body><div class="thumbnail-item-wrapper">
+  <a class="thumbnail-item-link" href="/lessons/raking" title="Essential Techniques: Raking">
+    <div class="thumbnail-item-image"><img alt="Lessons - Raking"/></div>
+  </a>
+  <div class="thumbnail-item-title"><a class="thumbnail-item-link" href="/lessons/raking">Essential Techniques: Raking</a></div>
+</div>
+<div class="thumbnail-item-wrapper"><a class="thumbnail-item-link" href="/lessons/muting"><img alt="Muting"/></a></div>
+<div class="thumbnail-item-wrapper"><a class="thumbnail-item-link" href="/lessons/bare"></a></div>
+</body></html>
+"""
+
+
+def test_image_only_anchor_title_uses_title_attribute_then_alt_then_url():
+    items = scraper_service.extract_link_items(_IMAGE_ONLY_ANCHOR_PAGE, "https://example.com/", "a.thumbnail-item-link")
+    assert [i["title"] for i in items] == ["Essential Techniques: Raking", "Muting", "https://example.com/lessons/bare"]
+
+
+def test_link_list_scrape_heals_url_titles(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _IMAGE_ONLY_ANCHOR_PAGE if url.endswith("/") else "")
+    conn = _make_conn()
+    feed = {"id": "f1", "source_url": "https://example.com/", "selector": "a.thumbnail-item-link"}
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    conn.execute("UPDATE scraped_entries SET title = entry_url")
+    scraper_service._scrape_link_list(conn, feed, initial=False)
+    titles = {r["entry_url"]: r["title"] for r in conn.execute("SELECT entry_url, title FROM scraped_entries")}
+    assert titles["https://example.com/lessons/raking"] == "Essential Techniques: Raking"
+    assert titles["https://example.com/lessons/bare"] == "https://example.com/lessons/bare"
+
+
 _RANK_PAGE = """
 <html><body>
   <nav><div><div><a href='/login'>Login</a></div><div><a href='/a'>A</a></div>
@@ -271,3 +304,107 @@ def test_link_list_accepts_complex_has_selector(monkeypatch):
     assert scraper_service._scrape_link_list(conn, feed, initial=False) is True
     rows = conn.execute("SELECT entry_url FROM scraped_entries").fetchall()
     assert [r["entry_url"] for r in rows] == ["https://basslessons.be/transcriptions.php?i=1193"]
+
+
+_UNWRAPPED_POST = """
+<div id="c"><div class="tags">Tags</div><h1>Title</h1><div class="meta">Oct 1</div><br/>
+First paragraph.<br/><br/>Second with <a href="/x">a link</a>.<div class="share">share</div><div class="comments">c1</div></div>
+"""
+
+
+def test_select_region_slices_siblings_between_start_and_end():
+    soup = BeautifulSoup(_UNWRAPPED_POST, "html.parser")
+    region = scraper_service.select_region(soup, ".meta >> .share")
+    text = region.get_text(" ", strip=True)
+    assert "First paragraph." in text and "a link" in text
+    assert "share" not in text and "c1" not in text and "Title" not in text
+
+
+def test_select_region_plain_selector_and_misses():
+    soup = BeautifulSoup(_UNWRAPPED_POST, "html.parser")
+    assert scraper_service.select_region(soup, "h1").get_text() == "Title"
+    assert scraper_service.select_region(soup, ".nope >> .share") is None
+    assert scraper_service.select_region(BeautifulSoup(_UNWRAPPED_POST, "html.parser"), ".share >> .nope").get_text(strip=True) == "c1"
+
+
+def test_new_entry_extras_uses_range_selector(monkeypatch):
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _UNWRAPPED_POST)
+    _, content = scraper_service._new_entry_extras("https://example.com/p", ".meta >> .share")
+    assert "First paragraph." in content and "c1" not in content
+
+
+def test_select_region_range_shows_linked_fullsize_image_inline():
+    html = (
+        '<h1>T</h1><div class="meta">d</div><a href="p/big.png" target="_blank"><img class="itemleft" src="p/s.png"></a>'
+        'text<div class="end"></div>'
+    )
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    img = region.find_all("img")[-1]
+    assert img["src"] == "p/big.png" and region.find("a") is None and not img.get("class")
+
+
+def test_select_region_range_tiles_a_strip_of_linked_images():
+    strip = "".join(f'<a href="p/{n}.png"><img src="p/{n}_s.jpg"></a>' for n in range(4))
+    html = f'<div class="meta">d</div><center>{strip}</center><div class="end"></div>'
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    imgs = region.find_all("img")
+    assert [i["src"] for i in imgs] == [f"p/{n}.png" for n in range(4)]
+    assert {i["width"] for i in imgs} == {"320"}
+    assert imgs[0].parent.name == "div" and len({id(i.parent) for i in imgs}) == 1
+
+
+def test_generated_feed_escapes_ampersands_in_links():
+    import xml.dom.minidom
+
+    xml_text = scraper_service._generate_rss_xml(
+        "T", "https://e.com/?a=1&b=2", [{"id": "1", "title": "t", "entry_url": "https://e.com/?x=1&y=2", "content": "", "published_at": ""}]
+    )
+    xml.dom.minidom.parseString(xml_text.encode())
+    assert "x=1&amp;y=2" in xml_text
+
+
+def test_select_region_does_not_tile_images_scattered_through_a_post():
+    html = (
+        '<div class="meta">d</div><a href="p/a.png"><img src="p/a_s.png"></a>text<br/>more text'
+        '<a href="p/b.png"><img src="p/b_s.png"></a> and words<div class="end"></div>'
+    )
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    assert all(i.get("width") is None for i in region.find_all("img"))
+
+
+def test_select_region_carries_small_leading_image_as_thumb_attribute():
+    html = '<div class="meta">d</div><br/><a href="p/big.png"><img class="itemleft" src="p/s.png"></a>Body<div class="end"></div>'
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    img = region.find("img")
+    assert region.find_all("img") == [img] and img["src"] == "p/big.png" and img["data-lectio-thumb"] == "p/s.png"
+
+
+def test_select_region_end_marker_ignores_an_earlier_match_elsewhere():
+    html = '<aside><div class="share">x</div></aside><div><div class="meta"></div>Body<div class="share"></div><div>SPAM</div></div>'
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .share")
+    text = region.get_text(" ", strip=True)
+    assert text == "Body"
+
+
+def test_select_region_end_marker_can_be_nested_in_a_sibling():
+    html = '<div><div class="meta"></div>Body<section><div class="share">s</div></section><p>SPAM</p></div>'
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .share")
+    assert region.get_text(" ", strip=True) == "Body"
+
+
+def test_select_region_scattered_images_never_sit_next_to_each_other_under_the_wrapper():
+    html = (
+        '<div class="meta"></div><a href="a.png"><img src="a_s.png"></a>words<a href="b.png"><img src="b_s.png"></a>'
+        'more<a href="c.png"><img src="c_s.png"></a><div class="end"></div>'
+    )
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    assert region.find("img", recursive=False) is None
+    assert [i.parent.name for i in region.find_all("img")] == ["span"] * 3
+
+
+def test_select_region_thumb_attribute_is_made_absolute_by_absolutize_links():
+    html = '<div class="meta"></div><a href="p/b.png"><img src="p/s.png"></a>t<div class="end"></div>'
+    region = scraper_service.select_region(BeautifulSoup(html, "html.parser"), ".meta >> .end")
+    scraper_service.absolutize_links(region, "https://e.com/index.php")
+    img = region.find("img")
+    assert img["src"] == "https://e.com/p/b.png" and img["data-lectio-thumb"] == "https://e.com/p/s.png"

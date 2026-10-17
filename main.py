@@ -24722,8 +24722,18 @@ def _scraped_feed_content_selector(feed_url: str) -> str:
     return str(row[0] or "").strip() if row else ""
 
 
+def _scraped_entry_title(feed_url: str, entry_id: str) -> str:
+    """The title of a scraped feed's entry as the scraper stored it, or "" when it has none."""
+    try:
+        with get_reader() as reader:
+            entry = reader.get_entry((feed_url, entry_id), None)
+        return str(getattr(entry, "title", "") or "").strip()
+    except Exception:  # noqa: BLE001 — a missing title just falls back to the page's
+        return ""
+
+
 def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cooldown: bool = False) -> tuple[str, str] | None:
-    """Fetch *url* and return ``(title, html)`` of the first element matching *selector*, or None when it matches nothing."""
+    """Fetch *url* and return ``(title, html)`` of the region *selector* names (see scraper_service.select_region), or None."""
     from bs4 import BeautifulSoup
 
     result = page_fetcher.fetch(
@@ -24732,14 +24742,14 @@ def _extract_selected_region(url: str, selector: str, capture: dict, ignore_cool
     capture["raw_html"] = result.html
     soup = BeautifulSoup(result.html, "html.parser")
     try:
-        region = soup.select_one(selector, flags=scraper_service.USER_SELECTOR_FLAGS)
+        region = scraper_service.select_region(soup, selector)
     except Exception:  # noqa: BLE001 — a bad selector falls back to readability
         return None
     if region is None:
         return None
     title = soup.title.get_text(strip=True) if soup.title else ""
     scraper_service.absolutize_links(region, url)
-    return title, _append_site_embeds(str(region), url, result.html, prepend=True)
+    return title, sanitize_readability_html(_append_site_embeds(str(region), url, result.html, prepend=True))
 
 
 def _refresh_captured_article_for_current_user(
@@ -24800,7 +24810,8 @@ def _refresh_captured_article_for_current_user(
         if _scraped_selector:
             region = _extract_selected_region(url, _scraped_selector, _capture, ignore_cooldown)
             if region:
-                return region
+                # The page's <title> is the site's name (or "Site - Post"); the scraper already gave the entry its real title.
+                return _scraped_entry_title(feed_url, entry_id) or region[0], region[1]
         # An explicit archive re-fetch ignores the URL the caller would have
         # used: the snapshot IS the target.
         target = from_archive or url

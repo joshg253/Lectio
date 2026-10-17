@@ -15,7 +15,17 @@ or is a deliberately unstarted project (shared rendering core, Tier 5).
 
 ## Tier 1 — actively impeding unread-clearing
 
-Empty.
+### README cleanup — after the FakeFeedz/YouTube work lands (2026-10-16)
+
+Docs-only, straight to `main` in its own commit, separate from code changes.
+
+1. Move the long Automation bullet (auto-read age, page-tag capture, teaser fetch) and the IsThereAnyDeal bullet to
+   `docs/wiki/Features-details.md`; leave one or two sentences in the README.
+2. Trim "Development": keep the lint hook, `make test` and `make rebuild`; move the CI, dependency audit, CodeQL, scratch-cleanup and
+   backups bullets to `docs/development.md` with a one-line link.
+3. Fix stale facts: the "Technical overview" table and "SQLite × 3" still describe single `lectio.db`/`lectio_meta.sqlite` files; point
+   at `docs/architecture/tenancy.md` for the per-user layout.
+4. The banner says setup docs are forthcoming, but `docs/deployment.md` exists: link it.
 
 ## Tier 2 — small, fast, independent wins
 
@@ -253,12 +263,22 @@ publisher-supplied thumbnail) — check what a feed already provides before writ
 fix — a second stored URL + a per-feed "thumbnail source" setting — needs the startup migration;
 worth doing when a fourth feed wants it, not before.
 
-### FakeFeedz `content_selector` has no edit UI for existing feeds
+### FakeFeedz Enhancements (2026-10-16)
 
-Shipped 2026-09-19 (link_list body-fill from the entry's own page, bypassing readability/full-page
-guessing) but only settable at feed creation in the Add Feed dialog — changing or adding it on an
-already-created scraped feed needs a direct DB edit today. Worth a "Page Feed" tab in Feed
-Properties if this comes up again; not before.
+Setting up three page feeds took many round trips because the Add Feed dialog only exposes the listing-page selector; `content_selector`
+is a hidden field. In rough value order:
+
+1. Visible "Post body" selector (accepts `START >> END`) plus a "Preview first post" button showing the extracted body and images.
+2. Richer item preview: per-item date (or "no date found"), the thumbnail that would be used, and a flag on URL-as-title.
+3. Click-to-pick the body region in the existing picker (click the first element, then where it ends) and write the `START >> END`.
+4. Defaults when a post body is set: lead-image strategy "inline" (a page scan takes the site banner).
+5. A "Check feed" step after creating: titles that are URLs, empty bodies, identical thumbnails across entries.
+6. No edit UI for `content_selector` on an existing feed (a direct DB edit today); a "Page Feed" tab in Feed Properties.
+
+### Move-all-shown-to-feed may share the Select All gap (2026-10-16)
+
+Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
+to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
 
 ### Send-to-destination — remaining candidates
 

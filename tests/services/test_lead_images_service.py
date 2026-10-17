@@ -3012,3 +3012,13 @@ def test_page_tag_sink_runs_for_ids_queued_while_an_idless_fetch_is_in_flight(tm
     gate.set()
     assert service.wait_for_source_html_fetch(link, timeout=5)
     assert seen == [("f", "e")]
+
+
+def test_data_lectio_thumb_attribute_wins_over_the_images_own_src(tmp_path: Path):
+    """A scraper leaves a post's smaller thumbnail picture on the full-size image it shows."""
+    service = _build_service(tmp_path / "meta.sqlite", [])
+    html = '<p><img src="https://example.com/p/big.png" data-lectio-thumb="https://example.com/p/small.png"></p>'
+
+    assert service._extract_first_image_url_from_html(html, "https://example.com/post", allow_extensionless=True) == (
+        "https://example.com/p/small.png"
+    )

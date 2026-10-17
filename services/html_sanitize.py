@@ -156,6 +156,8 @@ _ALLOWED_ATTRS = {
             "data-lazy-src",
             "data-original",
             "data-image",
+            # A scraper's smaller thumbnail picture for this image; only ever read as a URL by the lead-image scan.
+            "data-lectio-thumb",
         }
     ),
     "source": frozenset({"src", "srcset", "type", "media", "width", "height", "sizes", "data-srcset"}),
