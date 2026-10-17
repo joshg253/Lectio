@@ -73,6 +73,9 @@ short version:
   and MathML, recovered YouTube embeds, podcast audio (even when it lives in a
   separate host feed), inline LaTeX math, and images kept at the author's
   layout and a sane size.
+- **Filter this view.** Narrow the open list by text (`zelda "tears of" !sponsored`), video duration, or tag chips: `tag:games`,
+  `tag:!games`, `tag:gam*`; `tagged:` matches tags you applied. Press Enter to pull in matches from further down the view as you scroll;
+  it pairs with Select All for quick bulk triage.
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
   send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
   YouTube playlists, webhooks) at any scope, with dry-run and run history.

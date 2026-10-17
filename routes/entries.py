@@ -225,6 +225,7 @@ from main import (
 )
 from services import entry_content, tenancy
 from services.redirects import local_url
+from services.view_filter import parse_filter_term
 
 router = APIRouter()
 
@@ -1146,6 +1147,21 @@ def _parse_duration_filter_seconds(text: str) -> float | None:
     return None
 
 
+def _parse_duration_equals(term: str) -> tuple[str, float, float] | None:
+    """The "=0" (no cached duration) and "=X-Y" (inclusive range) forms, as app.js's _parseDurationFilter reads them."""
+    if not term.startswith("="):
+        return None
+    value = term[1:].strip()
+    if value == "0":
+        return "none", 0.0, 0.0
+    lo_text, dash, hi_text = value.partition("-")  # first hyphen, like the browser's parser; no regex on user input
+    if not dash or not lo_text.strip() or not hi_text.strip():
+        return None
+    lo = _parse_duration_filter_seconds(lo_text.strip())
+    hi = _parse_duration_filter_seconds(hi_text.strip())
+    return None if lo is None or hi is None else ("range", lo, hi)
+
+
 def _parse_duration_filter(term: str) -> tuple[str, float] | None:
     m = _DURATION_FILTER_RE.match(term)
     if not m:
@@ -1167,6 +1183,8 @@ def _folder_is_yt_folder(folder_id: int | None) -> bool:
 def _view_filter_predicate(term: str | None, *, folder_id: int | None = None):
     """The posts list's "Filter this view" box, resolved server-side.
 
+    ``tag:``/``tagged:`` terms, quoted phrases and ``!`` exclusions are parsed by services.view_filter.
+
     Matches the same three fields the browser-side filter matches — post title,
     link URL, and source feed title — so "move the N shown" resolves to exactly
     the set the filter is showing. The client filters locally for instant feel;
@@ -1185,6 +1203,15 @@ def _view_filter_predicate(term: str | None, *, folder_id: int | None = None):
         return lambda post: True
 
     if _folder_is_yt_folder(folder_id):
+        equals = _parse_duration_equals(needle)
+        if equals is not None:
+            kind, lo, hi = equals
+
+            def _matches_equals(post: dict) -> bool:
+                dur = post.get("duration_seconds")
+                return dur is None if kind == "none" else (dur is not None and lo <= dur <= hi)
+
+            return _matches_equals
         duration = _parse_duration_filter(needle)
         if duration is not None:
             op, seconds = duration
@@ -1205,8 +1232,14 @@ def _view_filter_predicate(term: str | None, *, folder_id: int | None = None):
 
             return _matches_duration
 
+    parsed = parse_filter_term(needle)
+
     def _matches(post: dict) -> bool:
-        return any(needle in str(post.get(key) or "").lower() for key in ("title", "link", "feed_title"))
+        for clause in parsed.clauses:
+            if not clause.matches(post.get("applied_tags" if clause.applied else "chip_tags") or []):
+                return False
+        haystack = "\n".join(str(post.get(key) or "") for key in ("title", "link", "feed_title")).lower()
+        return parsed.text_matches(haystack)
 
     return _matches
 
@@ -2241,6 +2274,7 @@ def mark_entries_older_than_read(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
 ):
     normalized_tag = normalize_tag_value(tag)
     with get_meta_connection() as conn:
@@ -2256,6 +2290,7 @@ def mark_entries_older_than_read(
         star_only=star_only,
         tag=tag,
         older_than_cutoff=cutoff,
+        post_filter=_view_filter_predicate(filter_term, folder_id=folder_id) if filter_term.strip() else None,
     )
     if marked_count:
         _bump_unread_counts_generation()

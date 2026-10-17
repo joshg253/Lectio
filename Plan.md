@@ -502,6 +502,11 @@ Related, same area, both predating the gg.deals work: a FlareSolverr *outage* (e
 `HowToGeekPlugin` strips the duplicate carousel lists on howtogeek.com only. XDA, MakeUseOf, Screen Rant and other Valnet sites probably
 ship the same `.valnet-gallery` markup; verify one article per site before adding hosts.
 
+### "Filter this view" follow-ups
+- Filtered pages still resolve and enrich the whole 2,000-row window per request (~2s); filtering the light records before enrichment would make each page cheap.
+- `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
+- Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.
+
 ### Automation pass returns early without mark-read/dedup/email/tag-filter rules
 `_run_automation_after_refresh` returns when no enabled `mark_as_read`, `deduplicate`, `email_article` or `tag_filter` rule exists, before the webhook, Instapaper, save-article, Quire and YouTube playlist dispatchers run. A user whose only rules are those types never gets them fired (repro: only a playlist rule, then the full pass adds nothing). Fix by skipping just the rule loop, then check what users with only those rule types would suddenly start firing.
 

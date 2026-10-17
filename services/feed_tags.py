@@ -778,6 +778,29 @@ class FeedTagService:
             ).fetchall()
         return [row[0] for row in rows]
 
+    def get_tags_for_entries(self, keys: Iterable[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
+        """Raw stored tags for many (feed_url, entry_id) pairs in insertion order.
+
+        One query per 400 pairs, for list rows; ``get_tags_for_entry`` is the single-row form.
+        """
+        pairs = list(keys)
+        out: dict[tuple[str, str], list[str]] = {}
+        try:
+            with self._get_meta_connection() as conn:
+                for i in range(0, len(pairs), 400):
+                    chunk = pairs[i : i + 400]
+                    ph = ",".join("(?,?)" for _ in chunk)
+                    flat = [v for k in chunk for v in k]
+                    for row in conn.execute(
+                        f"SELECT feed_url, entry_id, tag FROM entry_feed_tags"  # nosemgrep: placeholders only
+                        f" WHERE (feed_url, entry_id) IN ({ph}) ORDER BY rowid",
+                        flat,
+                    ):
+                        out.setdefault((str(row[0]), str(row[1])), []).append(str(row[2]))
+        except Exception:
+            LOGGER.warning("bulk feed tag lookup failed", exc_info=True)
+        return out
+
     def tag_vocabulary(self, feed_urls: Iterable[str] | None, *, limit: int = 400) -> list[tuple[str, int]]:
         """The tags actually present in a scope, most-used first.
 

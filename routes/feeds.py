@@ -538,6 +538,15 @@ def set_folder_page_topics(folder_id: int = Form(...), enabled: int = Form(...))
     return JSONResponse({"ok": True, "capture_page_topics": bool(enabled)})
 
 
+def _filter_term_predicate(filter_term: str, folder_id: int):
+    """The "Filter this view" predicate for a mark-read, or None when no term was sent (the whole scope is marked)."""
+    if not (filter_term or "").strip():
+        return None
+    from routes.entries import _view_filter_predicate  # lazy: routes.entries imports from main like this module
+
+    return _view_filter_predicate(filter_term, folder_id=folder_id)
+
+
 @router.post("/folders/mark-read")
 def mark_folder_as_read(
     request: Request,
@@ -548,6 +557,7 @@ def mark_folder_as_read(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
 ):
     normalized_tag = normalize_tag_value(tag)
     normalized_read_filter_mr = normalize_read_filter(read_filter)
@@ -566,6 +576,7 @@ def mark_folder_as_read(
         read_filter=read_filter,
         star_only=star_only,
         tag=tag,
+        post_filter=_filter_term_predicate(filter_term, folder_id),
     )
     with unread_counts_cache_lock:
         _bump_unread_counts_generation()
@@ -2967,6 +2978,7 @@ def mark_feed_as_read(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
 ):
     normalized_tag = normalize_tag_value(tag)
     marked_count, undo_token = _mark_entries_as_read_for_view(
@@ -2976,6 +2988,7 @@ def mark_feed_as_read(
         read_filter=read_filter,
         star_only=star_only,
         tag=tag,
+        post_filter=_filter_term_predicate(filter_term, folder_id),
     )
     with unread_counts_cache_lock:
         _bump_unread_counts_generation()

@@ -219,3 +219,36 @@ def test_mark_older_than_respects_tag_filter(configured):
     with main.get_reader() as reader:
         assert reader.get_entry((FEED_A, "tagged-old")).read
         assert not reader.get_entry((FEED_A, "untagged-old")).read
+
+
+def test_feed_and_folder_mark_read_respect_filter_term(configured):
+    """With "Filter this view" active the menu sends filter_term; only the posts it matches are marked."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED_A, allow_invalid_url=True, exist_ok=True)
+        for entry_id in ("games", "other", "applied"):
+            _seed_entry(reader, feed_url=FEED_A, entry_id=entry_id)
+    main.feed_tag_service.record_entry_tags(FEED_A, [("games", ["Games"]), ("other", ["News"]), ("applied", ["Games"])])
+    main.set_manual_tags_for_entry(FEED_A, "applied", "keepme")
+
+    with TestClient(_feed_app()) as client:
+        r = client.post(
+            "/feeds/mark-read",
+            data={"folder_id": str(UNCAT), "feed_url": FEED_A, "filter_term": "tag:games tagged:!keepme"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "games")).read
+        assert not reader.get_entry((FEED_A, "other")).read
+        assert not reader.get_entry((FEED_A, "applied")).read
+
+    with TestClient(_folder_app()) as client:
+        r = client.post(
+            "/folders/mark-read",
+            data={"folder_id": str(UNCAT), "filter_term": "tag:!games"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "other")).read
+        assert not reader.get_entry((FEED_A, "applied")).read
