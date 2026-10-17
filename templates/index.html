@@ -857,7 +857,7 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="{{ chunk_size }}" data-next-chunk="{{ next_chunk }}" data-view-exhausted="{{ 1 if view_exhausted else 0 }}">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="{{ chunk_size }}" data-next-chunk="{{ next_chunk }}" data-view-exhausted="{{ 1 if view_exhausted else 0 }}" data-view-loaded-at="{{ view_loaded_at }}">
         {% if not posts and not selected_home and not is_chunk_delta_fetch %}
         <div class="empty-state-message muted">No posts match this filter.</div>
         {% endif %}

@@ -11,6 +11,7 @@ everything in the folder/feed regardless of what was on screen. Only
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -252,3 +253,64 @@ def test_feed_and_folder_mark_read_respect_filter_term(configured):
     with main.get_reader() as reader:
         assert reader.get_entry((FEED_A, "other")).read
         assert not reader.get_entry((FEED_A, "applied")).read
+
+
+def _seed_pair_around_a_load(entry_ids: tuple[str, str]) -> float:
+    """Seed one entry, then another a moment later; return a render time that falls between their arrival times."""
+    with main.get_reader() as reader:
+        reader.add_feed(FEED_A, allow_invalid_url=True, exist_ok=True)
+        _seed_entry(reader, feed_url=FEED_A, entry_id=entry_ids[0])
+    time.sleep(0.05)
+    with main.get_reader() as reader:
+        _seed_entry(reader, feed_url=FEED_A, entry_id=entry_ids[1])
+        before = reader.get_entry((FEED_A, entry_ids[0])).added
+        after = reader.get_entry((FEED_A, entry_ids[1])).added
+    assert before is not None and after is not None and before < after
+    return (before.timestamp() + after.timestamp()) / 2
+
+
+def test_mark_read_skips_posts_that_arrived_after_the_list_loaded(configured):
+    loaded_at = _seed_pair_around_a_load(("seen", "arrived-later"))
+
+    with TestClient(_folder_app()) as client:
+        r = client.post(
+            "/folders/mark-read",
+            data={"folder_id": str(UNCAT), "loaded_before": str(loaded_at)},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "seen")).read
+        assert not reader.get_entry((FEED_A, "arrived-later")).read
+
+
+def test_feed_and_older_than_mark_read_skip_late_arrivals_too(configured):
+    loaded_at = _seed_pair_around_a_load(("seen", "arrived-later"))
+
+    with TestClient(_older_than_app()) as client:
+        r = client.post(
+            "/entries/mark-older-than-read",
+            data={"folder_id": str(UNCAT), "max_age_days": "1", "loaded_before": str(loaded_at)},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 1  # both are old by post date; only the one that arrived before the load qualifies
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "seen")).read
+        assert not reader.get_entry((FEED_A, "arrived-later")).read
+
+    with TestClient(_feed_app()) as client:
+        r = client.post(
+            "/feeds/mark-read",
+            data={"folder_id": str(UNCAT), "feed_url": FEED_A, "loaded_before": str(loaded_at)},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 0
+    with main.get_reader() as reader:
+        assert not reader.get_entry((FEED_A, "arrived-later")).read
+
+
+def test_non_finite_loaded_before_is_ignored(configured):
+    _seed_pair_around_a_load(("a", "b"))
+    with TestClient(_folder_app()) as client:
+        r = client.post("/folders/mark-read", data={"folder_id": str(UNCAT), "loaded_before": "nan"}, headers=_ASYNC_HEADER)
+    assert r.status_code == 200 and r.json()["marked"] == 2
