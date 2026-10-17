@@ -834,7 +834,7 @@
             type="search"
             placeholder="Filter this view…"
             aria-label="Filter the posts in this view by title, link, or feed"
-            title="Also matches video duration, e.g. &lt;2:00, &gt;=1h, &lt;90s, =1-2 (range), =0 (no duration) -- posts with no duration are excluded otherwise"
+            title="Words must all match (title, link, feed); &quot;a phrase&quot; in quotes, !word to exclude. tag:games = has that chip, tag:!games = doesn't, tag:gam* = wildcard; tagged: does the same for tags you applied. Also matches video duration, e.g. &lt;2:00, &gt;=1h, &lt;90s, =1-2 (range), =0 (no duration) -- posts with no duration are excluded otherwise"
             autocomplete="off"
           />
           <span id="posts-filter-count" class="posts-filter-count" hidden></span>
@@ -857,7 +857,7 @@
         </div>
       </div>
       {% endif %}
-      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="{{ chunk_size }}" data-next-chunk="{{ next_chunk }}">
+      <div class="posts {% if not posts and not selected_home and not is_chunk_delta_fetch %}posts-empty{% endif %}" data-chunk-size="{{ chunk_size }}" data-next-chunk="{{ next_chunk }}" data-view-exhausted="{{ 1 if view_exhausted else 0 }}">
         {% if not posts and not selected_home and not is_chunk_delta_fetch %}
         <div class="empty-state-message muted">No posts match this filter.</div>
         {% endif %}
@@ -883,6 +883,8 @@
              way to re-fetch its content. 14,695 items on the live library. #}
           data-post-kept="{{ 1 if post.kept else 0 }}"
           data-post-has-tags="{{ 1 if post.has_tags else 0 }}"
+          data-post-chip-tags="{{ (post.chip_tags or [])|join('|') }}"
+          data-post-applied-tags="{{ (post.applied_tags or [])|join('|') }}"
           data-post-captured="{{ 1 if post.captured else 0 }}"
           data-post-link="{{ post.link or '' }}"
           data-post-title="{{ post.title or '' }}"
@@ -920,7 +922,8 @@
             {# data-direct: if /thumb fails (e.g. the image host IP-blocks our server
                but serves the browser's own IP fine), fall back to the direct URL so
                the thumbnail still loads. CSS object-fit:cover sizes the un-resized image. #}
-            <img class="post-thumbnail-image" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}{% if post.fill_zoom and post.fill_zoom != 1.0 and post.thumb_crop != 'smart' and post.thumb_crop != 'contain' %}&fz={{ post.fill_zoom }}{% endif %}" alt=""
+            {# lazy: rows hidden by chunking or "Filter this view" are display:none and never intersect, so their thumbnails are not fetched (and resized server-side) until shown. #}
+            <img class="post-thumbnail-image" loading="lazy" src="/thumb?url={{ post.thumbnail_url | urlencode }}&crop={{ post.thumb_crop or 'cover' }}{% if post.thumb_crop == 'smart' and post.smart_min_scale %}&ms={{ post.smart_min_scale }}{% endif %}{% if post.fill_zoom and post.fill_zoom != 1.0 and post.thumb_crop != 'smart' and post.thumb_crop != 'contain' %}&fz={{ post.fill_zoom }}{% endif %}" alt=""
               data-direct="{{ post.thumbnail_url }}" onerror="thumbImgFallback(this)" />
             {% endif %}
           </div>

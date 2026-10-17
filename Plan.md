@@ -501,3 +501,8 @@ Related, same area, both predating the gg.deals work: a FlareSolverr *outage* (e
 ### Valnet gallery duplicates on sibling sites
 `HowToGeekPlugin` strips the duplicate carousel lists on howtogeek.com only. XDA, MakeUseOf, Screen Rant and other Valnet sites probably
 ship the same `.valnet-gallery` markup; verify one article per site before adding hosts.
+
+### "Filter this view" follow-ups
+- Filtered pages still resolve and enrich the whole 2,000-row window per request (~2s); filtering the light records before enrichment would make each page cheap.
+- `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
+- Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.

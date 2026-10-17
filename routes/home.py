@@ -514,6 +514,8 @@ def home(
     force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    chunk_size: int | None = None,
+    filter_term: str | None = None,
     subscribe: str | None = None,
     subscribe_to: str | None = None,
     full: int | None = None,
@@ -578,6 +580,8 @@ def home(
             force_url=force_url,
             chunk=chunk,
             chunk_delta=chunk_delta,
+            chunk_size=chunk_size,
+            filter_term=filter_term,
             subscribe=subscribe or subscribe_to,
             kept=kept,
         )

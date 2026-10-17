@@ -25,6 +25,27 @@ name, link, authors, summary. **Filter this view** narrows *what is already in
 front of you*, instantly, matching only title/link/feed name, and is transient:
 a pane swap comes back empty by design.
 
+**Terms.** Every word must match (any order, substring of title/link/feed); `"a phrase"` in quotes must match contiguously, and
+`!word` / `!"a phrase"` excludes. A bare `tag:` or `!` while typing is skipped so the list doesn't blank mid-keystroke.
+
+**Tag terms.** `tag:games` keeps posts whose suggestion chips include it, `tag:!games` those that don't, and `tagged:` does the same
+against tags the user applied. `*` is a wildcard (`tag:gam*`; not stemming, so `game*` does not match `gaming`), matched by a linear glob
+and never a regex: anyone can create a 32-character tag, and a `.*`-joined regex backtracks for seconds on a dozen stars. Chips are the
+publisher's `entry_feed_tags` minus per-feed and global dismissals; tags pinned in Feed Properties are deliberately not read, so they
+count only if the publisher ships them too. List rows carry both sets (`data-post-chip-tags`, `data-post-applied-tags`), and the parser
+exists twice (`services/view_filter.py`, `parseFilterTerm` in app.js) so the on-screen set and the server-resolved set agree.
+
+Pressing Enter in the box also asks the server for matches further down the view, a page at a time as you scroll (typing alone only
+narrows what is on screen: a request per keystroke piled up on the server). `filter_term` + `chunk_size` on the home route: `chunk` is a
+position in the *unfiltered* list to scan on from, `chunk_size` is how many matches to return, `data-next-chunk` of the response is where
+to resume and `data-view-exhausted` says the scan reached the end of the 2,000-row ceiling. Those rows are tagged `post-item-from-filter`
+and dropped when the term changes or clears, and the unfiltered `data-next-chunk` is never touched, so scrolling resumes where it was;
+keeping them would leave rows out of date order beside the unfiltered continuation. A reply without the list, or without progress, ends
+the paging instead of retrying.
+
+Mark as read follows the filter too: the menu forms carry `filter_term` (added when the dropdown opens, first item relabeled "Current
+view") and `_mark_entries_as_read_for_view` takes the same predicate as `post_filter`.
+
 **The filter owns its own class.** `post-item-filtered`, never
 `post-item-hidden` — the latter belongs to the scroll-chunking reveal, and "move
 all shown" keys off it. One shared class turns a filtered bulk move into a

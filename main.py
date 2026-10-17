@@ -9405,6 +9405,41 @@ def candidate_attachment_links_in_html(content_html: str | None, base_url: str) 
 FEED_TAGS_SUPPRESS_ALL = "*"
 
 
+def _chip_tags_for_rows(keys: list[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
+    """Normalized publisher tags per row, as the entry pane would show them as chips.
+
+    Same dismissal rules as ``get_feed_tag_suggestions`` (per-feed, global, "*" for all), batched for a list. Tags a feed
+    pins in Feed Properties are not read at all, so they only count when the publisher also ships them.
+    """
+    raw = feed_tag_service.get_tags_for_entries(keys)
+    if not raw:
+        return {}
+    global_dismissed = {n for d in feed_tag_service.global_suppressed_tags() if (n := normalize_tag_value(d))}
+    dismissed_by_feed: dict[str, set[str] | None] = {}
+    out: dict[tuple[str, str], list[str]] = {}
+    for key, tags in raw.items():
+        feed_url = key[0]
+        if feed_url not in dismissed_by_feed:
+            dismissed = feed_tag_service.suppressed_tags(feed_url)
+            dismissed_by_feed[feed_url] = (
+                None
+                if any((d or "").strip() == FEED_TAGS_SUPPRESS_ALL for d in dismissed)
+                else {n for d in dismissed if (n := normalize_tag_value(d))}
+            )
+        per_feed = dismissed_by_feed[feed_url]
+        if per_feed is None:
+            continue
+        shown: list[str] = []
+        for tag in tags:
+            norm = normalize_tag_value(tag)
+            if norm and norm not in per_feed and norm not in global_dismissed and norm not in shown:
+                shown.append(norm)
+        shown = shown[:MAX_FEED_TAG_SUGGESTIONS]  # dismiss first, then cap -- same order as get_feed_tag_suggestions
+        if shown:
+            out[key] = shown
+    return out
+
+
 def get_feed_tag_suggestions(feed_url: str, entry_id: str) -> list[str]:
     """Feed-provided tags captured at ingest (entry_feed_tags meta table).
 
@@ -14492,7 +14527,7 @@ def _list_entries_for_feeds_fetch(
     # filter is active, so a kept flag derived from it read empty on ordinary rows
     # — which is why re-fetch appeared in the entry pane but not from the post
     # list, and only once a post had been starred.
-    _visible_tagged: set[tuple[str, str]] = set()
+    _visible_manual: dict[tuple[str, str], list[str]] = {}
     if light_records:
         try:
             _keys = [(str(r["feed_url"]), str(r["id"])) for r in light_records]
@@ -14506,14 +14541,17 @@ def _list_entries_for_feeds_fetch(
                     _chunk = _keys[_i : _i + 400]
                     _ph = ",".join("(?,?)" for _ in _chunk)
                     _flat = [v for k in _chunk for v in k]
-                    for _f, _e in _tdb.execute(
-                        f"SELECT DISTINCT feed, id FROM entry_tags"  # nosemgrep: placeholders only
+                    for _f, _e, _k in _tdb.execute(
+                        f"SELECT DISTINCT feed, id, key FROM entry_tags"  # nosemgrep: placeholders only
                         f" WHERE (feed, id) IN ({_ph}) AND key LIKE ?",
                         _flat + [f"{MANUAL_TAG_KEY_PREFIX}%"],
                     ):
-                        _visible_tagged.add((str(_f), str(_e)))
+                        _visible_manual.setdefault((str(_f), str(_e)), []).append(str(_k)[len(MANUAL_TAG_KEY_PREFIX) :].strip().lower())
         except Exception:  # noqa: BLE001 — a missing flag only hides a menu item
             LOGGER.warning("visible-tag probe failed", exc_info=True)
+    _visible_tagged: set[tuple[str, str]] = set(_visible_manual)
+    # Chips (publisher tags as shown, not pinned-only ones) for "Filter this view"'s tag: syntax; applied tags feed tagged:.
+    _visible_chips = _chip_tags_for_rows([(str(r["feed_url"]), str(r["id"])) for r in light_records]) if light_records else {}
 
     # _all_display_prefs was already loaded above, before the filter loop.
     # Which feeds have a pinned thumbnail copy, read once. This used to be a has_pinned_feed_thumbnail()
@@ -14641,6 +14679,8 @@ def _list_entries_for_feeds_fetch(
                 # "kept" below, which also counts a star) — drives the postlist
                 # tag icon's filled/outline state.
                 "has_tags": (feed_url_str, _entry_id) in _visible_tagged,
+                "chip_tags": _visible_chips.get((feed_url_str, _entry_id), []),
+                "applied_tags": sorted(set(_visible_manual.get((feed_url_str, _entry_id), []))),
                 # Starred OR tagged. Drives the re-fetch menu, which must not key
                 # on manual_tags (populated only under a tag filter) nor on the
                 # star alone — tag-as-keep made a tag a keep signal everywhere.
@@ -18350,6 +18390,7 @@ def _mark_entries_as_read_for_view(
     star_only: str | int | bool | None = None,
     tag: str | None = None,
     older_than_cutoff: datetime | None = None,
+    post_filter: Callable[[dict], bool] | None = None,
 ) -> tuple[int, str | None]:
     """Mark as read only the entries the current filtered view actually shows —
     tag, star_only, read_filter, and every hide_* display preference
@@ -18370,6 +18411,9 @@ def _mark_entries_as_read_for_view(
     date (published/updated/added, via entry_effective_date) the list itself
     displays and greys on to be before it — the "Older than N days" action's
     own scoping, layered on top of the view filter rather than replacing it.
+
+    post_filter is the posts list's "Filter this view" predicate; it needs enriched rows (chip tags, titles), so the
+    cheap enrich=False pass is used only without it.
     """
     if not feed_urls:
         return 0, None
@@ -18390,8 +18434,9 @@ def _mark_entries_as_read_for_view(
             read_filter=read_filter or "all",
             star_only=normalize_star_only(star_only),
             selected_tag=tag,
-            enrich=False,
+            enrich=post_filter is not None,
         )
+        if post_filter is None or post_filter(post)
     }
     if not allowed_ids:
         return 0, None
@@ -22016,6 +22061,8 @@ def _home_inner(
     force_url: str | None = None,
     chunk: int | None = None,
     chunk_delta: str | None = None,
+    chunk_size: int | None = None,
+    filter_term: str | None = None,
     subscribe: str | None = None,
     kept: str | None = None,
 ):
@@ -22408,12 +22455,16 @@ def _home_inner(
     # (e.g. single-pane mode's initial small fetch) keeps the old page-count
     # meaning; that request has no "already have" state to offset from.
     offset = None
+    # "Filter this view" pages through the view's matches: chunk is the position in the UNFILTERED list to scan from, filter_term
+    # narrows it before slicing, and chunk_size is how many matches to return (not how many rows to scan).
+    filtering = bool((filter_term or "").strip())
+    delta_size = min(max(chunk_size, 1), 500) if chunk_size else CHUNK_SIZE
     try:
         if chunk and int(chunk) > 0:
             requested_chunk = int(chunk)
             if chunk_delta:
                 offset = requested_chunk
-                limit = min(offset + CHUNK_SIZE, 2000)
+                limit = 2000 if filtering else min(offset + delta_size, 2000)
             else:
                 limit = min(requested_chunk * CHUNK_SIZE, 2000)
         else:
@@ -22479,7 +22530,8 @@ def _home_inner(
         # and filing something is not a to-do.
         kept_scope=("starred" if inbox_view else "kept"),
         # The initial load's client reveals ~20 rows at a time and pages by offset, so a page a few rows short is fine.
-        min_fill=0.9 if offset is None else 1.0,
+        # A filtered scan wants the 2,000-row window as it is; the retry would double it (4,000 rows) to backfill hidden rows.
+        min_fill=0.0 if filtering else (0.9 if offset is None else 1.0),
     )
 
     # Surface orphan archive entries (saved articles whose feed has been
@@ -22565,6 +22617,7 @@ def _home_inner(
     # only ever appends past what a smaller one already returned, never
     # reorders it.
     next_chunk = len(posts)
+    view_exhausted = False
     # Refresh-contention investigation (Plan.md Tier 1): a 2026-09-03 live capture
     # (folder_id=9, 12961ms total) accounted for only ~7s across meta/tag/gap/posts
     # blocks -- ~6s was unattributed, after posts_block and before the response
@@ -22607,7 +22660,24 @@ def _home_inner(
     # count, not a page-number multiple -- see next_chunk's comment above.
     try:
         if chunk and chunk_delta and offset is not None:
-            posts = posts[offset : offset + CHUNK_SIZE]
+            if filtering:
+                from routes.entries import _view_filter_predicate  # lazy: routes.entries imports from main
+
+                matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
+                scanned = posts[offset:]
+                picked: list[dict] = []
+                consumed = 0
+                for post in scanned:
+                    consumed += 1
+                    if matches_filter(post):
+                        picked.append(post)
+                        if len(picked) >= delta_size:
+                            break
+                view_exhausted = consumed >= len(scanned)
+                next_chunk = offset + consumed
+                posts = picked
+            else:
+                posts = posts[offset : offset + delta_size]
     except Exception:
         # On any error, fall back to the cumulative behavior.
         pass
@@ -22749,6 +22819,7 @@ def _home_inner(
         # not "nothing matches" — the empty-state message must only render on
         # a full/initial fetch, or it would get appended below real posts.
         "is_chunk_delta_fetch": bool(chunk and chunk_delta),
+        "view_exhausted": view_exhausted,
         "selected_entry": selected_entry,
         "message": message,
         "no_rss_url": no_rss_url,

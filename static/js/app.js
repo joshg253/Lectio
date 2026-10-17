@@ -10010,6 +10010,31 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       submitMarkReadAsync(form, feedUrlFilter || null, maxAgeDays);
     }, true);
 
+    // With "Filter this view" active, Mark as read acts on the filtered view only: on open, send the term with every
+    // form in the menu and relabel the scope item (feed/folder -> current view). The menu is closed while filtering.
+    document.addEventListener('toggle', (event) => {
+      const menu = event.target;
+      if (!(menu instanceof HTMLDetailsElement) || !menu.classList.contains('mark-read-menu') || !menu.open) return;
+      const term = (document.getElementById('posts-filter-input')?.value || '').trim();
+      menu.querySelectorAll('.mark-read-action-form').forEach((form, index) => {
+        let input = form.querySelector('input[name="filter_term"]');
+        if (term && !input) {
+          input = document.createElement('input');
+          input.type = 'hidden';
+          input.name = 'filter_term';
+          form.appendChild(input);
+        }
+        if (input) { if (term) input.value = term; else input.remove(); }
+        if (index !== 0) return;
+        const label = form.querySelector('.mark-read-action span:last-child');
+        const icon = form.querySelector('.mark-read-action-icon');
+        if (!label || !icon) return;
+        if (!label.dataset.scopeLabel) { label.dataset.scopeLabel = label.textContent; icon.dataset.scopeIcon = icon.textContent; }
+        label.textContent = term ? 'Current view' : label.dataset.scopeLabel;
+        icon.textContent = term ? 'filter_alt' : icon.dataset.scopeIcon;
+      });
+    }, true);
+
     postMarkReadButton?.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -10224,6 +10249,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         const itemFeedUrl = item.getAttribute('data-post-feed-url') || '';
         if (feedUrlFilter instanceof Set ? !feedUrlFilter.has(itemFeedUrl) : (feedUrlFilter && itemFeedUrl !== feedUrlFilter)) continue;
         if (item.getAttribute('data-post-read') === '1') continue;
+        if (window.postsFilterActive && item.classList.contains('post-item-filtered')) continue;
         if (cutoff !== null) {
           // Mirror the server logic: skip entries with no date, skip entries newer than cutoff.
           // Timestamps live on the child <time> element, not on post-item itself.
@@ -17983,13 +18009,16 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       // The filter box re-runs the window after changing which rows are matches.
       window.applyPostsChunkWindow = () => applyVisibleWindow();
 
+      // Scroll or an unfilled viewport asks for more; with a filter active that means the next page of MATCHES (see fetchFilterMatches).
+      window.ensurePostsViewportFilled = () => ensureViewportFilled();
+
       function revealNextChunk() {
         // A narrow filter leaves the list too short to fill the viewport, which
         // would otherwise make this chase server chunk after server chunk. The
         // filter is a local narrowing of what is already here, and the bulk
         // action it feeds resolves server-side, so the DOM does not need to be
         // complete for it to be correct.
-        if (window.postsFilterActive) return;
+        if (window.postsFilterActive) return window.fetchFilterMatches?.();
         const items = getPostItems();
         // An empty list has no further chunks: chunk 1 is served pre-filtered,
         // so zero items means either a scope-tab landing (no posts by design —
@@ -18194,7 +18223,62 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       return { op, seconds };
     }
 
-    function postsFilterMatches(item, term, isYtFolder) {
+    // Mirrors services/view_filter.py: tag:/tagged: clauses (! negates, * wildcard), plain words, "quoted phrases" and !exclusions.
+    function _filterTokens(term) {
+      const tokens = [];
+      let current = '';
+      let inQuote = false;
+      for (const ch of term) {
+        if (ch === '"') {
+          inQuote = !inQuote;
+        } else if (/\s/.test(ch) && !inQuote) {
+          if (current) { tokens.push(current); current = ''; }
+          continue;
+        }
+        current += ch;
+      }
+      if (current) tokens.push(current);
+      return tokens;
+    }
+
+    // Linear whole-tag glob (a regex joined with .* backtracks badly on many stars); mirrors services/view_filter.py glob_match.
+    function _globMatch(parts, tag) {
+      if (parts.length === 1) return tag === parts[0];
+      const first = parts[0];
+      const last = parts[parts.length - 1];
+      if (tag.length < first.length + last.length || !tag.startsWith(first) || !tag.endsWith(last)) return false;
+      let pos = first.length;
+      const end = tag.length - last.length;
+      for (const mid of parts.slice(1, -1)) {
+        const found = tag.slice(0, end).indexOf(mid, pos);
+        if (found < 0) return false;
+        pos = found + mid.length;
+      }
+      return true;
+    }
+
+    function parseFilterTerm(term) {
+      const clauses = [];
+      const include = [];
+      const exclude = [];
+      for (const raw of _filterTokens(term.toLowerCase())) {
+        const m = raw.match(/^(tag|tagged):(!?)(.*)$/i);
+        if (m) {
+          const value = m[3].replace(/"/g, '');
+          if (value.trim()) {
+            const norm = value.trim().replace(/^#+/, '').replace(/\s+/g, '-');
+            clauses.push({ applied: m[1].toLowerCase() === 'tagged', negate: !!m[2], parts: norm.split('*') });
+          }
+          continue;
+        }
+        const negate = raw.startsWith('!');
+        const text = (negate ? raw.slice(1) : raw).replace(/"/g, '');
+        if (text) (negate ? exclude : include).push(text);
+      }
+      return { clauses, include, exclude };
+    }
+
+    function postsFilterMatches(item, term, isYtFolder, parsed) {
       if (!term) return true;
       const durationFilter = isYtFolder ? _parseDurationFilter(term) : null;
       if (durationFilter) {
@@ -18211,13 +18295,100 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           default: return false;
         }
       }
+      const f = parsed || parseFilterTerm(term);
+      for (const c of f.clauses) {
+        const raw = item.getAttribute(c.applied ? 'data-post-applied-tags' : 'data-post-chip-tags') || '';
+        const found = raw.split('|').some((t) => t && _globMatch(c.parts, t));
+        if (found === c.negate) return false;
+      }
+      if (!f.include.length && !f.exclude.length) return true;
       const title = item.getAttribute('data-post-title') || '';
       const link = item.getAttribute('data-post-link') || '';
       // The feed name is already text in the row; re-emitting it as an
       // attribute would pay page weight for something the DOM already carries.
       const feed = item.querySelector('.post-feed-link')?.textContent || '';
-      return `${title}\n${link}\n${feed}`.toLowerCase().includes(term);
+      const hay = `${title}\n${link}\n${feed}`.toLowerCase();
+      return f.include.every((t) => hay.includes(t)) && !f.exclude.some((t) => hay.includes(t));
     }
+
+    // Matches further down the view than the page holds come from the server a page at a time (home route: filter_term + chunk_size,
+    // scanning on from `cursor`, a position in the UNFILTERED list). They are tagged so a changed or cleared term can drop them, and
+    // data-next-chunk is left alone so unfiltered scrolling resumes exactly where it was.
+    function _filterFetchState(list) {
+      if (!list._filterFetch) list._filterFetch = { term: '', cursor: null, done: false, loading: false, submitted: false, token: 0 };
+      return list._filterFetch;
+    }
+
+    window.fetchFilterMatches = async () => {
+      const list = document.querySelector('.posts');
+      const term = postsFilterTerm();
+      if (!list || !term) return;
+      const state = _filterFetchState(list);
+      if (state.term !== term || !state.submitted || state.loading || state.done) return;
+      const token = state.token;
+      state.loading = true;
+      state.abort = new AbortController();
+      applyPostsFilter();
+      try {
+        const url = new URL(normalizeScopeUrl(activeScopeUrl || window.location.href), window.location.origin);
+        const cursor = state.cursor ?? Number.parseInt(list.getAttribute('data-next-chunk') || '', 10);
+        if (!Number.isFinite(cursor) || cursor <= 0) {
+          state.done = true;
+          return;
+        }
+        url.searchParams.set('chunk', String(cursor));
+        url.searchParams.set('chunk_delta', '1');
+        url.searchParams.set('chunk_size', '100');
+        url.searchParams.set('filter_term', term);
+        for (const [name, selector] of [
+          ['read_filter', '.posts-search-form input[name="read_filter"]'],
+          ['resume_read_filter', '.posts-search-form input[name="resume_read_filter"]'],
+          ['star_only', '.posts-search-form input[name="star_only"]'],
+          ['q', '#topbar-search-input'],
+        ]) {
+          const value = document.querySelector(selector)?.value?.trim();
+          if (!url.searchParams.has(name) && value) url.searchParams.set(name, value);
+        }
+        const response = await fetch(url, {
+          headers: { 'X-Requested-With': 'lectio-scope-panes' },
+          credentials: 'same-origin',
+          signal: state.abort.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if (token !== state.token) return; // the term changed while this was in flight
+        const page = doc.querySelector('.posts');
+        const rowKey = (n) => `${n.getAttribute('data-post-feed-url')}|${n.getAttribute('data-post-entry-id')}`;
+        const have = new Set(Array.from(list.querySelectorAll('.post-item')).map(rowKey));
+        const sentinel = list.querySelector('#posts-chunk-sentinel');
+        for (const row of Array.from(page?.querySelectorAll('.post-item') || [])) {
+          if (have.has(rowKey(row))) continue;
+          row.classList.add('post-item-from-filter');
+          if (sentinel) list.insertBefore(row, sentinel); else list.appendChild(row);
+        }
+        // A reply without the list (a login page after the session expired, say) or without progress must end the paging, not retry.
+        const nextCursor = Number.parseInt(page?.getAttribute('data-next-chunk') || '', 10);
+        if (!page || !(nextCursor > cursor)) throw new Error('no progress');
+        state.cursor = nextCursor;
+        state.done = page.getAttribute('data-view-exhausted') === '1';
+        const pane = list.closest('.pane-posts') || list;
+        applyLocalTimestamps(pane);
+        applyRelativeTimestamps(pane);
+        applyAbsoluteTimestamps(pane);
+        measureAndSetTileHeight();
+        bindPostListInteractions();
+      } catch (err) {
+        if (err?.name === 'AbortError') return; // the term changed; the new term's fetch takes over
+        state.done = true; // don't retry in a loop; typing a new term starts fresh
+        showToastMessage('Could not load more matches.');
+      } finally {
+        if (token === state.token) {
+          state.loading = false;
+          applyPostsFilter();
+          window.ensurePostsViewportFilled?.();
+        }
+      }
+    };
 
     function applyPostsFilter() {
       const list = document.querySelector('.posts');
@@ -18226,12 +18397,29 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       if (!list) return;
       const term = postsFilterTerm();
       window.postsFilterActive = !!term;
+      const filterState = _filterFetchState(list);
+      if (filterState.term !== term) {
+        // A new (or cleared) term starts over: rows pulled in for the old one would sit out of order beside the new matches.
+        filterState.token += 1;
+        filterState.term = term;
+        filterState.cursor = null;
+        filterState.done = false;
+        filterState.loading = false;
+        list.querySelectorAll('.post-item-from-filter').forEach((el) => {
+          setPostSelected(el, false);
+          el.remove();
+        });
+        // The page holds only the first rows of the view; Enter asks the server for the matches further down (a page at a time).
+        filterState.abort?.abort();
+        filterState.submitted = false; // matches further down are fetched only once the term is submitted with Enter
+      }
       const isYtFolder = _isYouTubeFolderActive();
+      const parsedFilter = term ? parseFilterTerm(term) : null;
 
       let shown = 0;
       const items = Array.from(list.querySelectorAll('.post-item'));
       for (const item of items) {
-        const match = postsFilterMatches(item, term, isYtFolder);
+        const match = postsFilterMatches(item, term, isYtFolder, parsedFilter);
         item.classList.toggle('post-item-filtered', !match);
         if (match) shown += 1;
       }
@@ -18245,7 +18433,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         // Deliberately "of N loaded", not "of N": the browser holds a page of
         // the view, not the view. The move action states the true server-side
         // total separately rather than pretending this number is it.
-        countEl.textContent = term ? `${shown} of ${items.length} loaded` : '';
+        countEl.textContent = term ? `${shown} of ${items.length} loaded${filterState.loading ? ' · loading…' : (!filterState.submitted && !filterState.done ? ' · Enter for more' : '')}` : '';
       }
     }
 
@@ -18265,6 +18453,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       // Escape clears rather than leaving a narrowed list behind an empty-looking
       // box — the same reflex the search box's clear button serves.
       box.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && box.value.trim()) {
+          event.preventDefault();
+          if (timer) clearTimeout(timer);
+          applyPostsFilter();
+          const list = document.querySelector('.posts');
+          if (list) _filterFetchState(list).submitted = true;
+          window.fetchFilterMatches?.();
+          return;
+        }
         if (event.key === 'Escape' && box.value) {
           event.stopPropagation();
           box.value = '';
