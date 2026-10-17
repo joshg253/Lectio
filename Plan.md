@@ -512,3 +512,7 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 
 ### Auto add-to-playlist: hidden unpremiered videos
 A hidden unpremiered video is skipped for good (the watermark moves past it); revisit it after it airs if wanted. The duration filter's "retried once cached" has the same watermark problem for a video whose duration isn't cached on the first pass.
+
+### Mergeable Mark as Read rules: plain text to regex
+Two Mark as Read rules on Deals could be one if the plain-text rule became regex, but combining never behaves quite the same without word boundaries:
+`\b(?:Kanye\s+West|Micro\s?Center|Lowe['’]s|Chromebooks?|Post\s+Malone)\b` plus a plain list (`Taylor Swift, My Chemical Romance`). Offer the merge as a suggested regex with boundaries added, not a blind join.
