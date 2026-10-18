@@ -21,8 +21,11 @@ Empty.
 
 **Do next** — small, concrete, decided.
 
-### Automation pass returns early without mark-read/dedup/email/tag-filter rules (a bug: those rules never fire)
-`_run_automation_after_refresh` returns when no enabled `mark_as_read`, `deduplicate`, `email_article` or `tag_filter` rule exists, before the webhook, Instapaper, save-article, Quire and YouTube playlist dispatchers run. A user whose only rules are those types never gets them fired (repro: only a playlist rule, then the full pass adds nothing). Fix by skipping just the rule loop, then check what users with only those rule types would suddenly start firing.
+### Webhook, Quire and Instapaper rules have no per-entry duplicate guard
+These dispatchers pick entries "added in the last 15 minutes" with no claim table, so two automation passes for the same feed inside that window (scheduler tick plus a manual or WebSub refresh) fire a matching entry twice; Quire would create two tasks. Save-article and YouTube playlist rules are already idempotent. Fix with a per-rule, per-entry claim row like `youtube_playlist_added`.
+
+### YouTube playlist rules: watermark may skip entries (Sourcery, 2026-10-17; verify first)
+`_run_youtube_playlist_rules_after_refresh` advances one user-wide last-check watermark per pass, but a pass may cover only some of a rule's feeds (partial refresh) or stop at the 25-per-run cap. Entries older than the next cutoff are then never added. Check whether that happens in practice, then track the watermark per feed or advance it only through fully processed entries.
 
 ### YouTube descriptions render hashtag lines as headings (2026-10-14)
 A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;

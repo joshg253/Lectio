@@ -265,7 +265,7 @@ another rule's drops. `++` feed rules are never flagged.
   YouTube video can be embedded in any feed's article and an entry can carry several.
   `_run_youtube_playlist_rules_after_refresh` runs last in `_run_automation_after_refresh`
   (after mark_as_read so its own "mark read after add" doesn't fight an earlier rule):
-  for each new (within the 15-min cutoff) matching entry it extracts **all** video ids
+  for each new (since the persisted last-check watermark) matching entry it extracts **all** video ids
   from the entry link + content (`youtube_embeds.video_ids_in_text`, which also matches
   `/shorts/`), inserts each via `playlistItems.insert`, and optionally marks the post
   read. The rule's keyword is an **optional filter** — empty = every new video in
