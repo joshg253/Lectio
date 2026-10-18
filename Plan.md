@@ -10,30 +10,64 @@ decision, real features not blocking anything today, and deliberately-deferred b
 Within a tier, related items are clustered under a bold sub-heading. Two watch-lists (CodeQL,
 Parked) sit at the end — nothing there is scheduled, just what to check if a symptom recurs.
 
-Tiers 1-3 are empty (2026-09-28). Everything left needs a product decision (Tier 4's first list), is undecided (`/api/*` split),
-or is a deliberately unstarted project (shared rendering core, Tier 5).
+Tiers 1 and 3 are empty (2026-10-17). Tier 2 is small, decided work and watch items; Tier 4 is real features, highest value first;
+Tier 5 is deliberately unstarted projects (shared rendering core, OIDC, shared-content tenancy).
 
 ## Tier 1 — actively impeding unread-clearing
 
-### README cleanup — after the FakeFeedz/YouTube work lands (2026-10-16)
-
-Docs-only, straight to `main` in its own commit, separate from code changes.
-
-1. Move the long Automation bullet (auto-read age, page-tag capture, teaser fetch) and the IsThereAnyDeal bullet to
-   `docs/wiki/Features-details.md`; leave one or two sentences in the README.
-2. Trim "Development": keep the lint hook, `make test` and `make rebuild`; move the CI, dependency audit, CodeQL, scratch-cleanup and
-   backups bullets to `docs/development.md` with a one-line link.
-3. Fix stale facts: the "Technical overview" table and "SQLite × 3" still describe single `lectio.db`/`lectio_meta.sqlite` files; point
-   at `docs/architecture/tenancy.md` for the per-user layout.
-4. The banner says setup docs are forthcoming, but `docs/deployment.md` exists: link it.
+Empty.
 
 ## Tier 2 — small, fast, independent wins
+
+**Do next** — small, concrete, decided.
+
+### Automation pass returns early without mark-read/dedup/email/tag-filter rules (a bug: those rules never fire)
+`_run_automation_after_refresh` returns when no enabled `mark_as_read`, `deduplicate`, `email_article` or `tag_filter` rule exists, before the webhook, Instapaper, save-article, Quire and YouTube playlist dispatchers run. A user whose only rules are those types never gets them fired (repro: only a playlist rule, then the full pass adds nothing). Fix by skipping just the rule loop, then check what users with only those rule types would suddenly start firing.
+
+### YouTube descriptions render hashtag lines as headings (2026-10-14)
+A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
+the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
+
+### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
+Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
+extraction is empty, so a feed that drops all of an entry's tags never clears the stored `source='feed'` rows; (2) `entry_feed_tags` is
+keyed `(feed_url, entry_id, tag)`, so a feed tag equal to a page tag is ignored on insert and vanishes if the page row is later removed;
+(3) a failed meta-DB write during parse is logged and not retried, and a 304 never re-parses.
+
+### Move-all-shown-to-feed may share the Select All gap (2026-10-16; plausible, not reproduced)
+
+Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
+to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
+
+### Archive fetch-status follow-ups (decided 2026-10-17)
+
+`archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`
+(2026-09-25), with reachable-now rows left NULL as recapture candidates. Decided:
+1. A "Capture failed" filter chip in Saved (no per-row badge), the way Disabled works in Automations.
+2. Transient kinds (`timeout`/`connect`/`http_5xx`) retry in a weekly pass capped at about 20 rows (good web citizen); after 3 tries a row
+   stays on the filter for a manual call.
+3. Recapture the 20 reachable-now rows once with `scripts/recapture_archived_entries.py`, dry-run first and the list shown, since it rewrites the capture.
+
+### Tag-filter chip click under a shared rule: keep forking, say so (decided 2026-10-17)
+
+Clicking a post-header chip lit by a folder or global rule keeps creating a feed-level override (editing the shared rule from one feed could
+change dozens of feeds unnoticed). Add a tooltip making the fork explicit ("Overrides the folder rule for this feed").
+
+### Refresh the screenshots (last 2026-08-09)
+
+`uv run python scripts/refresh_screenshots.py` is hermetic (synthetic demo data). Since August the UI gained tag-chip filtering in the filter bar,
+the Disabled chip in Automations, disabled-feed reasons, the grouped Utilities tab and regrouped right-click menus. Add one filter-bar shot and
+a right-click menu shot. Needs `uv run playwright install chromium` (the venv's Playwright wants a newer Chromium than the cached one).
+
+**Dated** — act on or after the date.
 
 ### Reddit RSS ends 2026-11-13 (2026-10-04)
 
 Reddit is retiring `.rss` feeds with no replacement for non-mod use, and API access was refused, so Reddit stops being a source. On/after the cutoff, delete the six Reddit feeds in the admin account (r/VinylDeals, r/buildapcsales, r/GameDeals, r/Boardgamedeals, r/LaptopDeals, one user-submitted) through the app's feed-delete path (none are starred or archived), restart, and drop any Reddit mention from README.
 
 Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the forum HTML 403s, only the `/rss/` URL works) and a filtered Slickdeals feed (PC and laptop deals). No replacement for r/GameDeals or r/VinylDeals; vinyl.deals has no feed and its rows are `onclick` handlers, so the page scraper can't read it without a new row mode (skipped).
+
+**Build when it bites** — only if the symptom recurs or the cost is felt.
 
 ### HTTP/2-only feed hosts: 426 Upgrade Required (2026-10-12)
 
@@ -67,15 +101,9 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
 
-### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
-Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
-extraction is empty, so a feed that drops all of an entry's tags never clears the stored `source='feed'` rows; (2) `entry_feed_tags` is
-keyed `(feed_url, entry_id, tag)`, so a feed tag equal to a page tag is ignored on insert and vanishes if the page row is later removed;
-(3) a failed meta-DB write during parse is logged and not retried, and a 304 never re-parses.
+### Dead code: the in-app star-mode tree/JS
 
-### YouTube descriptions render hashtag lines as headings (2026-10-14)
-A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
-the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
+The dormant in-app star-mode tree and JS that the Read Mode hijack bypasses. Safe to delete; check nothing in `tests/` reads those strings first.
 
 ## Tier 3 — sized, no open decision, ready to build
 
@@ -83,39 +111,34 @@ Empty.
 
 ## Tier 4 — real features, not blocking anything today
 
-### Needs a decision from Josh before these can be built
+No decision pending on any of these; each is "build when wanted". Roughly highest value first: FakeFeedz, Combine-when-failing, then the rest.
 
-Everything below is sized or scoped already — each is waiting on one call only Josh can make, not
-on more investigation. Once answered, each drops into Tier 2 or 3.
+### FakeFeedz Enhancements (2026-10-16)
 
-- **YouTube playlist duplicate finder** — a dry-run report of videos that appear more than once in a chosen playlist (list with
-  `part=snippet`, group by `videoId`), then an explicit, nothing-pre-checked delete of the extra copies via `playlistItems.delete`
-  (50 units each, stops on quota). Every add path now checks first, so this only cleans strays that already exist. Open: confirm
-  on a real playlist that list order keeps the earliest copy before any delete runs. Raised 2026-10-16.
-- **Single-post pages: raw/full-page capture quality** — some "feeds" are one standing document (a single tutorial page) saved via a
-  manufactured feed; readability can return a small fraction of the page, or the wrong node. Deferred by Josh 2026-09-24; needs a
-  concrete example page before it can be scoped. (Workflow half superseded: such pages get filed into a related feed by auto-filing.)
-- **Archive fetch-status follow-ups** — `archived_entry.source_fetch_status` exists (2026-09-23) and the pre-column empty archives
-  were backfilled by `scripts/probe_empty_archives.py --write` (2026-09-25; reachable-now rows left NULL as recapture candidates).
-  Still needs a call: (a) where to surface it (Saved filter/badge for failed captures?); (b) whether transient kinds
-  (`timeout`/`connect`/`http_5xx`) auto-retry; (c) whether to recapture the 20 reachable-now rows
-  (`scripts/recapture_archived_entries.py`; it rewrites the capture).
-- **Post-header tag-filter chips: what a click does under a folder/global rule** — since 2026-09-27 the chips show a sign set by an
-  enabled folder/global rule, lit in the accent color (`get_inherited_tag_filter_signs`, display-only). Clicking one still edits
-  (or first creates, disabled) the feed's own rule. Open: should it edit the shared rule instead, or keep forking a feed-level
-  override? Once decided: a lookup-order change to `get_feed_tag_filter_rule` plus one branch in `toggle_feed_tag_filter`.
+Setting up three page feeds took many round trips because the Add Feed dialog only exposes the listing-page selector; `content_selector`
+is a hidden field. In rough value order:
 
-### Gate Sourcery reviews on green CI — undecided
+1. Visible "Post body" selector (accepts `START >> END`) plus a "Preview first post" button showing the extracted body and images.
+2. Richer item preview: per-item date (or "no date found"), the thumbnail that would be used, and a flag on URL-as-title.
+3. Click-to-pick the body region in the existing picker (click the first element, then where it ends) and write the `START >> END`.
+4. Defaults when a post body is set: lead-image strategy "inline" (a page scan takes the site banner).
+5. A "Check feed" step after creating: titles that are URLs, empty bodies, identical thumbnails across entries.
+6. No edit UI for `content_selector` on an existing feed (a direct DB edit today); a "Page Feed" tab in Feed Properties.
 
-Sourcery is a GitHub App, not an Actions job, so `needs:` can't order it after CI; every push spends review budget even when
-CI fails. Workaround: in the Sourcery dashboard, set the Labels allowlist to a never-applied label (disables auto-review),
-then a `workflow_run` job on CI success comments `@sourcery-ai review` via a fine-grained PAT (Sourcery ignores bot
-comments). Unverified: that the allowlist also stops push re-reviews and that the comment still works outside it; test on
-a throwaway PR. Needs Josh: dashboard setting + PAT secret.
+### Similar-feeds Combine refuses when every candidate is failing
 
-### `/api/*` cluster split — undecided
+The similar-feeds utility's Compare → Combine (app.js, "None of these returned valid feed data — nothing to combine") blocks the merge
+when no candidate fetches. Raised 2026-09-28 on a pair differing only by a trailing slash, both 403: Josh had to combine them by
+hand from Feeds. When the URLs differ only trivially (trailing slash, scheme, `www.`), still offer Combine with a survivor picker.
 
-Deferred out of the route split rather than decided: `/api/entry-thumb`, `/api/feed-thumb`,
+### Inline SVG in feed content is mangled at ingest
+
+feedparser mishandles self-closing tags, so any feed shipping inline SVG art renders as a flat color block. Fix: re-parse SVG subtrees as XML at
+ingest. Real bug with a known fix; build when wanted.
+
+### `/api/*` cluster split — do it when next touched (decided 2026-10-17)
+
+Not worth its own change; move a route into its home when something else needs editing it: `/api/entry-thumb`, `/api/feed-thumb`,
 `/api/img`, `/api/favicon` are pure image-proxy concerns (candidate: a small `routes/media.py`);
 `/api/save`, `/api/bookmarklet/save` are external save-capture endpoints, natural fit in
 `routes/saved.py`; `/api/unread-counts` has no obvious owner yet — decide when picked up.
@@ -166,12 +189,6 @@ do that first as the smaller, lower-risk step, and let it validate the shared-st
 extending to images/favicons. Worth a real plan before any of it, same bar as the dedup-combining
 idea below.
 
-### Similar-feeds Combine refuses when every candidate is failing
-
-The similar-feeds utility's Compare → Combine (app.js, "None of these returned valid feed data — nothing to combine") blocks the merge
-when no candidate fetches. Raised 2026-09-28 on a pair differing only by a trailing slash, both 403: Josh had to combine them by
-hand from Feeds. When the URLs differ only trivially (trailing slash, scheme, `www.`), still offer Combine with a survivor picker.
-
 **Dedup subsystem** — biggest single feature idea on the list.
 
 ### Combine cross-feed duplicates instead of marking one read
@@ -190,11 +207,6 @@ startup migration; `dedup_false_matches` should feed the splitter.
 
 Open: whether combining runs as an automation rule, an invoked scan, or at ingest; unread counts
 and the offline outbox both need to treat a group as one item. Worth a real plan before starting.
-
-### Cross-feed duplicate scan tier — still not worth building
-
-Cross-feed dupes (two legit subscriptions carrying the same article) measure at 23 groups
-library-wide — not enough to justify a third `/saved/duplicates` UI section.
 
 ### Saved-articles dupe scan follow-ups (deferred)
 
@@ -263,23 +275,6 @@ publisher-supplied thumbnail) — check what a feed already provides before writ
 fix — a second stored URL + a per-feed "thumbnail source" setting — needs the startup migration;
 worth doing when a fourth feed wants it, not before.
 
-### FakeFeedz Enhancements (2026-10-16)
-
-Setting up three page feeds took many round trips because the Add Feed dialog only exposes the listing-page selector; `content_selector`
-is a hidden field. In rough value order:
-
-1. Visible "Post body" selector (accepts `START >> END`) plus a "Preview first post" button showing the extracted body and images.
-2. Richer item preview: per-item date (or "no date found"), the thumbnail that would be used, and a flag on URL-as-title.
-3. Click-to-pick the body region in the existing picker (click the first element, then where it ends) and write the `START >> END`.
-4. Defaults when a post body is set: lead-image strategy "inline" (a page scan takes the site banner).
-5. A "Check feed" step after creating: titles that are URLs, empty bodies, identical thumbnails across entries.
-6. No edit UI for `content_selector` on an existing feed (a direct DB edit today); a "Page Feed" tab in Feed Properties.
-
-### Move-all-shown-to-feed may share the Select All gap (2026-10-16)
-
-Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
-to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
-
 ### Send-to-destination — remaining candidates
 
 Rule engine + on-star fan-out + shared destination senders are shipped (Instapaper, YouTube
@@ -300,6 +295,14 @@ Queue/playlist across a folder, remember position per episode, Media Session API
 controls), speed presets.
 
 ## Tier 5 — deliberately deferred / big investments
+
+**Waiting on an example**
+
+### Single-post pages: raw/full-page capture quality
+
+Some "feeds" are one standing document (a single tutorial page) saved via a manufactured feed; readability can return a small fraction of the
+page, or the wrong node. Needs a concrete example page before it can be scoped (deferred 2026-09-24). Workflow half superseded: such pages get
+filed into a related feed by auto-filing.
 
 **Architecture**
 
@@ -365,25 +368,10 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
 
 ### Code health (deferred — low value, no user impact)
 
-- **Flaky test:** `test_add_route_accepts_blank_keyword` failed once, unreproduced since — likely
-  a background thread racing the test DB. Not chased.
-- **Dead code:** the dormant in-app star-mode tree/JS the Read Mode hijack bypasses.
-- **`ruff format`'s opt-in `docstring-code-format`** — `ruff format` is enforced (PR #311, gated per touched file); this option
-  is still off. Turning it on would reformat code examples inside docstrings as files get touched. Low value.
-- **Wrap saved-dedup storage access** (Sourcery) — the Saved duplicate scan reads reader's entries
-  table directly; a thin storage-layer wrapper would localize breakage if reader's schema evolves.
-- **Hide-* refresh hygiene → `services/feed_hygiene.py`** — `_is_youtube_short`, `_apply_hide_shorts`, `_apply_hide_paywalled`,
-  `_apply_hide_members_only` stayed in main.py when dedup moved to `services/dedup.py` (2026-09-24): same refresh-pipeline callers,
-  but not dedup. Cosmetic until something else needs to touch them.
-- **`ensure_meta_schema`** (main.py:3626, ~1,332 lines) — long but linear (CREATE + idempotent
-  ALTERs), low churn. A by-area split is cosmetic.
-- **Stack updates: tag-only base image pin** — `python:3.15-slim` and `uv:latest` are floating tags, so a cached base layer can go stale
-  between rebuilds. Either `--pull` in `make rebuild` or a digest pin bumped in the weekly sweep. Checked 2026-09-30: both current.
-- **Stack updates: sibling containers** (searxng, traefik, tailscale, browserless, redis, gluetun) run `:latest` from separate compose
-  projects and were behind the registry on 2026-09-30. Pull and recreate by hand (restarts the VPN, tailscale, and traefik).
-- **Backfill Sphinx-math height on already-stored entries** — the ingest-time fix doesn't
-  retroactively help entries stored before it; low value (few math articles), do on demand. Note:
-  `entries.content` is reader's JSON structure, not raw HTML — a backfill must respect that shape.
+- **Stack updates** — `python:3.15-slim` and `uv:latest` are floating tags, so a cached base layer can go stale between rebuilds (`--pull` in
+  `make rebuild`, or a digest pin bumped in the weekly sweep; both current 2026-09-30). The sibling containers (searxng, traefik, tailscale,
+  browserless, redis, gluetun) run `:latest` from separate compose projects and were behind on 2026-09-30; pull and recreate by hand, which
+  restarts the VPN, tailscale and traefik.
 
 ## Watch-lists
 
@@ -416,12 +404,6 @@ on the real, non-assumed feed title. The distinction (a tag naming a *place* vs.
 content*) is semantic and no feed metadata expresses it. Resolved with manual per-(feed, tag)
 dismissal instead (`suppressed_feed_tags`).
 
-### `_resolve_view_posts` enrichment cost — measured, not worth building
-
-Enrichment is ~24% of a whole-view resolve, not the dominant cost (the raw fetch is >2.5x larger);
-a light-record mode isn't a clean drop-in since `select-all-visible` needs enrichment-phase fields.
-Not worth building for the payoff.
-
 ### og_scrape feeds with no og:image at all
 
 162 of 585 auto-detected `og_scrape` feeds have no `og:image` on their source page and correctly
@@ -447,42 +429,20 @@ Nothing to do here until one of these recurs or a lead turns up.
 - Sort briefly reverts to default after a backgrounded tab is restored, self-corrects within ~90s
   (Surface/Edge) — traced to a real top-level nav from a stale history entry, not a
   stored-preference bug; no reliable repro yet.
-- neowin.net: 20 entries briefly shared one lead image, repaired live — likely a transient
-  upstream glitch, no code-level cause found.
 - On-screen-keyboard popup scrolls the post list to top — not reproduced in Playwright with
   viewport-resize emulation; needs a real-device screen recording.
-- An entry ([play.nobleknight.com/?p=19266](https://play.nobleknight.com/?p=19266)) took a long
-  time to open once — inconclusive, no repro caught; check entry-pane response time and `[perf]`
-  logs if it recurs.
-- Soundslice tab-player embeds are permanently blocked by the content owner's own domain
-  allowlist — no fix available short of screenshotting the original page through a real browser;
-  not worth it for one narrow case.
 - `make rebuild` cycle is 100-130s — not investigated; revisit if it keeps coming up.
 - 5 tests fail locally with `outbound network blocked in tests` (reproduces on a clean commit too,
   smells like sandbox-specific networking) — check real CI is clean before spending time on it.
-- makeuseof re-fetch returns white images — seen once, waiting for a second sighting.
 - play.nobleknight.com images 403 despite FlareSolverr cookie reuse — the solve never returns the
   actual `cf_clearance` cookie for this host; would need per-image browser routing. Likely explained
   by the fetch-unification idea in Tier 4 ("Unify the escalation ladder...") — no page fetch solved
   this host first, so there's no cookie to borrow and the image path has no escalation of its own.
-- guitarworld.com lessons: a MatchMySound practice widget is entirely missing from capture
-  (likely a client-side paywall gate defeated by Josh's own adblocker) — one article, not chased
-  further.
-- A second raw-Markdown-instead-of-HTML feed — unconfirmed, Josh recalls a similar symptom but
-  couldn't place which feed. The existing fix (from the blog.gitea.com case) already covers it
-  generically if confirmed.
-- ~407 stored feed URLs differ from canonical only by a trailing slash — harmless, zero actual
-  collisions.
 - A re-fetch once returned a different, unique article and the sibling-text guard didn't catch it
   (entry 26031) — the slug/title mismatch guard should have and didn't. Investigate if it recurs.
 - The scheduler's trickle case: a host feeding one byte per 29s could keep a refresh pass
   "advancing" without real progress. If it recurs, the fix is a per-feed wall-clock budget, not a
   shorter read deadline.
-- The Wayback timestamp as a date source returns the closest snapshot, not first-capture — the CDX
-  API sorted ascending would be more accurate but timed out on 2/3 tries.
-- Inline SVG in feed content is mangled at ingest (feedparser mishandles self-closing tags) — any
-  feed shipping inline SVG art renders as a flat color block. Real fix needs re-parsing SVG
-  subtrees as XML at ingest.
 - Article-nav post-swap binder exception — mitigated (no more hard-reload on failure), but the
   underlying binder exception still exists somewhere. Grab the console error if it recurs.
 
@@ -507,8 +467,9 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 - `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
 - Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.
 
-### Automation pass returns early without mark-read/dedup/email/tag-filter rules
-`_run_automation_after_refresh` returns when no enabled `mark_as_read`, `deduplicate`, `email_article` or `tag_filter` rule exists, before the webhook, Instapaper, save-article, Quire and YouTube playlist dispatchers run. A user whose only rules are those types never gets them fired (repro: only a playlist rule, then the full pass adds nothing). Fix by skipping just the rule loop, then check what users with only those rule types would suddenly start firing.
-
 ### Auto add-to-playlist: hidden unpremiered videos
 A hidden unpremiered video is skipped for good (the watermark moves past it); revisit it after it airs if wanted. The duration filter's "retried once cached" has the same watermark problem for a video whose duration isn't cached on the first pass.
+
+### Mergeable Mark as Read rules: plain text to regex
+Two Mark as Read rules on Deals could be one if the plain-text rule became regex, but combining never behaves quite the same without word boundaries:
+`\b(?:Kanye\s+West|Micro\s?Center|Lowe['’]s|Chromebooks?|Post\s+Malone)\b` plus a plain list (`Taylor Swift, My Chemical Romance`). Offer the merge as a suggested regex with boundaries added, not a blind join.

@@ -1124,6 +1124,14 @@ after the first in-page navigation, while still working on a direct URL load
 query input, and the search form's `submit` handler are therefore all delegated
 from `document`. Wire anything new on this toolbar the same way.
 
+## Right-click menus: sections, not a flat list
+
+The folder, post and tag menus are split into `.ctx-group` sections (state, organize, navigate/share, change the post, automate,
+destructive for the post menu; the destructive items always come last). Most items toggle with `hidden` depending on the click target,
+so dividers can't be static: `tidyMenuGroups` (app.js, called from `positionMenuInViewport` each time a menu opens) hides a group whose
+items are all hidden and leaves the first visible group without a top border. Items stay addressed by id, so adding one means putting it
+in the right group, nothing more. The root menu has three items and no groups.
+
 ## "Add link to Note" — append with the cursor ready, not a silent write
 
 Raised 2026-08-30: a fast way to drop a problematic post's link into the Global Note while

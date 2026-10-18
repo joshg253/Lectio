@@ -11,7 +11,7 @@
 ![Miniflux API](https://img.shields.io/badge/API-Miniflux%20v1-FF5700)
 ![Last commit](https://img.shields.io/github/last-commit/joshg253/Lectio)
 
-> **Work in progress.** This README covers features and design intent. Setup documentation is forthcoming.
+> **Work in progress.** This README covers features and design intent. For setup, see [docs/deployment.md](docs/deployment.md).
 
 Lectio is a self-hosted feed reader focused on fast reading triage, rich content handling, and automation. It runs well on a personal VPS with full multi-user support, and is built to keep feed reading fast, keyboard-friendly, and workflow-oriented.
 
@@ -76,23 +76,17 @@ short version:
 - **Filter this view.** Narrow the open list by text (`zelda "tears of" !sponsored`), video duration, or tag chips: `tag:games`,
   `tag:!games`, `tag:gam*`; `tagged:` matches tags you applied. Press Enter to pull in matches from further down the view as you scroll;
   it pairs with Select All for quick bulk triage.
-- **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and
-  send-to-destination rules (Instapaper, Pinterest, Reddit, Quire, email,
-  YouTube playlists, webhooks) at any scope, with dry-run and run history.
-  An **auto-read age** (off by default) marks new posts read at fetch once they're older than N days, so a quiet site that finally
-  updates doesn't flood the unread list; set it for the instance, an account, a folder or a feed, each only able to shorten the one above.
-  Tag-filter rules also work on tags scraped from article pages: for a feed whose tags exist only on the page, saving the rule turns on
-  page-tag capture, so matching posts are filtered as they arrive rather than when opened.
-  That capture reaches sites that block plain fetches (Cloudflare-fronted ones) through the same fetch ladder as opening a post.
-  Tagging a teaser-only post now fetches the full page even when the excerpt plus its "Read X on Y" footer looks long enough.
-- **IsThereAnyDeal waitlist posts** render one compact line per offer (price, discount, store, voucher) instead of a column of short lines.
+- **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and send-to-destination rules (Instapaper, Pinterest, Reddit, Quire,
+  email, YouTube playlists, webhooks) at any scope, with dry-run and run history. An optional auto-read age keeps a quiet site's first
+  update from flooding the unread list. See [Features details](docs/wiki/Features-details.md).
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an
   artist Watches them; on a Watch-feed byline, the name filters to that
   artist and the ✕ Unwatches), conditional GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
   duplicate scanning, unsubscribe that keeps your curation, and an optional
   outbound proxy with FlareSolverr/last-resort-backend escalation for feeds
-  behind an anti-bot challenge.
+  behind an anti-bot challenge. A Utilities tab groups the clean-up tools, including one that removes duplicate and unwatchable videos
+  from your YouTube playlists.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, a multi-selection, or a whole feed or folder at a time.
@@ -112,9 +106,7 @@ short version:
 | `main.py` | FastAPI routes, Jinja2 templates, all request handling |
 | `services/` | Feed refresh, lead images, email, starred archive, YouTube, reader API wrapper |
 | `reader` library | Feed fetching, parsing, storage, ETag/conditional requests |
-| `lectio.db` | reader's SQLite feed+entry store |
-| `lectio_meta.sqlite3` | App state: prefs, automation rules, lead images, read history, failure tracking |
-| `lectio_meta.sqlite` | Starred/saved entry archive |
+| Per-user SQLite DBs | Feed/entry store, app state (prefs, rules, read history), starred archive; layout in [tenancy](docs/architecture/tenancy.md) |
 
 Dates, saved-article recovery, per-feed file capture, suggested tags, comic
 episode expansion, transparent-image handling, the refresh watchdog and the
@@ -131,7 +123,7 @@ Design rationale for any of it lives in
 - **Backend**: Python 3.15, FastAPI, uvicorn
 - **Feed library**: [reader](https://github.com/lemon24/reader) (handles HTTP, parsing, ETags, scheduling)
 - **Frontend**: Vanilla JS, Jinja2 templates, no build step
-- **Database**: SQLite (WAL mode) × 3
+- **Database**: SQLite (WAL mode), per user
 - **Deployment**: Docker + docker-compose, Traefik reverse proxy
 
 ---
@@ -151,14 +143,10 @@ than whole files, because the repo carries a backlog of existing findings — ne
 code is held to the rules while the backlog shrinks file by file. `git commit
 --no-verify` bypasses it.
 
+- **Tests** — `make test` (or `uv run pytest`).
+- **Rebuilding the container** — `make rebuild`; the image bakes the source in, so a rebuild is what makes a commit live.
 
-- **Tests** — pytest suite (unit, services, integration, scripts) under `tests/`. Run with `make test` (or `uv run pytest`).
-- **Rebuilding the container** — `make rebuild` prunes the BuildKit cache to a ceiling (`BUILD_CACHE_MAX`, 2GB), builds, and restarts. The image bakes the source in, so a rebuild is what makes a commit live. Rebuilding after every commit had grown the cache to 7.9GB across 57 entries; capping it evicts only the old tail, so recent layers still make builds fast. The target refuses to run while a `docker compose exec` is in flight — recreating the container kills a session mid-write.
-- **Scratch cleanup** — `make test` runs `make clear-scratch` first, and the local-verification workflow does the same before launching a dev server. On a host where `/tmp` is a small RAM-backed tmpfs, each full suite run leaves its per-test SQLite scratch behind; once `/tmp` fills, pytest reports *mass failures that look like real regressions* rather than an out-of-space error. `scripts/clear_dev_scratch.py` clears only known-disposable paths — never a bare `/tmp/*` sweep — and skips both the running session and anything under two days old, so a concurrent session is safe. `--dry-run` shows what would go.
-- **CI** — GitHub Actions runs the suite on Python 3.15 for every pull request and push to `main` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Dependencies install from the locked `uv.lock` (`uv sync --frozen`), and the run treats any `DeprecationWarning` as an error so they surface immediately rather than accumulating.
-- **Dependency audit** — `uv audit` (OSV-backed) scans the locked dependencies for known vulnerabilities and deprecated packages. Run it locally with `make audit`; CI runs the same scan. It's a uv preview feature, so it's kept separate from `make test` locally and the CI step is informational (non-blocking) for now.
-- **CodeQL, locally** — `make codeql-install` fetches the CodeQL CLI (pinned to CI's version) into gitignored `.tools/`. Don't run it while iterating: `make codeql-db` (~10 min) snapshots the tree, so the check is `make codeql-db && make codeql-fast` (our custom queries plus the stock stack-trace rule) once, just before pushing a change that touches redirects or error handling. CI runs the full suite on every PR, so the full local `make codeql` (~30 min) is only for changes to `.github/codeql/`.
-- **Backups** — `scripts/backup_databases.py` takes a consistent `VACUUM INTO` snapshot of every database; `scripts/ship_backups_to_b2.py` ships that snapshot to a Backblaze B2 bucket via `rclone move` and clears it locally on success. `deploy/systemd/` has the daily timer and install steps; see its README.
+CI, dependency audit, CodeQL, scratch cleanup and backups: [docs/development.md](docs/development.md).
 
 ---
 

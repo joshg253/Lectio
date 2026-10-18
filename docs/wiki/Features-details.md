@@ -1,8 +1,6 @@
 # Features — the detail behind the bullets
 
-> Staged for the **[Features](https://github.com/joshg253/Lectio/wiki/Features)**
-> wiki page. Moved out of `README.md` on 2026-08-13, which had grown to a third
-> feature prose. Paste into the wiki and this file can go.
+> Behavior detail that doesn't belong in the README's feature bullets. The README links here; add new detail here, not there.
 
 Dates are worked out rather than trusted blindly. A publisher that ships no
 date — or ships a placeholder like the Unix epoch, which importers and parsers
@@ -60,3 +58,19 @@ Pages stay light at large subscription counts: per-feed row sections (the
 sidebar folder feed lists, the Settings → Feeds table, and the Stale view)
 load as HTML fragments on first open instead of shipping with every page, and
 the app script is a cacheable static file rather than inline JS.
+
+**Automation details.** An **auto-read age** (off by default) marks new posts read at fetch once they're older than N days, so a quiet site
+that finally updates doesn't flood the unread list; set it for the instance, an account, a folder or a feed, each only able to shorten the
+one above. Tag-filter rules also work on tags scraped from article pages: for a feed whose tags exist only on the page, saving the rule
+turns on page-tag capture, so matching posts are filtered as they arrive rather than when opened. That capture reaches sites that block
+plain fetches (Cloudflare-fronted ones) through the same fetch ladder as opening a post. Tagging a teaser-only post fetches the full page
+even when the excerpt plus its "Read X on Y" footer looks long enough.
+
+**IsThereAnyDeal waitlist posts** render one compact line per offer (price, discount, store, voucher) instead of a column of short lines.
+
+**Clean up YouTube playlists** (Settings → Utilities → YouTube, needs the YouTube connection). Pick playlists, nothing pre-selected, and
+it removes duplicate videos, keeping the first copy. Two optional extras: remove deleted and private videos (your own private uploads
+stay), plus members-only ones Lectio has already identified; and remove videos blocked in a country you give, using the country blocks
+YouTube lists for each video, which can miss some rights-holder blocks. Because YouTube sometimes removes both copies when you delete
+one, it checks each video afterward and re-adds one that disappeared (it lands at the end of the playlist). Each delete or re-add costs
+50 of the day's YouTube API quota, so a big clean-up can stop partway; it says so and names any video it couldn't put back.

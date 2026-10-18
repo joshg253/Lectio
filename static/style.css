@@ -5185,6 +5185,18 @@ body.resizing {
   color: var(--danger-muted);
 }
 
+/* Menu sections. Every group but the first visible one gets a divider;
+   tidyMenuGroups() in app.js marks the first, since items toggle via [hidden]. */
+.ctx-group:not(.ctx-group-first) {
+  border-top: 1px solid var(--line);
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+}
+
+.ctx-group[hidden] {
+  display: none;
+}
+
 #post-context-menu {
   width: max-content;
   min-width: 190px;
@@ -7228,6 +7240,18 @@ mark.highlight-mark {
 .feeds-dedup-controls {
   padding: 0.5rem 0 0.75rem;
 }
+.utility-group + .utility-group { margin-top: 0.75rem; }
+.utility-group-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.utility-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.utility-group-title { flex-basis: 100%; }
+.settings-secondary-btn[data-requires]:disabled { opacity: 0.5; cursor: not-allowed; }
 .dedup-inline-actions {
   padding-top: 0.75rem;
   display: flex;

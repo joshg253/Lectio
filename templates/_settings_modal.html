@@ -613,16 +613,28 @@
       <div id="settings-tab-utilities" class="settings-tab-panel" hidden>
         <div class="feeds-dedup-panel">
           <div class="feeds-dedup-controls">
-            <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
-            <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
-            <button type="button" id="fix-url-titles-btn" class="settings-secondary-btn" title="Find feeds whose title is still a raw URL and re-fetch their metadata">Fix URL titles</button>
-            <button type="button" id="lazy-titles-btn" class="settings-secondary-btn" title="Find feeds titled just &quot;News&quot;, &quot;Updates&quot;, etc. and suggest prefixing the site name">Find lazy feed names</button>
-            <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
-            <button type="button" id="unstar-tagged-btn" class="settings-secondary-btn" title="Find starred articles that also carry a tag — the tag already keeps them, so the star is redundant">Unstar tagged articles</button>
-            <button type="button" id="archive-old-btn" class="settings-secondary-btn" title="Clear the Saved Inbox of stars you are plainly not getting to — archives them, keeping tags and the offline copy">Archive old stars</button>
-            <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
-            <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
-            <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
+            <div class="utility-group">
+              <h4 class="utility-group-title">Feeds</h4>
+              <button type="button" id="dedup-feeds-btn" class="settings-secondary-btn" title="Find feeds subscribed more than once under URL variants">Scan for duplicate feeds</button>
+              <button type="button" id="lazy-titles-btn" class="settings-secondary-btn" title="Queue a title refresh for feeds titled with a raw URL, and list feeds titled just &quot;News&quot;, &quot;Updates&quot;, etc. so you can prefix the site name">Fix feed titles</button>
+              <button type="button" id="multi-folder-btn" class="settings-secondary-btn" title="Find feeds that ended up in more than one folder and keep only one">Fix multi-folder feeds</button>
+            </div>
+            <div class="utility-group">
+              <h4 class="utility-group-title">Saved articles</h4>
+              <button type="button" id="saved-dedup-btn" class="settings-secondary-btn" title="Find the same article saved more than once under different URLs">Scan Saved for duplicates</button>
+              <button type="button" id="saved-autofile-btn" class="settings-secondary-btn" title="File unfiled saved articles onto the subscribed feed they came from">File saved articles</button>
+              <button type="button" id="unstar-tagged-btn" class="settings-secondary-btn" title="Find starred articles that also carry a tag — the tag already keeps them, so the star is redundant">Unstar tagged articles</button>
+              <button type="button" id="archive-old-btn" class="settings-secondary-btn" title="Clear the Saved Inbox of stars you are plainly not getting to — archives them, keeping tags and the offline copy">Archive old stars</button>
+            </div>
+            <div class="utility-group">
+              <h4 class="utility-group-title">Clean-up</h4>
+              <button type="button" id="purge-old-btn" class="settings-secondary-btn" title="Delete old posts from selected folders (starred and tagged posts are kept)">Purge old posts</button>
+            </div>
+            <div class="utility-group">
+              <h4 class="utility-group-title">YouTube</h4>
+              <button type="button" id="yt-dupes-btn" class="settings-secondary-btn" data-requires="youtube" title="Remove duplicate videos from your YouTube playlists, and optionally deleted, private and members-only ones">Clean up YouTube playlists</button>
+              <button type="button" id="backfill-hide-shorts-btn" class="settings-secondary-btn" title="Mark all unread Shorts as read on feeds that have Hide Shorts enabled">Clean up Shorts</button>
+            </div>
           </div>
           <div id="dedup-inline-results" hidden>
             <p class="action-modal-label dedup-modal-intro"></p>
@@ -676,6 +688,20 @@
             <div class="dedup-inline-actions">
               <button type="button" id="saved-dedup-checkall" class="settings-secondary-btn" hidden title="Probe every group's URLs (throttled, one group at a time) — a confirmed-dead copy is switched to Delete (never the sole copy with real stored content); live and inconclusive copies stay on Keep">Check all URLs</button>
               <button type="button" id="saved-dedup-ok" class="danger" hidden>Delete copies marked Delete</button>
+            </div>
+          </div>
+          <div id="yt-dupes-panel" hidden>
+            <p class="action-modal-label">Remove duplicate videos from the playlists you pick, keeping the first copy of each. Nothing is pre-selected.</p>
+            <p id="yt-dupes-status" class="action-modal-hint"></p>
+            <div class="dedup-inline-actions yt-dupes-actions">
+              <label class="dedup-rescue-label"><input type="checkbox" id="yt-dupes-select-all"> Select all</label>
+            </div>
+            <div id="yt-dupes-list" class="dedup-title-list"></div>
+            <label class="dedup-rescue-label"><input type="checkbox" id="yt-dupes-unavailable"> Also remove deleted and private videos, and members-only ones Lectio has already identified</label>
+            <label class="dedup-rescue-label"><input type="checkbox" id="yt-dupes-region-on"> Also remove videos blocked in my country: <input type="text" id="yt-dupes-region" value="US" maxlength="2" class="feed-prop-title-input" style="width:3rem;display:inline-block" aria-label="Two-letter country code" disabled></label>
+            <p class="action-modal-hint">Uses the country blocks YouTube lists for each video. It can't see every rights-holder block, so a few unwatchable videos may remain.</p>
+            <div class="dedup-inline-actions">
+              <button type="button" id="yt-dupes-run" class="danger" disabled>Clean up selected playlists</button>
             </div>
           </div>
           <div id="purge-old-panel" hidden>

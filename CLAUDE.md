@@ -67,5 +67,8 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
   changes: `ARCHITECTURE.md` is the index and holds only the cross-cutting notes;
   the rationale itself lives in `docs/architecture/` (tenancy, feeds, views, images,
   reading, saved, apis, integrations). Add to the file for the area you changed.
+- Keep `README.md` an overview, not a manual: a feature gets a bullet saying what it is and why, not how it behaves in edge cases.
+  Behavior detail goes to `docs/wiki/Features-details.md`; dev/ops notes go to `docs/development.md`. When an edit adds detail to the
+  README, put it there instead.
 - Update `Plan.md` for future work, deferred work, or intentional follow-ups.
 - When changing `.env`, mirror the same keys, comments, and safe defaults in `.env.example`.

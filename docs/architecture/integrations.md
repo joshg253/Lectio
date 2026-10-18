@@ -37,7 +37,7 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 - **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
   so Lectio estimates spend itself: each billed call reports its documented unit cost
   through a sink (`playlists.list`/`videos.list`/sub-sync = 1, `playlistItems.insert`/
-  `playlists.insert` = 50). `services/youtube_oauth.py` and `services/youtube_sync.py`
+  `playlistItems.delete`/`playlists.insert` = 50). `services/youtube_oauth.py` and `services/youtube_sync.py`
   expose `set_quota_sink`; `YouTubeDurationService` takes a `quota_sink`; all three are
   wired to `record_yt_quota_spend`, which tallies units into the per-user `yt_quota_spend`
   table keyed by the **Pacific calendar date** (`_pacific_today()`, Google's reset). The
@@ -136,6 +136,30 @@ Per-user OAuth destinations, quotas and the automation that drives them.
   youtube.com, so a remembered copy would go stale, and a stale copy risks the duplicate we're avoiding. The worker threads
   don't inherit the tenancy context the quota meter needs, so lookups are billed once from the calling thread. Reusing one HTTP
   client across inserts was measured and declined: it saves ~30 ms of a ~500 ms insert.
+- **Playlist clean-up utility** (Settings → Utilities → YouTube; `/api/youtube/playlists/dedupe`) — removes duplicate videos from the
+  chosen playlists, and optionally deleted/private videos and videos blocked in a given country. It is a Utility, not a rule: nothing
+  runs unattended, and every playlist is picked by hand. One background job per user, polled like the bulk add, and it refuses to start
+  while a bulk add is running (and the reverse) so the two can't race on one playlist. Design points:
+  - *Keep the first copy.* `duplicate_items` keeps the lowest-position copy of each video and deletes the rest by their own
+    `playlistItem` id (a delete by video id isn't possible). Playlists with fewer than two videos are skipped when only duplicates are
+    wanted, since listing one costs quota; with the other options on, only empty ones are skipped.
+  - *One video at a time, restore immediately.* YouTube's own web UI removes every copy of a duplicated video when one is deleted, and
+    the API has been seen to do the same. So after deleting a video's extras the job confirms it is still there (one filtered lookup,
+    so listing lag can't create a new duplicate) and adds it back if not. A re-added video lands at the end of the playlist. Because
+    this is per video, a quota stop loses at most the video in hand, which gets a last restore attempt; a video that could not be put
+    back is logged and named in the summary, the one outcome of this utility that loses something.
+  - *Quota and rate limits.* Each delete or insert costs 50 units. A daily-quota stop marks the day exhausted; a short-window rate limit
+    (`RateLimited`) stops the job without doing so. The access token is fetched per call, since a long run outlives its cached life,
+    and the worker always releases the job (`finally`), so a crash can't leave it answering every later start with "busy".
+  - *Unavailable videos.* A deleted or private video stays in the playlist titled "Deleted video"/"Private video" (privacy `private`),
+    but neither is proof: the owner's own private upload keeps its title and reads private. So such an entry is removed only if
+    `videos.list` no longer returns its video. Members-only is invisible to the Data API, so only videos whose members-only verdict
+    Lectio already cached (from the hide-members-only watch-page check) are removed; the clean-up never fetches watch pages itself
+    (good web citizen). Country blocks come from `videos.list` `regionRestriction` (a `blocked` or `allowed` list, a property of the
+    video and not of the caller's IP, so where the server runs doesn't matter), compared against a country code the user types. A
+    takedown that removes a video everywhere shows up as deleted. Rights-holder blocks the API doesn't list are not caught.
+  - *Gated on the integration.* Utilities that need an integration carry `data-requires="<name>"` and are disabled with a hint until it
+    is connected; Clean up Shorts works on feeds, not the OAuth grant, so it stays enabled.
 - **Auto add-to-playlist automation** (`youtube_playlist` rule type) — builds on the
   OAuth integration above to add new entries' videos to a playlist at refresh time.
 ### Rule keywords: one matcher, comma-separated OR terms
