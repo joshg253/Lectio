@@ -24,6 +24,9 @@ Empty.
 ### Webhook, Quire and Instapaper rules have no per-entry duplicate guard
 These dispatchers pick entries "added in the last 15 minutes" with no claim table, so two automation passes for the same feed inside that window (scheduler tick plus a manual or WebSub refresh) fire a matching entry twice; Quire would create two tasks. Save-article and YouTube playlist rules are already idempotent. Fix with a per-rule, per-entry claim row like `youtube_playlist_added`.
 
+### YouTube playlist rules: watermark may skip entries (Sourcery, 2026-10-17; verify first)
+`_run_youtube_playlist_rules_after_refresh` advances one user-wide last-check watermark per pass, but a pass may cover only some of a rule's feeds (partial refresh) or stop at the 25-per-run cap. Entries older than the next cutoff are then never added. Check whether that happens in practice, then track the watermark per feed or advance it only through fully processed entries.
+
 ### YouTube descriptions render hashtag lines as headings (2026-10-14)
 A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
 the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
