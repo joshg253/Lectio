@@ -85,7 +85,8 @@ short version:
   artist and the ✕ Unwatches), conditional GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
   duplicate scanning, unsubscribe that keeps your curation, and an optional
   outbound proxy with FlareSolverr/last-resort-backend escalation for feeds
-  behind an anti-bot challenge.
+  behind an anti-bot challenge. A Utilities tab groups the clean-up tools, including one that removes duplicate and unwatchable videos
+  from your YouTube playlists.
 - **Fix a post in place.** Edit its date, title or URL; clean up its body with
   an Aardvark-style element remover; re-fetch its content — undoably, with an
   Internet Archive fallback — one post, a multi-selection, or a whole feed or folder at a time.

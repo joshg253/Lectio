@@ -6,7 +6,7 @@ per-user OAuth grant. Tokens are stored per-user by the caller (main.py), same
 pattern as the DeviantArt integration; this module only speaks HTTP to Google.
 
 Scope: https://www.googleapis.com/auth/youtube (manage playlists). We only ever
-call playlists.list / playlistItems.insert / playlists.insert.
+call playlists.list / playlistItems.list / playlistItems.insert / playlistItems.delete / playlists.insert.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ _USER_AGENT = "Lectio/1.0 (+https://github.com/joshg253/Lectio)"
 _TIMEOUT = 20
 
 # Optional quota-spend sink: the app sets this to record each call's documented unit
-# cost (playlists.list = 1, playlistItems.insert / playlists.insert = 50). Pure
+# cost (playlists.list = 1, playlistItems.insert / delete / playlists.insert = 50). Pure
 # parsing/HTTP stays in this module; the meter lives in the app layer.
 _quota_sink = None
 
@@ -204,6 +204,126 @@ def list_playlist_video_ids(access_token: str, playlist_id: str) -> set[str]:
             if not page_token:
                 break
     return out
+
+
+def list_playlist_items(access_token: str, playlist_id: str) -> list[dict]:
+    """Every entry of ``playlist_id`` in playlist order, as ``[{item_id, video_id, position, title, privacy}]``.
+
+    Unlike list_playlist_video_ids this keeps each copy's own playlistItem id, which is what a delete needs. 1 quota unit per
+    page of 50."""
+    out: list[dict] = []
+    page_token = ""
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        while True:
+            params = {"part": "snippet,contentDetails,status", "playlistId": playlist_id, "maxResults": 50}
+            if page_token:
+                params["pageToken"] = page_token
+            resp = client.get(f"{_API_BASE}/playlistItems", params=params)
+            _raise_for_quota(resp, "playlistItems.list")
+            _bill(1)
+            data = resp.json()
+            for item in data.get("items", []):
+                snippet = item.get("snippet") or {}
+                vid = (item.get("contentDetails") or {}).get("videoId") or (snippet.get("resourceId") or {}).get("videoId")
+                if item.get("id") and vid:
+                    out.append(
+                        {
+                            "item_id": item["id"],
+                            "video_id": vid,
+                            "position": snippet.get("position", len(out)),
+                            "title": snippet.get("title", ""),
+                            "privacy": (item.get("status") or {}).get("privacyStatus", ""),
+                        }
+                    )
+            page_token = data.get("nextPageToken", "")
+            if not page_token:
+                break
+    return out
+
+
+_UNAVAILABLE_TITLES = {"deleted video", "private video"}
+
+
+def existing_video_ids(access_token: str, video_ids: Iterable[str]) -> set[str]:
+    """The subset of *video_ids* that videos.list returns, i.e. videos the caller can still look up (1 quota unit per 50).
+
+    A deleted video, or someone else's private one, is not returned; the owner's own private video is."""
+    ids = list(dict.fromkeys(video_ids))
+    found: set[str] = set()
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            resp = client.get(f"{_API_BASE}/videos", params={"part": "id", "id": ",".join(chunk), "maxResults": 50})
+            _raise_for_quota(resp, "videos.list")
+            _bill(1)
+            found.update(item["id"] for item in resp.json().get("items", []) if item.get("id"))
+    return found
+
+
+def unavailable_items(items: list[dict], members_only_ids: set[str] | None = None, visible_ids: set[str] | None = None) -> list[dict]:
+    """Entries whose video can no longer be watched: deleted, private, or (from *members_only_ids*) members-only.
+
+    YouTube keeps such an entry in the playlist and replaces its title with "Deleted video" / "Private video"; the privacy status
+    also reads private. Neither is proof on its own: the owner's own private upload keeps its title and reads private, and a real
+    video can be titled "Private video". So when *visible_ids* (from existing_video_ids) is given, a deleted/private-looking entry
+    counts only if its video is not in it. Members-only is not visible from the playlist at all, so the caller passes the verdicts
+    it already has."""
+    members = members_only_ids or set()
+    out = []
+    for i in items:
+        looks_gone = i["title"].strip().lower() in _UNAVAILABLE_TITLES or i.get("privacy") == "private"
+        if i["video_id"] in members or (looks_gone and (visible_ids is None or i["video_id"] not in visible_ids)):
+            out.append(i)
+    return out
+
+
+def blocked_in_region(access_token: str, video_ids: Iterable[str], region: str) -> set[str]:
+    """The subset of *video_ids* that can't be watched from country *region* (ISO 3166 alpha-2).
+
+    videos.list reports each video's ``regionRestriction``: a ``blocked`` list (blocked in those countries) or an ``allowed``
+    list (blocked everywhere else). This is how a geoblock or a rights-holder's country block shows up; a takedown that removes
+    the video everywhere shows up as a deleted video instead. 1 quota unit per 50 ids."""
+    region = region.strip().upper()
+    ids = list(dict.fromkeys(video_ids))
+    blocked: set[str] = set()
+    if not region or not ids:
+        return blocked
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            resp = client.get(f"{_API_BASE}/videos", params={"part": "contentDetails", "id": ",".join(chunk), "maxResults": 50})
+            _raise_for_quota(resp, "videos.list")
+            _bill(1)
+            for item in resp.json().get("items", []):
+                restriction = (item.get("contentDetails") or {}).get("regionRestriction") or {}
+                if region in (restriction.get("blocked") or []) or (
+                    "allowed" in restriction and region not in (restriction.get("allowed") or [])
+                ):
+                    blocked.add(item["id"])
+    return blocked
+
+
+def duplicate_items(items: list[dict]) -> list[dict]:
+    """The extra copies in *items*: every entry after the first of its video, in playlist order.
+
+    The earliest copy (lowest position) is the one kept, so a video keeps its place in the playlist."""
+    seen: set[str] = set()
+    extras: list[dict] = []
+    for item in sorted(items, key=lambda i: i["position"]):
+        if item["video_id"] in seen:
+            extras.append(item)
+        else:
+            seen.add(item["video_id"])
+    return extras
+
+
+def delete_playlist_item(access_token: str, item_id: str) -> None:
+    """Remove one playlist entry by its playlistItem id (not the video id). Costs 50 quota units."""
+    with httpx.Client(timeout=_TIMEOUT, headers=_auth_headers(access_token)) as client:
+        resp = client.delete(f"{_API_BASE}/playlistItems", params={"id": item_id})
+    if resp.status_code != 204:
+        _raise_for_quota(resp, "playlistItems.delete")
+    _bill(50)
 
 
 # A playlist this small is one or two pages, so listing it is cheaper than a lookup per video.

@@ -750,7 +750,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const UTILITY_RESULT_PANEL_IDS = [
       'dedup-inline-results', 'saved-dedup-results', 'purge-old-panel',
       'multi-folder-results', 'unstar-tagged-results', 'archive-old-results',
-      'saved-autofile-results', 'lazy-titles-results',
+      'saved-autofile-results', 'lazy-titles-results', 'yt-dupes-panel',
     ];
     function hideOtherUtilityResults(exceptId) {
       for (const id of UTILITY_RESULT_PANEL_IDS) {
@@ -1193,12 +1193,20 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     const _mfEscape = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    // Fix feed titles — one button for both title problems. Raw-URL titles are fixed by queuing a metadata
+    // refresh (nothing to review); lazy names ("News", "Updates") need a human, so they come back as a list.
     // Lazy feed names — titled just "News", "Updates", etc, indistinguishable
     // once several show up together. Suggested renames are domain-derived
     // guesses, so nothing is pre-applied: each row is edited and applied
     // individually via the existing /feeds/set-user-title route.
     document.getElementById('lazy-titles-btn')?.addEventListener('click', async () => {
       hideOtherUtilityResults('lazy-titles-results');
+      fetch('/feeds/fix-url-titles', { method: 'POST', credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(d => showToastMessage(d.queued > 0
+          ? `Queued ${d.queued} feed${d.queued !== 1 ? 's' : ''} with URL-style titles for a title refresh.`
+          : 'No feeds with URL-style titles found.'))
+        .catch(() => showToastMessage('Error running title fix.'));
       const resp = await fetch('/feeds/lazy-titles');
       const data = await resp.json();
       const items = data.lazy_titles || [];
@@ -2091,6 +2099,133 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       }
       alert(`Archived ${(data.archived || 0).toLocaleString()} article(s).`);
       _aoRender();
+    });
+
+    // ── YouTube playlist clean-up utility ──────────────────────────────────
+    // Utilities that need an integration carry data-requires="<name>" and stay disabled until it is connected.
+    document.querySelectorAll('[data-requires="youtube"]').forEach((btn) => {
+      if (window.YT_OAUTH_CONNECTED) return;
+      btn.disabled = true;
+      btn.title = 'Connect YouTube in Settings → Integrations to use this.';
+    });
+
+    const _ytDupesChecks = () => [...document.querySelectorAll('#yt-dupes-list input[type=checkbox]')];
+    const _ytDupesSync = () => {
+      const checks = _ytDupesChecks();
+      const picked = checks.filter(c => c.checked).length;
+      document.getElementById('yt-dupes-run').disabled = picked === 0;
+      document.getElementById('yt-dupes-select-all').checked = checks.length > 0 && picked === checks.length;
+    };
+
+    document.getElementById('yt-dupes-btn')?.addEventListener('click', async () => {
+      const panel = document.getElementById('yt-dupes-panel');
+      if (!panel.hidden) { panel.hidden = true; return; }
+      hideOtherUtilityResults('yt-dupes-panel');
+      panel.hidden = false;
+      const status = document.getElementById('yt-dupes-status');
+      const list = document.getElementById('yt-dupes-list');
+      list.innerHTML = '';
+      _ytDupesSync();
+      status.textContent = 'Loading your playlists…';
+      try {
+        const resp = await fetch('/api/youtube/playlists', { credentials: 'same-origin' });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+          throw new Error(data.error === 'quota' ? 'YouTube API quota is used up for today.' : (data.error || `HTTP ${resp.status}`));
+        }
+        if (!data.playlists.length) { status.textContent = 'No playlists found.'; return; }
+        status.textContent = '';
+        for (const pl of data.playlists) {
+          const label = document.createElement('label');
+          label.className = 'dedup-folder-check';
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.value = pl.id;
+          box.dataset.count = String(pl.count ?? 0);
+          box.addEventListener('change', _ytDupesSync);
+          label.append(box, ` ${pl.title} (${pl.count})`);
+          list.appendChild(label);
+        }
+      } catch (err) {
+        status.textContent = `Could not load playlists: ${err.message}`;
+      }
+    });
+
+    document.getElementById('yt-dupes-region-on')?.addEventListener('change', (event) => {
+      document.getElementById('yt-dupes-region').disabled = !event.target.checked;
+    });
+
+    document.getElementById('yt-dupes-select-all')?.addEventListener('change', (event) => {
+      _ytDupesChecks().forEach(c => { c.checked = event.target.checked; });
+      _ytDupesSync();
+    });
+
+    document.getElementById('yt-dupes-run')?.addEventListener('click', async () => {
+      const runBtn = document.getElementById('yt-dupes-run');
+      const unavailable = document.getElementById('yt-dupes-unavailable').checked;
+      const region = document.getElementById('yt-dupes-region-on').checked ? document.getElementById('yt-dupes-region').value.trim() : '';
+      // A playlist of 0 or 1 videos can't hold a duplicate, so skip it (saves a quota-costing listing); with the unavailable or
+      // region options on, a single video can still be the bad one, so only empty playlists are skipped.
+      const minCount = unavailable || region ? 1 : 2;
+      const ids = _ytDupesChecks().filter(c => c.checked && Number(c.dataset.count) >= minCount).map(c => c.value);
+      if (!ids.length) {
+        showToastMessage(minCount === 2
+          ? 'Nothing to do: the selected playlists have fewer than two videos.'
+          : 'Nothing to do: the selected playlists are empty.');
+        return;
+      }
+      const what = [
+        'duplicate videos',
+        unavailable ? 'deleted/private/members-only videos' : '',
+        region ? `videos blocked in ${region.toUpperCase()}` : '',
+      ].filter(Boolean).join(', ');
+      const plural = ids.length === 1 ? '' : 's';
+      const prompt = `Remove ${what} from ${ids.length} playlist${plural}? This edits your YouTube playlists and costs API quota.`;
+      if (!window.confirm(prompt)) return;
+      runBtn.disabled = true;
+      try {
+        const resp = await fetch('/api/youtube/playlists/dedupe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ playlist_ids: ids, remove_unavailable: unavailable, region }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          throw new Error(data.error === 'busy' ? 'A clean-up is already running.' : (data.error || `HTTP ${resp.status}`));
+        }
+        const jobId = data.job_id;
+        showToastMessage('Cleaning up playlists…');
+        // The job keeps running server-side, so a failed poll is not a failed clean-up: only give up after several in a row.
+        let pollFailures = 0;
+        for (;;) {
+          await new Promise(r => setTimeout(r, 1500));
+          let st;
+          try {
+            const statusUrl = `/api/youtube/playlists/dedupe/status?job_id=${encodeURIComponent(jobId)}`;
+            st = await (await fetch(statusUrl, { credentials: 'same-origin' })).json();
+            pollFailures = 0;
+          } catch (_) {
+            if (++pollFailures >= 5) {
+              showToastMessage('Lost contact with the clean-up — it may still be running; check the playlists.');
+              break;
+            }
+            continue;
+          }
+          if (st.stale || (!st.running && !st.done)) { showToastMessage('Clean-up status was lost — check the playlists.'); break; }
+          if (st.done) {
+            // The toast fades; keep the result where it can be read again.
+            document.getElementById('yt-dupes-status').textContent = st.message || 'Done.';
+            showToastMessage(st.message || 'Done.');
+            break;
+          }
+          const extra = unavailable || region ? `, ${st.unavailable || 0} unavailable` : '';
+          showToastMessage(`Cleaning up playlists… ${st.processed}/${st.total} done, ${st.removed} duplicates removed${extra}`);
+        }
+      } catch (err) {
+        showToastMessage(`Clean-up failed: ${err.message}`);
+      } finally {
+        _ytDupesSync();
+      }
     });
 
     // ── Purge old posts utility ────────────────────────────────────────────
@@ -5013,7 +5148,20 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       postContextMenu.removeAttribute('hidden');
     }
 
+    // Sections are separated by a top border; hide a section whose items are all
+    // hidden and leave the first visible one borderless.
+    function tidyMenuGroups(menu) {
+      let seenVisible = false;
+      menu.querySelectorAll(':scope > .ctx-group').forEach(group => {
+        const visible = Array.from(group.children).some(el => !el.hidden);
+        group.hidden = !visible;
+        group.classList.toggle('ctx-group-first', visible && !seenVisible);
+        if (visible) seenVisible = true;
+      });
+    }
+
     function positionMenuInViewport(menu, x, y) {
+      tidyMenuGroups(menu);
       const viewportPadding = 8;
       menu.style.left = '0px';
       menu.style.top = '0px';
@@ -16511,28 +16659,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           btn.disabled = false;
           btn.textContent = 'Clean up Shorts';
           showToastMessage('Error running Shorts cleanup.');
-        });
-    });
-
-    document.getElementById('fix-url-titles-btn')?.addEventListener('click', () => {
-      const btn = document.getElementById('fix-url-titles-btn');
-      btn.disabled = true;
-      btn.textContent = 'Scanning…';
-      fetch('/feeds/fix-url-titles', { method: 'POST', credentials: 'same-origin' })
-        .then(r => r.json())
-        .then(d => {
-          btn.disabled = false;
-          btn.textContent = 'Fix URL titles';
-          if (d.queued > 0) {
-            showToastMessage(`Queued ${d.queued} feed${d.queued !== 1 ? 's' : ''} for title refresh.`);
-          } else {
-            showToastMessage('No feeds with URL-style titles found.');
-          }
-        })
-        .catch(() => {
-          btn.disabled = false;
-          btn.textContent = 'Fix URL titles';
-          showToastMessage('Error running title fix.');
         });
     });
 

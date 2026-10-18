@@ -67,3 +67,10 @@ plain fetches (Cloudflare-fronted ones) through the same fetch ladder as opening
 even when the excerpt plus its "Read X on Y" footer looks long enough.
 
 **IsThereAnyDeal waitlist posts** render one compact line per offer (price, discount, store, voucher) instead of a column of short lines.
+
+**Clean up YouTube playlists** (Settings → Utilities → YouTube, needs the YouTube connection). Pick playlists, nothing pre-selected, and
+it removes duplicate videos, keeping the first copy. Two optional extras: remove deleted and private videos (your own private uploads
+stay), plus members-only ones Lectio has already identified; and remove videos blocked in a country you give, using the country blocks
+YouTube lists for each video, which can miss some rights-holder blocks. Because YouTube sometimes removes both copies when you delete
+one, it checks each video afterward and re-adds one that disappeared (it lands at the end of the playlist). Each delete or re-add costs
+50 of the day's YouTube API quota, so a big clean-up can stop partway; it says so and names any video it couldn't put back.
