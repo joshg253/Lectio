@@ -214,8 +214,11 @@ def _sanitize_entry(entry, feed_url: str = ""):
 
     base = _entry_html_base(entry, feed_url)
 
+    # YouTube descriptions are plain text where a line-leading "#Tag" is a hashtag, not a Markdown heading.
+    is_youtube = str(getattr(entry, "id", "") or "").startswith("yt:video:")
+
     def _clean(raw: str) -> str:
-        if _looks_like_markdown(raw):
+        if not is_youtube and _looks_like_markdown(raw):
             raw = _render_markdown(raw)
         # Resolve BEFORE sanitizing: the sanitizer's embed host-allowlist judges
         # absolute URLs, which is what feedparser used to hand it.

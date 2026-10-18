@@ -27,9 +27,9 @@ These dispatchers pick entries "added in the last 15 minutes" with no claim tabl
 ### YouTube playlist rules: watermark may skip entries (Sourcery, 2026-10-17; verify first)
 `_run_youtube_playlist_rules_after_refresh` advances one user-wide last-check watermark per pass, but a pass may cover only some of a rule's feeds (partial refresh) or stop at the 25-per-run cap. Entries older than the next cutoff are then never added. Check whether that happens in practice, then track the watermark per feed or advance it only through fully processed entries.
 
-### YouTube descriptions render hashtag lines as headings (2026-10-14)
-A description that trips `_looks_like_markdown` is rendered as Markdown, so a line-leading `#Tag #Tag` becomes an `<h1>`. Cosmetic;
-the tag capture and its backfill already undo it. Fix by skipping Markdown rendering for `yt:video:` entries or escaping a leading `#`.
+### YouTube plain-text descriptions lose line breaks and mis-linkify `(url)` (review, 2026-10-18)
+The YouTube branch of `get_entry_detail` escapes and linkifies a plain-text description but never turns `\n` into `<br>` (see `_promote_plaintext_summary`),
+so multi-paragraph descriptions run together; its URL regex also swallows a trailing `)` from `(https://...)`. Fix both there.
 
 ### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
 Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
