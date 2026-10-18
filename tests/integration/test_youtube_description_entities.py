@@ -78,3 +78,7 @@ def test_the_reader_sees_a_real_ampersand(env):
 
 def test_bare_urls_still_become_links(env):
     assert 'href="https://example.test/sources?a=1&amp;b=2"' in _content_html()
+
+
+def test_description_line_breaks_are_kept(env):
+    assert "communicate.<br" in _content_html()
