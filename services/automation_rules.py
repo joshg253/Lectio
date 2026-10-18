@@ -1407,7 +1407,8 @@ def _run_tag_filter_rules_for_feed(feed_url: str) -> None:
 
 
 def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
-    """Run enabled mark_as_read, deduplicate, email_article, and hide-shorts for refreshed feeds."""
+    """Run the after-refresh pass for refreshed feeds: hide-shorts, mark_as_read, dedup, tag-filter, then the email, webhook, Instapaper,
+    save-article, Quire and YouTube playlist dispatchers (which run even when no mark-read/dedup/email/tag-filter rule exists)."""
     if not refreshed_feed_urls:
         return
 
@@ -1453,9 +1454,6 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
         enabled_rules = [
             r for r in all_rules if r.get("enabled") and r.get("type") in ("mark_as_read", "deduplicate", "email_article", "tag_filter")
         ]
-        if not enabled_rules:
-            return
-
         now = datetime.now().isoformat()
         ran_dedup_keys: set[tuple[str, str, str]] = set()
 
