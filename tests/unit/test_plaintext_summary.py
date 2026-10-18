@@ -195,3 +195,38 @@ def test_mid_article_product_div_is_kept():
 def test_trailing_product_without_the_rail_shape_is_kept():
     html = '<p>Body</p><div class="product"><p>a closing note</p></div>'
     assert "a closing note" in main._strip_trailing_recirculation_rail(html)
+
+
+def test_description_keeps_line_breaks_and_escapes_once():
+    out = main._linkify_plaintext_description("Sources &amp; more\nline two")
+    assert out == "Sources &amp; more<br>line two"
+
+
+@pytest.mark.parametrize(
+    ("text", "href", "tail"),
+    [
+        ("see (https://example.com/x) now", "https://example.com/x", ")"),
+        ("go to https://example.com/x.", "https://example.com/x", "."),
+        ("wiki https://example.com/a_(b) ok", "https://example.com/a_(b)", ""),
+    ],
+)
+def test_description_url_excludes_trailing_punctuation(text, href, tail):
+    out = main._linkify_plaintext_description(text)
+    assert f'<a href="{href}" target="_blank" rel="noopener noreferrer">{href}</a>{tail}' in out
+
+
+@pytest.mark.parametrize(
+    ("text", "href"),
+    [
+        ("see <https://example.com/x> ok", "https://example.com/x"),
+        ('say "https://example.com/x" ok', "https://example.com/x"),
+        ("a https://example.com/?a=1&b=2 b", "https://example.com/?a=1&amp;b=2"),
+    ],
+)
+def test_description_url_stops_at_quotes_and_brackets(text, href):
+    out = main._linkify_plaintext_description(text)
+    assert f'<a href="{href}" target="_blank" rel="noopener noreferrer">{href}</a>' in out
+
+
+def test_description_crlf_becomes_single_break():
+    assert main._linkify_plaintext_description("a\r\nb") == "a<br>b"

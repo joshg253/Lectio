@@ -15517,6 +15517,28 @@ def _looks_like_escaped_plaintext(value: str | None) -> bool:
     return not _REAL_HTML_TAG_RE.search(value)
 
 
+def _linkify_plaintext_description(text: str) -> str:
+    """Render a plain-text description (YouTube) as HTML: escape once, linkify bare URLs, keep line breaks.
+
+    The input can arrive HTML-escaped ("Sources &amp; further reading"), so it is unescaped first. URLs are matched on the unescaped text,
+    where the regex really does exclude spaces, quotes and angle brackets, and each piece is escaped exactly once. Trailing sentence
+    punctuation and an unbalanced ")" are left outside the link, so "(https://example.com/x)" links to just the URL."""
+    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
+    out: list[str] = []
+    pos = 0
+    for m in _BARE_URL_RE.finditer(text):
+        url, tail = m.group(0), ""
+        while url and (url[-1] in ".,!?:" or (url[-1] == ")" and url.count(")") > url.count("("))):
+            tail = url[-1] + tail
+            url = url[:-1]
+        out.append(html.escape(text[pos : m.start()]))
+        safe_url = html.escape(url)
+        out.append(f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">{safe_url}</a>{html.escape(tail)}')
+        pos = m.end()
+    out.append(html.escape(text[pos:]))
+    return "".join(out).replace("\n", "<br>")
+
+
 def _promote_plaintext_summary(summary: str | None) -> str | None:
     """Turn a bare-text summary into renderable HTML, or None to leave it as-is.
 
@@ -17787,17 +17809,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 # it again rendered a literal "&amp;" on screen. Unescape first,
                 # exactly as _promote_plaintext_summary does, then escape once.
                 if base_html and not re.search(r"<[a-z]", base_html, re.IGNORECASE):
-
-                    def _linkify_url(m: re.Match) -> str:
-                        # The match comes out of text this function already escaped,
-                        # so escaping it again turns a URL's "&amp;" into
-                        # "&amp;amp;". The regex excludes spaces, quotes and angle
-                        # brackets, so the segment is href-safe as it stands — the
-                        # same contract _promote_plaintext_summary's linkifier uses.
-                        seg = m.group(0)
-                        return f'<a href="{seg}" target="_blank" rel="noopener noreferrer">{seg}</a>'
-
-                    base_html = re.sub(r"https?://[^\s<>\"']+", _linkify_url, html.escape(html.unescape(base_html)))
+                    base_html = _linkify_plaintext_description(base_html)
                 content_html = embed_html + f"<div>{base_html}</div>"
 
         # Podcast audio player + footer attachments + (when no audio) a suggestion
