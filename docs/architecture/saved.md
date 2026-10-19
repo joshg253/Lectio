@@ -1093,7 +1093,12 @@ whether it actually landed.
 A failed source-page fetch still completes the archive (the feed's own content may be all there is), so `status='complete'` alone
 can't tell a dead link from a real empty post. `_archive_entry` records the fetch outcome in `archived_entry.source_fetch_status`
 (`ok`, `no_link`, `http_<code>`, `timeout`, `tls`, `connect`, `blocked`, `error`; see `_classify_fetch_error`). Rows captured before
-2026-09-23 are NULL. It's a column, not just a log line, so it can be queried and surfaced later.
+2026-09-23 are NULL. It's a column, not just a log line, so it can be queried.
+
+The Saved filter menu's **Capture failed** item (`read_filter=capture_failed`, Saved scope only) is that query: failed statuses plus
+complete archives with `content_size_bytes = 0` and no status (`StarredArchiveService.get_capture_failed_keys`, covered by
+`idx_archived_entry_capture`). It covers unsubscribed feeds too (`merge_orphan_saved_entries(capture_failed=True)`). The item shows only
+while something has failed. No per-row badge.
 
 ## Saved/Kept item size: maintained, not computed live
 

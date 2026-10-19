@@ -1330,6 +1330,7 @@ def _resolve_view_posts(
                 limit=_MOVE_VISIBLE_LIMIT,
                 search_terms=search_terms_from_query(normalized_query),
                 kept_scope=("starred" if inbox_view else "kept"),
+                capture_failed=normalized_read_filter == "capture_failed",
             )
         except Exception:  # noqa: BLE001 — the live-entry resolution above still stands
             LOGGER.exception("[resolve-view] orphan merge failed")

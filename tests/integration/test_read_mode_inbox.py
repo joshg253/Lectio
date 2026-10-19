@@ -498,3 +498,40 @@ def test_dead_feed_beacons_are_dropped_rather_than_proxied():
 def test_dropping_beacons_leaves_real_images_alone():
     tag = '<img src="https://3.bp.blogspot.com/x/Boil.JPG">'
     assert main._drop_feed_beacon_images(tag) == tag
+
+
+@pytest.mark.parametrize("sort_key", ["new", "old", "recent", "starred"])
+def test_capture_failed_filter_applies_before_the_window_clip(configured, monkeypatch, sort_key):
+    """One failed capture among four kept items must surface even with a window of 1, in every sort order."""
+    monkeypatch.setattr(main.starred_archive_service, "get_capture_failed_keys", lambda: {(FEED, "filed")})
+    sort_by, sort_dir = main._READ_SORTS[sort_key]
+    rows = main.resolve_reader_backlog(
+        folder_id=None,
+        list_feed_url=None,
+        read_filter="capture_failed",
+        star_only=True,
+        tag=None,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        search_query=None,
+        limit=1,
+        kept_scope="kept",
+    )
+    assert [r["id"] for r in rows] == ["filed"]
+
+
+def test_capture_failed_is_ignored_outside_saved(configured, monkeypatch):
+    monkeypatch.setattr(main.starred_archive_service, "get_capture_failed_keys", lambda: {(FEED, "filed")})
+    rows = main.resolve_reader_backlog(
+        folder_id=None,
+        list_feed_url=None,
+        read_filter="capture_failed",
+        star_only=False,
+        tag=None,
+        sort_by="post",
+        sort_dir="desc",
+        search_query=None,
+        limit=50,
+        kept_scope="kept",
+    )
+    assert {r["id"] for r in rows} == {"todo", "filed", "both", "done"}

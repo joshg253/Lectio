@@ -151,3 +151,25 @@ def test_entry_without_a_link_is_recorded_as_no_link(tmp_path):
     svc._archive_entry(FEED, "e1")
 
     assert _stored_row(connect)["source_fetch_status"] == "no_link"
+
+
+def test_capture_failed_keys_include_failures_and_empty_unclassified(tmp_path):
+    svc, connect = _service(tmp_path, _entry())
+    rows = (
+        ("a", "complete", "http_404", None),
+        ("b", "complete", "timeout", 500),
+        ("c", "complete", "ok", 0),
+        ("d", "complete", "no_link", 0),
+        ("e", "complete", None, 0),  # empty and never classified
+        ("f", "complete", None, 900),  # has content
+        ("g", "pending", None, 0),  # not captured yet
+    )
+    with connect() as conn:
+        for entry_id, status, fetch_status, size in rows:
+            conn.execute(
+                "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, source_fetch_status, content_size_bytes)"
+                " VALUES (?, ?, ?, 0, ?, ?)",
+                (FEED, entry_id, status, fetch_status, size),
+            )
+
+    assert svc.get_capture_failed_keys() == {(FEED, "a"), (FEED, "b"), (FEED, "e")}

@@ -560,10 +560,10 @@
         {% if inbox_view %}{% set tb_base = tb_base ~ '&kept=starred' %}{% endif %}
         {% set tb_sort = (('&sort_by=' ~ selected_sort_by) if selected_sort_by != 'post' else '') ~ (('&sort_dir=' ~ selected_sort_dir) if selected_sort_dir != 'asc' else '') %}
         {% set tb_rf = (('&read_filter=' ~ selected_read_filter) if selected_read_filter != 'all' else '') ~ ('&star_only=1' if selected_star_only else '') ~ (('&resume_read_filter=' ~ selected_resume_read_filter) if selected_resume_read_filter != selected_read_filter else '') %}
-        {% set resume_filter = selected_resume_read_filter if selected_read_filter == 'history' else selected_read_filter %}
-        {% set filter_label = ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if (selected_star_only or selected_read_filter == 'starred') else ('History' if selected_read_filter == 'history' else 'All')) %}
-        {% set filter_icon = 'star' if (selected_star_only or selected_read_filter == 'starred') else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
-        {% set filter_is_active = selected_read_filter == 'unread' or selected_star_only or selected_read_filter == 'starred' %}
+        {% set resume_filter = selected_resume_read_filter if selected_read_filter in ('history', 'capture_failed') else selected_read_filter %}
+        {% set filter_label = 'Capture failed' if selected_read_filter == 'capture_failed' else ('Starred · Unread' if selected_star_only else 'Unread') if selected_read_filter == 'unread' else ('Starred' if (selected_star_only or selected_read_filter == 'starred') else ('History' if selected_read_filter == 'history' else 'All')) %}
+        {% set filter_icon = 'cloud_off' if selected_read_filter == 'capture_failed' else 'star' if (selected_star_only or selected_read_filter == 'starred') else ('mark_email_unread' if selected_read_filter == 'unread' else ('history' if selected_read_filter == 'history' else 'format_list_bulleted')) %}
+        {% set filter_is_active = selected_read_filter in ('unread', 'capture_failed') or selected_star_only or selected_read_filter == 'starred' %}
         {% set sort_is_active = selected_sort_by != 'post' or selected_sort_dir != 'desc' %}
         {# 'Star' is why this exists: order-by-star-date reaching the toolbar as
            an unlabelled case is the bug that made it read "Published newest"
@@ -616,6 +616,10 @@
                    everything is star/tag-scoped already. #}
                 {% if not selected_star_only %}
                 <a class="menu-item {% if selected_read_filter == 'starred' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=starred' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">star</span> Starred</a>
+                {% endif %}
+                {# Saved only: kept items whose source page could not be captured; shown while any exist or while active. #}
+                {% if selected_star_only and (has_capture_failed or selected_read_filter == 'capture_failed') %}
+                <a class="menu-item {% if selected_read_filter == 'capture_failed' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=capture_failed&star_only=1' }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">cloud_off</span> Capture failed</a>
                 {% endif %}
                 <hr class="menu-divider" />
                 <a class="menu-item filter-history-item {% if selected_read_filter == 'history' %}active{% endif %}" href="{{ tb_base ~ tb_sort ~ '&read_filter=history' ~ (('&resume_read_filter=' ~ resume_filter) if resume_filter != 'history' else '') }}"><span class="material-symbols-rounded" style="font-size:1rem;vertical-align:-3px" aria-hidden="true">history</span> History</a>

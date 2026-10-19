@@ -15,6 +15,9 @@ When a saved article's page rots, **Re-fetch from Internet Archive** pulls the
 snapshot instead — and because archived copies usually still carry the byline the
 publisher has since dropped, that often recovers the date as well as the text.
 
+The Saved filter menu's **Capture failed** item lists saves whose page couldn't be fetched (dead link, block, timeout) or came back empty,
+including saves from feeds you've unsubscribed from, so you can re-fetch or delete them.
+
 **Keep the files a post links to.** Some posts are really a wrapper around a
 download — guitar-pro's tab posts link `.gp` files and PDF lyric sheets that
 vanish with the article, so keeping the text without them keeps the wrong half.

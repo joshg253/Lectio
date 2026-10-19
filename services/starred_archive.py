@@ -543,6 +543,26 @@ class StarredArchiveService:
             return None
         return str(row["source_url"]) if row else None
 
+    def get_capture_failed_keys(self) -> set[tuple[str, str]]:
+        """(feed_url, entry_id) of archives whose source page could not be captured (a dead link, block, timeout...), plus complete
+        archives with no content at all and no recorded status (captured before the status existed).
+
+        `ok` and `no_link` (nothing to capture) are not failures. Empty is `content_size_bytes = 0`, so the query is served by
+        `idx_archived_entry_capture` without touching the blobs.
+        """
+        try:
+            with self._archive_conn() as conn:
+                rows = conn.execute(
+                    "SELECT feed_url, entry_id FROM archived_entry"
+                    " WHERE (source_fetch_status IS NOT NULL AND source_fetch_status NOT IN ('ok', 'no_link'))"
+                    " OR (status = 'complete' AND source_fetch_status IS NULL"
+                    "     AND content_size_bytes = 0)"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            # No archive table yet (a fresh tenant before the first capture): nothing has failed.
+            return set()
+        return {(str(r["feed_url"]), str(r["entry_id"])) for r in rows}
+
     def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
         """True if a `complete` archive row exists for this key."""
         try:
