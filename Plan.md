@@ -32,6 +32,12 @@ inside the 15-minute window re-queues an already-digested entry. The key also la
 Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
 to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
 
+### Highlighter doesn't fold curly quotes like the server matcher (2026-10-19)
+
+The server's plain matcher folds curly apostrophes, quotes and non-breaking spaces on both sides (`fold_for_match`); the browser highlighter
+(`applyHighlights`) searches the literal term, so a rule `Apple's` highlights `Apple's` but not `Apple’s`. Fix by mapping `'`, `"` and a space in each
+escaped term to the matching character classes.
+
 ### Archive fetch-status follow-ups (decided 2026-10-17)
 
 `archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`
