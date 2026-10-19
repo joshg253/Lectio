@@ -49,6 +49,10 @@ ARCHIVE_IMAGE_WEBP_QUALITY = 80
 ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024
 ARCHIVE_FETCH_TIMEOUT_S = 15.0
 ARCHIVE_WORKER_POLL_INTERVAL_S = 5.0
+CAPTURE_RETRY_MAX_PER_RUN = 20
+CAPTURE_RETRY_MAX_TRIES = 3
+CAPTURE_RETRY_MAX_PER_HOST = 3
+CAPTURE_RETRY_MIN_AGE_S = 7 * 86400
 ARCHIVE_WORKER_QUIET_INTERVAL_S = 30.0  # back off when nothing pending
 
 _IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
@@ -578,6 +582,65 @@ class StarredArchiveService:
             if not self._no_archive_table(exc):
                 raise
             return False
+
+    def requeue_transient_failures(
+        self,
+        exists: Callable[[str, str], bool],
+        *,
+        limit: int = CAPTURE_RETRY_MAX_PER_RUN,
+        per_host: int = CAPTURE_RETRY_MAX_PER_HOST,
+        max_tries: int = CAPTURE_RETRY_MAX_TRIES,
+        min_age_s: float = CAPTURE_RETRY_MIN_AGE_S,
+    ) -> int:
+        """Flag captures whose source fetch failed in a way that can heal on its own (`timeout`, `connect`, `http_5xx`) for retry.
+
+        Called by nightly maintenance. A row is retried only if it has been tried fewer than `max_tries` times and the last try
+        (or the original capture) is at least `min_age_s` old; at most `limit` rows go per run and `per_host` per source host, so a
+        struggling site isn't hit in a burst. Blocks, TLS errors, 4xx, bad links and other errors are never retried. `exists(feed_url,
+        entry_id)` says whether the entry is still in the reader; an unsubscribed feed's save has nothing to re-capture and is skipped.
+
+        The row stays `complete` (its current capture keeps rendering and can't be lost if the retry fails); the worker picks it up
+        through `capture_retry_pending`, after any normal pending captures. Returns the count flagged.
+        """
+        now = time.time()
+        try:
+            with self._archive_conn() as conn:
+                rows = conn.execute(
+                    "SELECT feed_url, entry_id, link FROM archived_entry"
+                    " WHERE status = 'complete' AND capture_retry_pending = 0"
+                    "   AND (source_fetch_status IN ('timeout', 'connect') OR source_fetch_status GLOB 'http_5*')"
+                    "   AND capture_retries < ?"
+                    "   AND COALESCE(capture_retried_at, archived_at, 0) <= ?"
+                    " ORDER BY COALESCE(capture_retried_at, archived_at, 0) ASC",
+                    (max_tries, now - min_age_s),
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if not self._no_archive_table(exc):
+                raise
+            return 0
+        flagged = 0
+        per_host_count: dict[str, int] = defaultdict(int)
+        for row in rows:
+            if flagged >= limit:
+                break
+            feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+            host = (urlparse(str(row["link"] or "")).hostname or "").lower()
+            if per_host_count[host] >= per_host:
+                continue
+            try:
+                if not exists(feed_url, entry_id):
+                    continue
+                with self._archive_conn() as conn:
+                    changed = conn.execute(
+                        "UPDATE archived_entry SET capture_retry_pending = 1, capture_retries = capture_retries + 1,"
+                        " capture_retried_at = ? WHERE feed_url = ? AND entry_id = ? AND status = 'complete'",
+                        (now, feed_url, entry_id),
+                    ).rowcount
+                flagged += changed
+                per_host_count[host] += changed
+            except Exception:  # noqa: BLE001 — one bad row must not abort the pass
+                LOGGER.exception("starred archive: transient retry failed for %s/%s", feed_url, entry_id)
+        return flagged
 
     def has_complete_archive(self, feed_url: str, entry_id: str) -> bool:
         """True if a `complete` archive row exists for this key."""
@@ -1457,14 +1520,30 @@ class StarredArchiveService:
                 row = conn.execute(
                     "SELECT feed_url, entry_id FROM archived_entry WHERE status = 'pending' ORDER BY starred_at ASC LIMIT 1"
                 ).fetchone()
-                if not row:
-                    return False
-                feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
-                # Claim it.
-                claimed = conn.execute(
-                    "UPDATE archived_entry SET status = 'in_progress' WHERE feed_url = ? AND entry_id = ? AND status = 'pending'",
-                    (feed_url, entry_id),
-                ).rowcount
+                retry = False
+                if row:
+                    feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+                    # Claim it.
+                    claimed = conn.execute(
+                        "UPDATE archived_entry SET status = 'in_progress' WHERE feed_url = ? AND entry_id = ? AND status = 'pending'",
+                        (feed_url, entry_id),
+                    ).rowcount
+                else:
+                    # Nothing new to capture: take a flagged retry. The row stays 'complete' throughout, so its existing capture
+                    # keeps serving and a failed retry loses nothing.
+                    row = conn.execute(
+                        "SELECT feed_url, entry_id FROM archived_entry"
+                        " WHERE status = 'complete' AND capture_retry_pending = 1 ORDER BY capture_retried_at ASC LIMIT 1"
+                    ).fetchone()
+                    if not row:
+                        return False
+                    retry = True
+                    feed_url, entry_id = str(row["feed_url"]), str(row["entry_id"])
+                    claimed = conn.execute(
+                        "UPDATE archived_entry SET capture_retry_pending = 0"
+                        " WHERE feed_url = ? AND entry_id = ? AND capture_retry_pending = 1",
+                        (feed_url, entry_id),
+                    ).rowcount
             if not claimed:
                 return False
         except sqlite3.Error as exc:
@@ -1475,6 +1554,8 @@ class StarredArchiveService:
             self._archive_entry(feed_url, entry_id)
         except Exception as exc:  # noqa: BLE001 — worker must never die
             LOGGER.exception("starred archive: capture failed for %s / %s: %s", feed_url, entry_id, exc)
+            if retry:
+                return True  # the earlier capture is untouched and still 'complete'
             try:
                 with self._archive_conn() as conn:
                     conn.execute(
