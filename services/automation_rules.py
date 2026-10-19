@@ -484,6 +484,33 @@ def _run_tag_filter(
 _EMAIL_AUTO_PER_RUN_CAP = 10  # max immediate emails per refresh cycle
 
 
+def _rule_claim_key(rule: dict, kind: str) -> str:
+    """Stable key for a rule's dispatch claims: rule_uid, else the text identity (older rows)."""
+    uid = str(rule.get("rule_uid") or "")
+    if uid:
+        return f"{kind}:{uid}"
+    return f"{kind}:{rule.get('scope', '')}:{rule.get('scope_id') or ''}:{rule.get('keyword', '')}"
+
+
+def _claim_dispatch(rule_key: str, feed_url: str, entry_id: str) -> bool:
+    """Claim (rule, entry) before sending; False means another pass already did, so skip."""
+    with get_meta_connection() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO automation_dispatched (rule_key, feed_url, entry_id, dispatched_at) VALUES (?, ?, ?, ?)",
+            (rule_key, feed_url, entry_id, datetime.now().isoformat()),
+        )
+        return cur.rowcount == 1
+
+
+def _release_dispatch(rule_key: str, feed_url: str, entry_id: str) -> None:
+    """Drop a claim after a failed send so the next pass retries it."""
+    with get_meta_connection() as conn:
+        conn.execute(
+            "DELETE FROM automation_dispatched WHERE rule_key=? AND feed_url=? AND entry_id=?",
+            (rule_key, feed_url, entry_id),
+        )
+
+
 def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
     """Send or queue email_article rule matches for freshly-refreshed feeds."""
     if not is_email_configured():
@@ -565,17 +592,24 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                             if delivery == "immediately":
                                 if immediate_sent >= _EMAIL_AUTO_PER_RUN_CAP:
                                     continue
-                                ok, err = send_article_email(
-                                    get_resend_api_key(),
-                                    get_resend_from(),
-                                    email_to,
-                                    article["title"],
-                                    article["feed_title"],
-                                    article["link"],
-                                    article["excerpt"],
-                                    cc_addr=cc_addr,
-                                    **email_article_extras(fu, article["entry_id"], entry),
-                                )
+                                claim_key = _rule_claim_key(rule, "email")
+                                if not _claim_dispatch(claim_key, fu, article["entry_id"]):
+                                    continue
+                                try:
+                                    ok, err = send_article_email(
+                                        get_resend_api_key(),
+                                        get_resend_from(),
+                                        email_to,
+                                        article["title"],
+                                        article["feed_title"],
+                                        article["link"],
+                                        article["excerpt"],
+                                        cc_addr=cc_addr,
+                                        **email_article_extras(fu, article["entry_id"], entry),
+                                    )
+                                except Exception:
+                                    _release_dispatch(claim_key, fu, article["entry_id"])
+                                    raise
                                 if ok:
                                     immediate_sent += 1
                                     with get_meta_connection() as conn:
@@ -592,6 +626,7 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                             },
                                         )
                                 else:
+                                    _release_dispatch(claim_key, fu, article["entry_id"])
                                     LOGGER.warning("[email-auto] send failed: %s", err)
                             else:
                                 # batch mode — queue for digest
@@ -683,6 +718,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
         now_str = datetime.now().isoformat()
 
         for rule in webhook_rules:
+            claimed: list[tuple[str, str]] = []  # batch-mode claims not yet delivered
             try:
                 scope = str(rule.get("scope", ""))
                 scope_id = str(rule.get("scope_id") or "")
@@ -692,6 +728,7 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                 webhook_url = str(rule.get("webhook_url") or "")
                 webhook_format = str(rule.get("webhook_format") or "generic")
                 webhook_batch = bool(rule.get("webhook_batch"))
+                claim_key = _rule_claim_key(rule, "webhook")
 
                 with get_reader() as reader:
                     feed_title_cache: dict[str, str] = {}
@@ -732,12 +769,20 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 "tags": get_manual_tags_for_entry(fu, str(entry.id)),
                             }
 
+                            # Claim last, after everything that can raise, so a failure here cannot strand a claim.
+                            if not _claim_dispatch(claim_key, fu, str(entry.id)):
+                                continue
                             if webhook_batch:
+                                claimed.append((fu, str(entry.id)))
                                 batch_articles.append(article)
                                 sent += 1
                             else:
-                                payload = build_webhook_payload(article, webhook_format)
-                                ok, err = send_webhook(webhook_url, payload)
+                                try:
+                                    payload = build_webhook_payload(article, webhook_format)
+                                    ok, err = send_webhook(webhook_url, payload)
+                                except Exception:
+                                    _release_dispatch(claim_key, fu, str(entry.id))
+                                    raise
                                 if ok:
                                     sent += 1
                                     with get_meta_connection() as conn:
@@ -754,12 +799,14 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                             },
                                         )
                                 else:
+                                    _release_dispatch(claim_key, fu, str(entry.id))
                                     LOGGER.warning("[webhook-auto] POST failed: %s", err)
 
                 if webhook_batch and batch_articles:
                     payload = build_webhook_batch_payload(batch_articles, webhook_format)
                     ok, err = send_webhook(webhook_url, payload)
                     if ok:
+                        claimed.clear()
                         with get_meta_connection() as conn:
                             _log_auto_run(
                                 conn,
@@ -774,8 +821,12 @@ def _run_webhook_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                 },
                             )
                     else:
+                        for c_fu, c_eid in claimed:
+                            _release_dispatch(claim_key, c_fu, c_eid)
                         LOGGER.warning("[webhook-auto] batch POST failed: %s", err)
             except Exception:
+                for c_fu, c_eid in claimed:  # a batch that never reached its POST
+                    _release_dispatch(claim_key, c_fu, c_eid)
                 LOGGER.exception("[webhook-auto] error processing webhook rule %s/%s", scope, keyword)
     except Exception:
         LOGGER.exception("[webhook-auto] error in _run_webhook_rules_after_refresh")
@@ -1046,8 +1097,12 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                     feed_title_cache[fu] = str(getattr(reader.get_feed(fu), "title", None) or fu)
                                 except Exception:
                                     feed_title_cache[fu] = fu
+                            claim_key = _rule_claim_key(rule, "quire")
+                            if not _claim_dispatch(claim_key, fu, str(entry.id)):
+                                continue
                             ok, err = _quire_add_entry(token, project_oid, str(entry.title or ""), link, feed_title_cache.get(fu, fu))
                             if not ok:
+                                _release_dispatch(claim_key, fu, str(entry.id))
                                 LOGGER.warning("[quire-auto] add failed: %s", err)
                                 if isinstance(err, str) and "rate limit" in err.lower():
                                     return  # back off the whole run on 429

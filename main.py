@@ -4625,6 +4625,20 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE email_batch_queue ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Per-rule, per-entry claim for the webhook / Quire / immediate-email dispatchers: they select entries "added in the last
+        # 15 minutes", so two passes for one feed inside that window would otherwise fire a match twice. A row is inserted before
+        # the send and deleted if the send fails; rows past the window are pruned nightly.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS automation_dispatched (
+                rule_key TEXT NOT NULL,
+                feed_url TEXT NOT NULL,
+                entry_id TEXT NOT NULL,
+                dispatched_at TEXT NOT NULL,
+                PRIMARY KEY (rule_key, feed_url, entry_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS scraped_feeds (
@@ -20419,6 +20433,14 @@ def _daily_maintenance_for_user() -> None:
                 LOGGER.info("[maintenance] pruned %d old rule run log entries", len(old_ids))
     except Exception:
         LOGGER.exception("[maintenance] rule log prune failed")
+
+    # 1a. automation_dispatched claims only matter inside the dispatchers' 15-minute window.
+    try:
+        claim_cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+        with get_meta_connection() as conn:
+            conn.execute("DELETE FROM automation_dispatched WHERE dispatched_at < ?", (claim_cutoff,))
+    except Exception:
+        LOGGER.exception("[maintenance] automation claim prune failed")
 
     # 1b. Bound feed_fetch_history: drop anything older than the age cap, plus a
     # fixed per-feed ceiling as a backstop against a pathologically-retried feed

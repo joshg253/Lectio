@@ -32,6 +32,12 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 > bg-refresh thread, and 3 refresh routes all still call it directly) via the
 > same bottom-of-file import-back.
 
+> The webhook, Quire and immediate-email dispatchers pick entries "added in the last 15 minutes", so each claims
+> `automation_dispatched (rule_key, feed_url, entry_id)` with `INSERT OR IGNORE` just before sending (rowcount 0 means another pass
+> already did) and releases the claim if the send fails or raises, so it retries. A process crash between claim and send loses that
+> entry (at-most-once; the window is one HTTP call). Rows are pruned after 7 days. Instapaper dedupes by URL upstream, and save-article
+> is idempotent.
+
 ## Per-user integrations
 
 - **YouTube quota meter (per-user)** — the Data API exposes no remaining-quota read,
