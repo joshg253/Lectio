@@ -3476,6 +3476,11 @@ def ensure_starred_archive_schema() -> None:
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_archived_entry_status ON archived_entry (status)")
+        # Covers get_capture_failed_keys, so it never reads the capture blobs.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_archived_entry_capture"
+            " ON archived_entry (source_fetch_status, status, content_size_bytes, feed_url, entry_id)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS archived_asset (
@@ -10586,7 +10591,7 @@ def normalize_read_filter(read_filter: str | None) -> str:
     # "starred" is independent of read state entirely (see list_entries_for_feeds)
     # and deliberately not part of the get_next_read_filter cycle — reachable only
     # from the filter dropdown, not the cycle shortcut.
-    if read_filter in {"all", "unread", "history", "starred"}:
+    if read_filter in {"all", "unread", "history", "starred", "capture_failed"}:
         return read_filter
     if read_filter == "read":
         return "history"
@@ -10606,6 +10611,7 @@ def get_next_read_filter(read_filter: str) -> str:
         "all": "unread",
         "unread": "history",
         "history": "all",
+        "capture_failed": "all",
     }[normalize_read_filter(read_filter)]
 
 
@@ -14046,6 +14052,9 @@ def _list_entries_for_feeds_fetch(
     # newest-first (recent archives sort high) and returned nothing under
     # "Recently starred", where an archived item has no star date at all.
     archive_filter_keys = get_archived_saved_keys() if archived is not None else set()
+    capture_failed_keys = (
+        starred_archive_service.get_capture_failed_keys() if (normalized_read_filter == "capture_failed" and normalized_star_only) else None
+    )
     # Archived counts as kept, the same third keep signal `entry_has_keep_signal`
     # and `_prune_entries` honor. Archiving REMOVES the star, so an archived item
     # with no tag is otherwise not "kept" by any axis and would be unreachable in
@@ -14149,6 +14158,10 @@ def _list_entries_for_feeds_fetch(
                 # put it far outside the first 150 and the Archive node rendered
                 # "Nothing here" while its count said 1.
                 star_keys = {k for k in star_keys if (k in archive_filter_keys) == archived}
+            if capture_failed_keys is not None:
+                # Same reason as the archived narrowing above: filter before the window clip, or failures outside the
+                # first window never show.
+                star_keys = {k for k in star_keys if k in capture_failed_keys}
             if search_terms:
                 # Narrow in SQL BEFORE hydrating. This branch runs ahead of the
                 # `elif search_terms` fast path below, so the Saved view was the
@@ -14411,6 +14424,9 @@ def _list_entries_for_feeds_fetch(
             if normalized_read_filter == "starred" and not is_saved:
                 continue
             if archived is not None and (((entry.feed_url, entry.id) in archive_filter_keys) != archived):
+                continue
+            # Saved-view "Capture failed": kept items whose source-page capture failed (see get_capture_failed_keys).
+            if capture_failed_keys is not None and (entry.feed_url, entry.id) not in capture_failed_keys:
                 continue
             # Unread composes with star_only (Saved view narrowed to unread);
             # history stays exclusive with starred (it sorts by read time).
@@ -15148,8 +15164,12 @@ def merge_orphan_saved_entries(
     archived: bool | None = None,
     search_terms: list[str] | None = None,
     kept_scope: str = "kept",
+    capture_failed: bool = False,
 ) -> list[dict]:
     """Append archive-only saved entries (orphans), then re-sort + clip.
+
+    *capture_failed* narrows orphans to failed or empty captures (see get_capture_failed_keys); live *posts* are already narrowed by the
+    caller.
 
     *archived* (the done-axis) must be applied HERE, not by the caller: this
     re-sorts and re-clips to *limit*, so a caller filtering afterwards sees only
@@ -15186,6 +15206,9 @@ def merge_orphan_saved_entries(
     orphans = starred_archive_service.get_orphan_saved_entries(live_feed_urls, search_terms, kept_scope=kept_scope)
     if archived is not None:
         orphans = [o for o in orphans if ((str(o["feed_url"]), str(o["id"])) in archived_keys) == archived]
+    if capture_failed:
+        failed_keys = starred_archive_service.get_capture_failed_keys()
+        orphans = [o for o in orphans if (str(o["feed_url"]), str(o["id"])) in failed_keys]
     if only_feed_url is not None:
         target = normalize_feed_url(only_feed_url)
         orphans = [o for o in orphans if normalize_feed_url(o["feed_url"]) == target]
@@ -21149,6 +21172,7 @@ def resolve_reader_backlog(
                 archived=archived,
                 search_terms=search_terms_from_query(search_query),
                 kept_scope=kept_scope,
+                capture_failed=normalize_read_filter(read_filter) == "capture_failed",
             )
             _merged_orphans = True
         except Exception as exc:  # noqa: BLE001
@@ -22348,6 +22372,8 @@ def _home_inner(
     legacy_saved_mode = (read_filter or "").strip().lower() == "saved"
     selected_read_filter = normalize_read_filter(read_filter)
     selected_star_only = normalize_star_only(star_only) or legacy_saved_mode
+    if selected_read_filter == "capture_failed" and not selected_star_only:
+        selected_read_filter = "all"  # a Saved-only filter must not leak into Feeds (e.g. via History's resume link)
     # Search always spans All (searching only unread is never the intent);
     # the pre-search filter is carried in resume_read_filter so clearing the
     # search restores it. History keeps its own machinery.
@@ -22616,6 +22642,7 @@ def _home_inner(
                 only_feed_url=orphan_only_feed,
                 search_terms=search_terms_from_query(selected_query),
                 kept_scope=("starred" if inbox_view else "kept"),
+                capture_failed=selected_read_filter == "capture_failed",
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge (feed %s) failed: %s", orphan_only_feed, exc)
@@ -22645,6 +22672,7 @@ def _home_inner(
                 sort_dir=selected_sort_dir,
                 limit=limit,
                 kept_scope=("starred" if inbox_view else "kept"),
+                capture_failed=selected_read_filter == "capture_failed",
             )
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("orphan saved entry merge failed: %s", exc)
@@ -22849,6 +22877,7 @@ def _home_inner(
         "selected_sort_by": selected_sort_by,
         "selected_sort_dir": selected_sort_dir,
         "selected_read_filter": selected_read_filter,
+        "has_capture_failed": bool(selected_star_only and starred_archive_service.has_capture_failed()),
         "selected_star_only": selected_star_only,
         "selected_saved_home": selected_saved_home,
         "selected_home": selected_home,
