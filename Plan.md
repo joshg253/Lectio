@@ -24,9 +24,6 @@ Empty.
 ### Webhook, Quire and Instapaper rules have no per-entry duplicate guard
 These dispatchers pick entries "added in the last 15 minutes" with no claim table, so two automation passes for the same feed inside that window (scheduler tick plus a manual or WebSub refresh) fire a matching entry twice; Quire would create two tasks. Save-article and YouTube playlist rules are already idempotent. Fix with a per-rule, per-entry claim row like `youtube_playlist_added`.
 
-### YouTube playlist rules: watermark may skip entries (Sourcery, 2026-10-17; verify first)
-`_run_youtube_playlist_rules_after_refresh` advances one user-wide last-check watermark per pass, but a pass may cover only some of a rule's feeds (partial refresh) or stop at the 25-per-run cap. Entries older than the next cutoff are then never added. Check whether that happens in practice, then track the watermark per feed or advance it only through fully processed entries.
-
 ### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
 Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
 extraction is empty, so a feed that drops all of an entry's tags never clears the stored `source='feed'` rows; (2) `entry_feed_tags` is
@@ -465,9 +462,6 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 - Filtered pages still resolve and enrich the whole 2,000-row window per request (~2s); filtering the light records before enrichment would make each page cheap.
 - `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
 - Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.
-
-### Auto add-to-playlist: hidden unpremiered videos
-A hidden unpremiered video is skipped for good (the watermark moves past it); revisit it after it airs if wanted. The duration filter's "retried once cached" has the same watermark problem for a video whose duration isn't cached on the first pass.
 
 ### Mergeable Mark as Read rules: plain text to regex
 Two Mark as Read rules on Deals could be one if the plain-text rule became regex, but combining never behaves quite the same without word boundaries:

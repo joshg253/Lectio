@@ -275,12 +275,19 @@ another rule's drops. `++` feed rules are never flagged.
   `yt_min_minutes`/`yt_max_minutes`
   (0 = no limit). The **duration filter** reuses the cached video length (the same
   store behind the `[duration]` title prefix), so it needs the `YOUTUBE_API_KEY`; a
-  video whose duration isn't cached yet is skipped that run and retried once it is.
+  video whose duration isn't cached yet is skipped that run and retried on a later pass (see the watermark note below).
   **Content settings:** a video the feed's (or the global) *hide unpremiered* / *hide members-only* setting hides is never added; the
   rule has no setting of its own for those, so the content setting wins. For a feed that hides unpremiered videos the rule first fetches
   live status for its videos (the scheduler runs automation before the duration/live-status pass, so a new premiere is otherwise unknown).
-  Members-only uses the cached verdict only (the hide pass fetches it), never a fetch of its own. A skipped video is not revisited: the
-  watermark moves past it, so an unpremiered video is not added once it airs.
+  Members-only uses the cached verdict only (the hide pass fetches it), never a fetch of its own. A hidden unpremiered video is
+  retried on later passes, so it is added once it airs.
+  **Held watermark:** a run that leaves work undone (the 25-per-run cap, quota spent, a rule error, an uncached duration, a hidden
+  unpremiered video) does not advance the user-wide last-check watermark; it stays at the old cutoff but never older than 48 hours, so a
+  video that never resolves (a premiere further out than that) is dropped rather than pinning the window. The feeds still owed work are
+  stored (`yt_playlist_auto_owed_feeds`) and joined to the next pass's scan set, because a pass only scans the feeds it refreshed. A
+  rescan is free of paid calls for what was already handled (the dedup claim comes before any API call). A failed add releases its claim
+  but does not hold the watermark, so a permanent failure (deleted playlist or video) is not retried every pass. With the day's quota
+  already spent a pass makes no calls and holds.
   Durations are fetched in **batches of 50 ids per `videos.list` call** — that endpoint
   bills **1 quota unit per call, not per video**, so a large subscription set (10k+
   videos) costs ~200 units instead of ~10k. (Per-video fetching previously blew the

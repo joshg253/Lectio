@@ -29,9 +29,10 @@ ever leave two live copies of one of the unguarded three reachable at once.
 from __future__ import annotations
 
 import collections
+import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from main import (
     _DEDUP_MIN_TITLE_WORDS,
@@ -74,6 +75,7 @@ from main import (
     get_runtime_setting,
     get_setting,
     get_youtube_oauth_token,
+    get_yt_quota_spent_today,
     is_email_configured,
     is_quire_configured,
     mark_yt_quota_exhausted,
@@ -89,6 +91,7 @@ from main import (
     youtube_duration_service,
     youtube_hide_members_only_global,
     youtube_hide_unpremiered_global,
+    youtube_quota_cap,
 )
 from services import dedup, html_sanitize, youtube_embeds
 from services import youtube_oauth as youtube_oauth_service
@@ -1080,6 +1083,11 @@ def _run_quire_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
 # Each playlistItems.insert costs 50 quota units; cap a run well under the daily
 # 10k so auto-add never exhausts the quota on a burst of new uploads.
 _YT_PLAYLIST_AUTO_PER_RUN_CAP = 25
+# When a run leaves work undone (cap, quota, error, a duration not cached yet, a video not premiered yet) the watermark is held so the
+# next pass rescans it, but never further back than this: a video that never resolves must not pin the watermark forever.
+_YT_PLAYLIST_AUTO_MAX_LOOKBACK = timedelta(hours=48)
+# Feeds still owed work from a held run. Each pass only scans the feeds it refreshed, so the next pass adds these to its scan set.
+_YT_PLAYLIST_AUTO_OWED_KEY = "yt_playlist_auto_owed_feeds"
 
 
 def _content_hide_settings() -> tuple[set[str], set[str]]:
@@ -1117,6 +1125,7 @@ def _apply_youtube_playlist_rules(
     token: str,
     *,
     trigger: str = "auto",
+    incomplete: dict[str, set[str]] | None = None,
 ) -> int:
     """Match+add entries' YouTube videos to each rule's target playlist.
 
@@ -1124,8 +1133,14 @@ def _apply_youtube_playlist_rules(
     watermark, ``refreshed_feed_urls`` = whatever this tick refreshed) and the
     one-off backfill script (``cutoff`` = an arbitrary historical date,
     ``refreshed_feed_urls`` = a rule's whole scope) — the matching, dedup-guard,
-    and quota handling are identical either way. Returns videos added.
+    and quota handling are identical either way. Returns videos added. When *incomplete* is given, each thing left undone that a later pass
+    should retry is recorded as reason -> feeds (the refreshed set when no single feed is to blame), so the caller can hold its watermark.
     """
+
+    def _defer(reason: str, feed: str | None = None) -> None:
+        if incomplete is not None:
+            incomplete.setdefault(reason, set()).update({feed} if feed else refreshed_feed_urls)
+
     added_total = 0
     now_str = datetime.now().isoformat()
     # The rule's own Include Shorts wins over Hide Shorts (a deliberate per-rule opt-in); unpremiered and members-only have no
@@ -1135,6 +1150,7 @@ def _apply_youtube_playlist_rules(
 
     for rule in yt_rules:
         if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+            _defer("cap")
             break
         scope = str(rule.get("scope", ""))
         scope_id = str(rule.get("scope_id") or "")
@@ -1170,6 +1186,7 @@ def _apply_youtube_playlist_rules(
 
                     for entry in reader.get_entries(feed=feed_url):
                         if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                            _defer("cap", feed_url)
                             break
                         added = getattr(entry, "added", None)
                         if not added or added < cutoff:
@@ -1180,6 +1197,7 @@ def _apply_youtube_playlist_rules(
                         if not include_shorts and _is_youtube_short(entry):
                             continue
                         if _hidden_by_content_setting(str(entry.feed_url or ""), hide_unpremiered_feeds) and _is_youtube_unpremiered(entry):
+                            _defer("unpremiered", feed_url)  # added once it airs, if that is within the lookback
                             continue
                         link = str(entry.link or "")
                         body = "".join((c.value or "") for c in (entry.content or []))
@@ -1192,6 +1210,7 @@ def _apply_youtube_playlist_rules(
                         entry_added_any = False
                         for vid in vids:
                             if added_total >= _YT_PLAYLIST_AUTO_PER_RUN_CAP:
+                                _defer("cap", feed_url)
                                 break
                             # Cached verdict only (the after-refresh hide pass fetches it for opted-in feeds); never a network call here.
                             if (
@@ -1202,10 +1221,11 @@ def _apply_youtube_playlist_rules(
                             # Duration filter (minutes; 0 = no limit). The video's
                             # length comes from the same cache that powers the
                             # [duration] title prefix; an unknown duration is skipped
-                            # this run (it's retried once the duration is cached).
+                            # this run (the held watermark makes the next pass retry it).
                             if min_secs or max_secs:
                                 dur = youtube_duration_service.get_cached_duration(vid)[0]
                                 if dur is None:
+                                    _defer("duration", feed_url)
                                     continue
                                 if min_secs and dur < min_secs:
                                     continue
@@ -1247,6 +1267,7 @@ def _apply_youtube_playlist_rules(
                                         (scope, scope_id, keyword, eid, vid),
                                     )
                                 mark_yt_quota_exhausted()
+                                _defer("quota")
                                 LOGGER.warning("[yt-playlist-auto] quota exceeded; %d added this run", added_total)
                                 raise
                             except Exception as exc:  # noqa: BLE001
@@ -1277,7 +1298,9 @@ def _apply_youtube_playlist_rules(
                                 marked.append((fu, eid))
         except youtube_oauth_service.QuotaExceeded:
             quota_hit = True
+            _defer("quota")
         except Exception:
+            _defer("error")
             LOGGER.exception("[yt-playlist-auto] error processing rule %s/%s", scope, keyword)
 
         if marked:
@@ -1374,15 +1397,35 @@ def _run_youtube_playlist_rules_after_refresh(refreshed_feed_urls: set[str]) -> 
             LOGGER.warning("[yt-playlist-auto] %d rule(s) enabled but no YouTube token — reconnect needed", len(yt_rules))
             return
 
-        _apply_youtube_playlist_rules(refreshed_feed_urls, cutoff, yt_rules, folder_feed_map, token)
+        # Feeds a held run still owes work join this pass's scan: the watermark is user-wide, each pass scans only its refreshed feeds.
+        with get_meta_connection() as conn:
+            owed_raw = get_setting(conn, _YT_PLAYLIST_AUTO_OWED_KEY)
+        try:
+            owed = {str(u) for u in json.loads(owed_raw)} if owed_raw else set()
+        except ValueError, TypeError:
+            owed = set()
+        scan_feeds = set(refreshed_feed_urls) | owed
+
+        incomplete: dict[str, set[str]] = {}
+        if get_yt_quota_spent_today() >= youtube_quota_cap():
+            # Quota already spent today: don't send a doomed call per entry; hold the work for a later pass.
+            incomplete["quota"] = scan_feeds
+        else:
+            _apply_youtube_playlist_rules(scan_feeds, cutoff, yt_rules, folder_feed_map, token, incomplete=incomplete)
 
         # Advance the watermark to when THIS run started, not to "now" —
-        # captured up front so a slow run can't itself open a gap. A per-rule
-        # quota exhaustion doesn't affect this: entries that failed to add
-        # already had their dedup claim rolled back above, so they retry via
-        # the dedup guard regardless of where the time watermark sits next.
+        # captured up front so a slow run can't itself open a gap. If the run left
+        # work undone, hold it at the old cutoff (bounded by the max lookback) so
+        # the next pass rescans; the dedup claims make the rescan cheap and free
+        # of API calls for what was already added.
+        new_mark = run_started_at
+        if incomplete:
+            new_mark = max(cutoff, run_started_at - _YT_PLAYLIST_AUTO_MAX_LOOKBACK)
+            LOGGER.info("[yt-playlist-auto] run incomplete (%s); watermark held at %s", ", ".join(incomplete), new_mark.isoformat())
+        owed_now = set().union(*incomplete.values()) if incomplete else set()
         with get_meta_connection() as conn:
-            set_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK, run_started_at.isoformat())
+            set_setting(conn, SETTING_YT_PLAYLIST_AUTO_LAST_CHECK, new_mark.isoformat())
+            set_setting(conn, _YT_PLAYLIST_AUTO_OWED_KEY, json.dumps(sorted(owed_now)))
     except Exception:
         LOGGER.exception("[yt-playlist-auto] error in _run_youtube_playlist_rules_after_refresh")
 
