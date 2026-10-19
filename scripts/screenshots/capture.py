@@ -255,4 +255,13 @@ def capture(base_url: str, out_dir: Path) -> None:
         _shoot(page, out_dir, "16savearticle.png", clip_selector="#save-article-modal")
         ctx.close()
 
+        # 17: right-click menu on a post in the list.
+        ctx, page = new_page("dark")
+        page.goto(base_url + "/?read_filter=all", wait_until="networkidle")
+        page.wait_for_timeout(400)
+        page.locator(".post-item").nth(1).click(button="right")
+        page.wait_for_timeout(300)
+        _shoot(page, out_dir, "17postmenu.png")
+        ctx.close()
+
         browser.close()
