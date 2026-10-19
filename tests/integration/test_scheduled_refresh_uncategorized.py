@@ -49,7 +49,7 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main.feed_refresh_service,
         "update_feeds",
-        lambda feeds, enhance=True: captured.append(set(feeds)),
+        lambda feeds, enhance=True, **_kw: captured.append(set(feeds)),
     )
     monkeypatch.setattr(main, "_run_automation_after_refresh", lambda feeds: None)
     monkeypatch.setattr(main, "invalidate_unread_counts_cache", lambda: None)

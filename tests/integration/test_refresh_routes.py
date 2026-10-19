@@ -44,7 +44,7 @@ def test_refresh_route_success_updates_folder_scope(monkeypatch):
     monkeypatch.setattr(main, "get_meta_connection", _dummy_meta_connection)
     monkeypatch.setattr(main, "get_folder_feed_urls", lambda _conn, _folder_id: {"https://a.xml", "https://b.xml"})
 
-    def _capture_update_feeds(feed_urls: Iterable[str], *, enhance: bool = True) -> None:
+    def _capture_update_feeds(feed_urls: Iterable[str], *, enhance: bool = True, inline_followups: bool = False) -> None:
         captured["feed_urls"] = sorted(feed_urls)
         captured["enhance"] = enhance
 

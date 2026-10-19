@@ -11929,6 +11929,15 @@ def proxy_hotlink_images(content: str) -> str:
     return re.sub(r"<img\b[^>]*>", _rewrite, content, flags=re.IGNORECASE)
 
 
+def _run_rules_on_new_entries(feed_url: str) -> None:
+    """Per-feed rules that act on unread entries, run as the feed's new entries land (late-bound: defined in services.automation_rules)."""
+    for run in (_run_tag_filter_rules_for_feed, _run_mark_as_read_rules_for_feed):
+        try:
+            run(feed_url)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("[refresh] %s failed for %s", run.__name__, feed_url)
+
+
 feed_refresh_service = FeedRefreshService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
@@ -11945,6 +11954,7 @@ feed_refresh_service = FeedRefreshService(
     on_fetch_still_blocked_via_proxy=_flag_tailscale_feed_on_still_blocked,
     on_proxy_unreachable=_mark_backend_unreachable,
     progress_hook=_note_scheduler_progress,
+    on_new_entries=lambda feed_url: _run_rules_on_new_entries(feed_url),
 )
 
 websub_service: WebSubService | None = (
@@ -20112,7 +20122,7 @@ def _scheduled_refresh_tick() -> None:
     # Refresh without enhancement so automation (hide-shorts, mark-read, dedup)
     # runs as soon as entries land, instead of queuing behind the network-heavy
     # lead-image / duration pass over the whole batch.
-    feed_refresh_service.update_feeds(feeds_to_refresh, enhance=False)
+    feed_refresh_service.update_feeds(feeds_to_refresh, enhance=False, inline_followups=True)
     _run_automation_after_refresh(feeds_to_refresh)
     invalidate_unread_counts_cache()
     if websub_service:
@@ -24305,7 +24315,7 @@ def _run_folder_refresh(feed_urls: list[str], job: dict) -> None:
             _da_cid, _da_secret = get_deviantart_credentials()
             if _da_cid and _da_secret:
                 deviantart_service.refresh_all_deviantart_feeds(conn, _da_cid, _da_secret, access_token=get_deviantart_user_token())
-        feed_refresh_service.update_feeds(feed_urls, enhance=False)
+        feed_refresh_service.update_feeds(feed_urls, enhance=False, inline_followups=True)
         _run_automation_after_refresh(set(feed_urls))
         invalidate_unread_counts_cache()
         # Lead images / durations are network-heavy; fetch them off this thread too.
@@ -26168,6 +26178,7 @@ from routes.saved import router as _saved_router  # noqa: E402
 from routes.settings import router as _settings_router  # noqa: E402
 from routes.tags import router as _tags_router  # noqa: E402
 from services.automation_rules import (  # noqa: E402
+    _run_mark_as_read_rules_for_feed,
     _run_tag_filter_rules_for_feed,
     # The six _run_*_rules_after_refresh dispatchers and _apply_youtube_playlist_rules/
     # _entry_matches_rule have no caller left inside main.py itself now that
