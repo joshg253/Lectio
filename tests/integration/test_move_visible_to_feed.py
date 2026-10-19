@@ -281,3 +281,72 @@ def test_star_filter_scopes_the_move_to_kept_posts(tenant):
 
     assert data["moved"] == 1
     assert _entry_ids_in(DST) == {"starred-1"}
+
+
+def _mark_read(feed_url, entry_id):
+    with main.get_reader() as reader:
+        reader.mark_entry_as_read((feed_url, entry_id))
+
+
+def _is_read(feed_url, entry_id) -> bool:
+    with main.get_reader() as reader:
+        return bool(reader.get_entry((feed_url, entry_id)).read)
+
+
+def test_on_screen_rows_marked_read_are_part_of_an_unread_view_move(tenant):
+    """Rows marked read while shown stay on screen, but the predicate resolves by read filter. The browser sends what it shows and the
+    server takes the union: counted once in the dry run, moved once, and a still-unread entry stays unread in the target."""
+    import json
+
+    _add_feed(FEED)
+    _add_feed(DST)
+    _add_entries(FEED, [(f"{FEED}unread", "Unread", f"{FEED}unread"), (f"{FEED}done", "Done", f"{FEED}done")])
+    _mark_read(FEED, f"{FEED}done")
+    shown = json.dumps([[FEED, f"{FEED}unread"], [FEED, f"{FEED}done"]])
+
+    with TestClient(_app()) as client:
+        dry = _post(client, read_filter="unread", dry_run="1", on_screen=shown)
+        data = _post(client, read_filter="unread", on_screen=shown)
+
+    assert dry["count"] == 2
+    assert data["moved"] == 2
+    assert _entry_ids_in(DST) == {f"{FEED}unread", f"{FEED}done"}
+    assert not _is_read(DST, f"{FEED}unread"), "moving it once must not mark the target read"
+    assert _is_read(DST, f"{FEED}done")
+
+
+def test_an_unread_view_with_nothing_unread_left_still_moves_the_rows_on_screen(tenant):
+    import json
+
+    _add_feed(FEED)
+    _add_feed(DST)
+    _add_entries(FEED, [(f"{FEED}done", "Done", f"{FEED}done")])
+    _mark_read(FEED, f"{FEED}done")
+
+    with TestClient(_app()) as client:
+        without = _post(client, read_filter="unread", dry_run="1")
+        data = _post(client, read_filter="unread", on_screen=json.dumps([[FEED, f"{FEED}done"]]))
+
+    assert without["count"] == 0
+    assert data["moved"] == 1
+
+
+def test_a_malformed_or_oversized_on_screen_payload_is_refused(tenant):
+    """Ignoring a bad payload would quietly omit the rows it was meant to add, so the request fails instead of moving a subset."""
+    import json
+
+    _add_feed(FEED)
+    _add_feed(DST)
+    _add_entries(FEED, [(f"{FEED}a", "A", f"{FEED}a")])
+
+    with TestClient(_app()) as client:
+        for bad in (
+            "not json",
+            '{"a": 1}',
+            '[["only-one"]]',
+            "[5]",
+            json.dumps([[FEED, f"{FEED}a"]] * (routes.entries._MOVE_ON_SCREEN_CAP + 1)),
+        ):
+            resp = client.post("/entries/move-visible-to-feed", data={"folder_id": UNCAT, "target_url": DST, "on_screen": bad})
+            assert resp.status_code == 400, bad
+    assert _entry_ids_in(DST) == set()

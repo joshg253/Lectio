@@ -27,11 +27,6 @@ Empty.
 inside the 15-minute window re-queues an already-digested entry. The key also lacks `feed_url` and `rule_uid`. Fix with the same
 `automation_dispatched` claim, taken at queue time.
 
-### Move-all-shown-to-feed may share the Select All gap (2026-10-16; plausible, not reproduced)
-
-Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
-to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
-
 ### Highlighter doesn't fold curly quotes like the server matcher (2026-10-19)
 
 The server's plain matcher folds curly apostrophes, quotes and non-breaking spaces on both sides (`fold_for_match`); the browser highlighter
