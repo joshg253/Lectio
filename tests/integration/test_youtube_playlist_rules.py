@@ -491,6 +491,146 @@ def test_first_run_with_no_watermark_uses_the_fifteen_minute_default(env, monkey
     assert calls == []
 
 
+# ---------------------------------------------------------------------------
+# A run that leaves work undone (cap, quota, error, a duration not cached yet) holds the watermark so the next pass rescans it, bounded
+# by the max lookback. A complete run advances it as before.
+# ---------------------------------------------------------------------------
+
+
+def _set_watermark(delta: dt.timedelta) -> dt.datetime:
+    mark = dt.datetime.now(dt.timezone.utc) - delta
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_YT_PLAYLIST_AUTO_LAST_CHECK, mark.isoformat())
+    return mark
+
+
+def _duration_rule() -> None:
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(
+            conn,
+            "global",
+            "",
+            "",
+            "yellow",
+            rule_type="youtube_playlist",
+            enabled=1,
+            yt_playlist_id="PL1",
+            yt_mark_read=False,
+            yt_min_minutes=60,
+        )
+
+
+def test_unknown_duration_holds_the_watermark_and_is_retried(env, monkeypatch):
+    NOID = "unknownVID0"
+    _durs: dict[str, tuple] = {}
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration", lambda vid: _durs.get(vid, (None, None)))
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
+    _duration_rule()
+    mark = _set_watermark(dt.timedelta(minutes=30))
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []
+    assert dt.datetime.fromisoformat(_last_check_setting()) == mark  # held, not advanced
+
+    _durs[NOID] = (5400, "1:30:00")  # the duration pass has cached it since
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == [NOID]
+    assert dt.datetime.fromisoformat(_last_check_setting()) > mark  # complete now, so it advances
+
+
+def test_held_watermark_never_falls_further_back_than_the_lookback(env, monkeypatch):
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration", lambda vid: (None, None))
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: None)
+    _add_entry(entry_id="u", link="https://www.youtube.com/watch?v=unknownVID0")
+    _duration_rule()
+    _set_watermark(dt.timedelta(days=5))
+
+    before = dt.datetime.now(dt.timezone.utc)
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    held = dt.datetime.fromisoformat(_last_check_setting())
+    assert before - automation_rules._YT_PLAYLIST_AUTO_MAX_LOOKBACK <= held <= dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=47)
+
+
+def test_per_run_cap_holds_the_watermark_and_the_next_pass_finishes(env, monkeypatch):
+    monkeypatch.setattr(automation_rules, "_YT_PLAYLIST_AUTO_PER_RUN_CAP", 1)
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry(entry_id="a", link="https://www.youtube.com/watch?v=aaaaaaaaaaa")
+    _add_entry(entry_id="b", link="https://www.youtube.com/watch?v=bbbbbbbbbbb")
+    _add_rule()
+    mark = _set_watermark(dt.timedelta(minutes=30))
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert len(calls) == 1
+    assert dt.datetime.fromisoformat(_last_check_setting()) == mark
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert sorted(calls) == ["aaaaaaaaaaa", "bbbbbbbbbbb"]  # no duplicate, nothing lost
+
+
+def test_quota_exhaustion_holds_the_watermark(env, monkeypatch):
+    def _boom(tok, pl, vid):
+        raise yt.QuotaExceeded("quota")
+
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", _boom)
+    _add_entry()
+    _add_rule()
+    mark = _set_watermark(dt.timedelta(minutes=30))
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert dt.datetime.fromisoformat(_last_check_setting()) == mark
+
+
+def test_a_held_feed_is_rescanned_when_the_next_pass_refreshes_other_feeds(env, monkeypatch):
+    """The watermark is user-wide but a pass only scans the feeds it refreshed; the owed feed must ride along on the next pass."""
+    OTHER = "https://www.youtube.com/feeds/videos.xml?channel_id=UCOTHER"
+    NOID = "unknownVID0"
+    _durs: dict[str, tuple] = {}
+    monkeypatch.setattr(main.youtube_duration_service, "get_cached_duration", lambda vid: _durs.get(vid, (None, None)))
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry(entry_id="u", link=f"https://www.youtube.com/watch?v={NOID}")
+    main.get_reader().add_feed(OTHER, allow_invalid_url=True)
+    _duration_rule()
+    _set_watermark(dt.timedelta(minutes=30))
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert calls == []
+
+    _durs[NOID] = (5400, "1:30:00")
+    main._run_youtube_playlist_rules_after_refresh({OTHER})  # FEED is not part of this pass
+    assert calls == [NOID]
+
+    main._run_youtube_playlist_rules_after_refresh({OTHER})  # owed list cleared by the complete run
+    assert calls == [NOID]
+    with main.get_meta_connection() as conn:
+        assert main.get_setting(conn, automation_rules._YT_PLAYLIST_AUTO_OWED_KEY) == "[]"
+
+
+def test_quota_already_spent_makes_no_api_calls_and_holds_the_watermark(env, monkeypatch):
+    lookups = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: lookups.append(a) or False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda *a: lookups.append(a))
+    _add_entry()
+    _add_rule()
+    mark = _set_watermark(dt.timedelta(minutes=30))
+    main.mark_yt_quota_exhausted()
+
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+
+    assert lookups == []
+    assert dt.datetime.fromisoformat(_last_check_setting()) == mark
+
+
 def _hide_pref(key: str) -> None:
     with main.get_meta_connection() as conn:
         main.upsert_feed_display_pref(conn, FEED, key, 1)
