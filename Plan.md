@@ -27,11 +27,6 @@ Empty.
 inside the 15-minute window re-queues an already-digested entry. The key also lacks `feed_url` and `rule_uid`. Fix with the same
 `automation_dispatched` claim, taken at queue time.
 
-### Move-all-shown-to-feed may share the Select All gap (2026-10-16; plausible, not reproduced)
-
-Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown
-to feed" resolves server-side the same way; check it before assuming it matches what is on screen.
-
 ### Archive fetch-status follow-ups (decided 2026-10-17)
 
 `archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`

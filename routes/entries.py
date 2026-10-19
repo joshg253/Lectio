@@ -1391,6 +1391,7 @@ def move_visible_entries_to_feed_route(
     kept: str | None = Form(default=None),
     filter_term: str = Form(default=""),
     dry_run: str = Form(default=""),
+    on_screen: str = Form(default=""),
 ):
     """Move every entry matching the current view + filter, resolved server-side.
 
@@ -1403,6 +1404,10 @@ def move_visible_entries_to_feed_route(
 
     ``dry_run`` returns just the count, so the confirm dialog can state the real
     number instead of the number of rows in the DOM.
+
+    ``on_screen`` (optional JSON ``[[feed_url, entry_id], ...]``) adds the rows the browser is showing to the set. The view is resolved
+    by its read filter, but rows marked read while shown stay on screen, so on an unread view the predicate alone can miss them (or
+    resolve nothing). The union is taken here, each entry once, so the count and the move agree.
     """
     target = target_url.strip()
     is_dry_run = dry_run in ("1", "true", "on", "yes")
@@ -1427,6 +1432,15 @@ def move_visible_entries_to_feed_route(
 
     matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
     matches = [p for p in posts if matches_filter(p)]
+    seen = {(str(p["feed_url"]), str(p["id"])) for p in matches}
+    try:
+        shown = json.loads(on_screen) if on_screen else []
+    except ValueError:
+        shown = []
+    for pair in shown if isinstance(shown, list) else []:
+        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(v, str) and v for v in pair) and tuple(pair) not in seen:
+            seen.add((pair[0], pair[1]))
+            matches.append({"feed_url": pair[0], "id": pair[1]})
 
     if is_dry_run:
         return JSONResponse({"ok": True, "count": len(matches)})
