@@ -41,6 +41,11 @@ escaped term to the matching character classes.
 2. ~~Transient kinds retry~~ (done 2026-10-19, in nightly maintenance: 7+ days apart, 20 rows a night, 3 tries; then the row stays on the filter).
 3. Recapture the 20 reachable-now rows once with `scripts/recapture_archived_entries.py`, dry-run first and the list shown, since it rewrites the capture.
 
+### YouTube facade thumbnail recovery skips `data-lazy-src` (2026-10-19)
+
+`_extract_source_embed_iframes` reads a facade's `<img>` from `src`/`data-src` only (found in review of the iframe `data-lazy-src` fix). A WP-lazyload facade
+with the thumbnail only in `data-lazy-src` isn't recovered. One-line fix; do it when a real feed shows it.
+
 ### Refresh the screenshots (last 2026-08-09)
 
 `uv run python scripts/refresh_screenshots.py` is hermetic (synthetic demo data). Since August the UI gained tag-chip filtering in the filter bar,

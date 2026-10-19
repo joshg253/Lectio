@@ -259,3 +259,14 @@ def test_strip_bandcamp_is_linear_not_quadratic():
     quad = _elapsed(2000)  # 4x the input
     # Linear predicts ~4x, quadratic ~16x. 8x splits them with room for noise.
     assert quad < base * 8, f"non-linear: {base * 1000:.2f}ms -> {quad * 1000:.2f}ms"
+
+
+def test_extract_lazy_loaded_iframe_with_data_lazy_src():
+    html = f'<div><iframe data-lazy-src="https://www.youtube-nocookie.com/embed/{VID}" allowfullscreen></iframe></div>'
+    out = main._extract_source_embed_iframes(html)
+    assert out and f"/embed/{VID}" in out[0][1]
+
+
+def test_extract_lazy_iframe_prefers_a_disallowed_src_over_an_allowed_lazy_src():
+    html = f'<iframe src="https://evil.test/x" data-lazy-src="https://www.youtube.com/embed/{VID}"></iframe>'
+    assert main._extract_source_embed_iframes(html) == []

@@ -112,6 +112,17 @@ def test_lazy_loaded_iframe_data_src_is_promoted_to_src():
     assert "data-src" not in out.lower()
 
 
+def test_lazy_loaded_iframe_data_lazy_src_is_promoted_to_src():
+    out = H.sanitize_html(
+        '<div class="youtube-video"><div class="video-aspect-box">'
+        '<iframe data-lazy-priority="low" data-lazy-src="https://www.youtube-nocookie.com/embed/abcdefghijk" allowfullscreen></iframe>'
+        "</div></div>"
+    )
+    assert 'src="https://www.youtube-nocookie.com/embed/abcdefghijk"' in out
+    assert "data-lazy-src" not in out.lower()
+    assert "<iframe" not in H.sanitize_html('<iframe data-lazy-src="https://evil.test/embed/x"></iframe>').lower()
+
+
 def test_lazy_loaded_iframe_data_src_still_host_checked():
     assert "<iframe" not in H.sanitize_html('<iframe data-src="https://evil.com/x"></iframe>').lower()
 
@@ -397,3 +408,33 @@ def test_img_keeps_the_scrapers_thumbnail_hint():
     """The lead-image scan reads data-lectio-thumb from ingested content, so ingest must not strip it."""
     out = H.sanitize_html('<img src="https://e.com/b.png" data-lectio-thumb="https://e.com/s.png" onerror="x()">')
     assert 'data-lectio-thumb="https://e.com/s.png"' in out and "onerror" not in out
+
+
+def test_readability_reinject_recovers_data_lazy_src_iframe():
+    import main
+
+    raw = '<div><iframe data-lazy-src="https://www.youtube-nocookie.com/embed/abcdefghijk" allowfullscreen></iframe></div>'
+    out = main._reinject_readability_embeds("<p>article</p>", raw)
+    assert "youtube-nocookie.com/embed/abcdefghijk" in out
+    assert "evil.test" not in main._reinject_readability_embeds("<p>a</p>", '<iframe data-lazy-src="https://evil.test/x"></iframe>')
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "https://evil.test\\@www.youtube.com/embed/abcdefghijk",
+        "https://user@www.youtube.com/embed/abcdefghijk",
+        "https://www.youtube.com/embed/a\tb",
+    ],
+)
+def test_iframe_src_with_backslash_userinfo_or_control_chars_is_refused(src):
+    assert not H._embed_host_allowed(src)
+    assert "<iframe" not in H.sanitize_html(f'<iframe src="{src}"></iframe>').lower()
+    assert "<iframe" not in H.sanitize_html(f'<iframe data-lazy-src="{src}"></iframe>').lower()
+
+
+def test_disallowed_src_beats_an_allowed_lazy_src_and_blank_data_src_falls_through():
+    both = '<iframe src="https://evil.test/x" data-lazy-src="https://www.youtube.com/embed/abcdefghijk"></iframe>'
+    assert "<iframe" not in H.sanitize_html(both).lower()
+    blank = '<iframe data-src=" " data-lazy-src="https://www.youtube.com/embed/abcdefghijk"></iframe>'
+    assert 'src="https://www.youtube.com/embed/abcdefghijk"' in H.sanitize_html(blank)

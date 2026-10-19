@@ -11562,7 +11562,7 @@ def _reinject_readability_embeds(summary_html: str, raw_html: str) -> str:
     seen: set[str] = set()
     missing: list[str] = []
     for ifr in raw_soup.find_all("iframe"):
-        src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+        src = next((v for v in (str(ifr.get(a) or "").strip() for a in ("src", "data-src", "data-lazy-src")) if v), "")
         if not src or not html_sanitize._embed_host_allowed(src):
             continue
         key = src.split("?", 1)[0].lower()
@@ -15967,7 +15967,7 @@ def _extract_source_embed_iframes(raw_html: str, existing_html: str = "", limit:
         for ifr in soup.find_all("iframe"):
             if len(out) >= limit:
                 break
-            src = str(ifr.get("src") or ifr.get("data-src") or "").strip()
+            src = next((v for v in (str(ifr.get(a) or "").strip() for a in ("src", "data-src", "data-lazy-src")) if v), "")
             if not src or not html_sanitize._embed_host_allowed(src):
                 continue
             key = src.split("?", 1)[0].lower()
