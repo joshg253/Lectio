@@ -16275,6 +16275,20 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     function applyHighlights() {
       const rules = window.HIGHLIGHT_RULES || [];
 
+      // One RegExp per rule. A plain keyword may list several comma-separated terms (as main.py's split_keyword_terms reads it), each a
+      // case-insensitive literal; they are joined longest-first so "Pixel Watch" wins over "Pixel" at the same position, and one pass
+      // covers the rule. A regex rule is its own pattern. Invalid regexes yield none.
+      function rulePatterns(rule) {
+        let source = rule.keyword;
+        if (!rule.is_regex) {
+          const terms = String(rule.keyword || '').split(',').map(t => t.trim()).filter(Boolean);
+          terms.sort((a, b) => b.length - a.length);
+          source = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+        }
+        if (!source) return [];
+        try { return [new RegExp(source, 'gi')]; } catch { return []; /* invalid regex */ }
+      }
+
       // Flat-text highlight for single-line elements (titles) — replaces all content.
       function highlightEl(el, matchRules) {
         if (!el) return;
@@ -16285,17 +16299,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (!text) return;
         const ranges = [];
         for (const rule of matchRules) {
-          let re;
-          try {
-            re = rule.is_regex
-              ? new RegExp(rule.keyword, 'gi')
-              : new RegExp(rule.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-          } catch { continue; }
-          let m;
-          while ((m = re.exec(text)) !== null) {
-            if (m[0].length === 0) { re.lastIndex++; continue; }
-            if (!ranges.some(r => m.index < r.end && m.index + m[0].length > r.start)) {
-              ranges.push({ start: m.index, end: m.index + m[0].length, color: rule.color });
+          for (const re of rulePatterns(rule)) {
+            let m;
+            while ((m = re.exec(text)) !== null) {
+              if (m[0].length === 0) { re.lastIndex++; continue; }
+              if (!ranges.some(r => m.index < r.end && m.index + m[0].length > r.start)) {
+                ranges.push({ start: m.index, end: m.index + m[0].length, color: rule.color });
+              }
             }
           }
         }
@@ -16324,14 +16334,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         el.normalize();
         const patterns = [];
         for (const rule of matchRules) {
-          try {
-            patterns.push({
-              re: rule.is_regex
-                ? new RegExp(rule.keyword, 'gi')
-                : new RegExp(rule.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'),
-              color: rule.color,
-            });
-          } catch { /* invalid regex */ }
+          for (const re of rulePatterns(rule)) patterns.push({ re, color: rule.color });
         }
         if (patterns.length === 0) return;
 
