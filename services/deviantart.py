@@ -686,6 +686,7 @@ def refresh_deviantart_feed_by_id(
     # call max). Deliberately refresh-only — the bulk watchlist sync's
     # create_deviantart_feed path skips it so adding N artists stays N calls.
     fetch_and_store_missing_tags(conn, feed_id, client_id, client_secret, access_token=access_token)
+    conn.commit()  # the author lookup below is another network call
     # Same one-call-per-refresh backfill, for entries stored before the author
     # column existed.
     fetch_and_store_missing_authors(conn, feed_id, client_id, client_secret, access_token=access_token)

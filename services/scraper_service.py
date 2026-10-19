@@ -603,8 +603,11 @@ def _scrape_change_detect(conn: sqlite3.Connection, feed: dict) -> bool:
     return True
 
 
-def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = False) -> bool:
-    """Extract links; add new ones as (optionally hidden) entries. Returns True if new visible entries added."""
+def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = False, release_lock: bool = True) -> bool:
+    """Extract links; add new ones as (optionally hidden) entries. Returns True if new visible entries added.
+
+    ``release_lock`` commits around the per-entry page fetches so the write lock isn't held across the network; feed creation passes False
+    because it must stay one rollbackable unit until the reader registration and folder link succeed."""
     try:
         html = _fetch_html(str(feed["source_url"]))
     except Exception as exc:
@@ -637,7 +640,8 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
                 (item["title"], feed["id"], item["url"]),
             )
 
-    conn.commit()  # the heal UPDATEs above must not hold the write lock across the per-entry page fetches below
+    if release_lock:
+        conn.commit()  # the heal UPDATEs above must not hold the write lock across the per-entry page fetches below
 
     now = datetime.now(timezone.utc).isoformat()
     new_visible = 0
@@ -658,7 +662,8 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (entry_id, feed["id"], abs_url, title, content, published or now, hidden),
         )
-        conn.commit()  # next iteration fetches another page
+        if release_lock:
+            conn.commit()  # next iteration fetches another page
         if not initial:
             new_visible += 1
 
@@ -746,7 +751,7 @@ def create_scraped_feed(
     if mode == "link_list":
         # Seed existing links as hidden so they aren't surfaced as new entries,
         # unless backfill was requested — then surface them as visible entries.
-        _scrape_link_list(conn, feed, initial=not backfill)
+        _scrape_link_list(conn, feed, initial=not backfill, release_lock=False)
     else:
         # Capture initial hash and create a first entry so the feed isn't empty on
         # first view — subsequent page changes will generate additional entries.

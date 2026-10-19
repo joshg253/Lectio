@@ -237,6 +237,7 @@ def refresh_all_reddit_feeds(
 
     added = 0
     now_iso = datetime.now(timezone.utc).isoformat()
+    meta_conn.commit()  # never fetch inside a transaction the caller left open
     for row in rows:
         feed_url = row[0] if isinstance(row, (tuple, list)) else row["feed_url"]
         try:

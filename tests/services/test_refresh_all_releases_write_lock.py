@@ -75,3 +75,26 @@ def test_a_round_does_not_inherit_a_transaction_the_caller_left_open(two_conns, 
     scraper_service.refresh_all_scraped_feeds(main_conn)
 
     assert outcomes == ["ok", "ok"]
+
+
+def test_feed_creation_scrape_stays_one_rollbackable_unit(two_conns, monkeypatch):
+    """create_scraped_feed seeds the first scrape inside its own transaction; releasing the lock there would commit a half-created feed."""
+    main_conn, _other = two_conns
+    main_conn.execute(
+        "CREATE TABLE scraped_entries "
+        "(id TEXT, scraped_feed_id TEXT, entry_url TEXT, title TEXT, content TEXT, published_at TEXT, hidden INTEGER)"
+    )
+    main_conn.execute("ALTER TABLE scraped_feeds ADD COLUMN source_url TEXT")
+    main_conn.execute("ALTER TABLE scraped_feeds ADD COLUMN last_scraped_at TEXT")
+    main_conn.commit()
+    monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: '<a href="https://x.test/p1">Post one title</a>')
+    monkeypatch.setattr(scraper_service, "_new_entry_extras", lambda url, sel: (None, ""))
+    main_conn.execute("INSERT INTO scraped_feeds (id, source_url) VALUES ('new', 'https://x.test/')")
+
+    scraper_service._scrape_link_list(
+        main_conn, {"id": "new", "source_url": "https://x.test/", "selector": ""}, initial=True, release_lock=False
+    )
+    main_conn.rollback()
+
+    assert main_conn.execute("SELECT COUNT(*) FROM scraped_entries").fetchone()[0] == 0
+    assert main_conn.execute("SELECT COUNT(*) FROM scraped_feeds WHERE id = 'new'").fetchone()[0] == 0
