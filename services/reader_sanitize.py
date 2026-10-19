@@ -89,9 +89,8 @@ def _collect_entry_tags(url, result, entries) -> None:
             rid = raw_entry.get("id") or (raw_entry.get("link") if is_rss else None)
             if not rid or rid not in processed_ids:
                 continue
-            tags = extract_feed_entry_tags(raw_entry)
-            if tags:
-                pairs.append((str(rid), tags))
+            # Empty included: the sink clears rows for an entry whose feed dropped all its tags.
+            pairs.append((str(rid), extract_feed_entry_tags(raw_entry)))
         if pairs:
             sink(url, pairs)
     except Exception:  # a tag write must never fail a feed parse

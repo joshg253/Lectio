@@ -748,25 +748,43 @@ class FeedTagService:
         ``pairs`` is ``[(entry_id, tags), ...]``. Replace-per-entry semantics:
         an entry seen again with different tags gets its rows replaced, so
         publisher tag edits propagate; entries absent from ``pairs`` keep
-        their existing rows. The replace is scoped to *source* ("feed" or
-        "page"), so each writer only ever replaces its own rows.
+        their existing rows. An entry listed with no tags has its rows for
+        *source* cleared (the publisher dropped them). The replace is scoped
+        to *source* ("feed", "page" or "open"), so each writer only ever replaces its own rows.
         """
         if not pairs:
             return
         now = time.time()
         with self._get_meta_connection() as conn:
             for entry_id, tags in pairs:
-                if not entry_id or not tags:
+                if not entry_id:
                     continue
+                if (
+                    not tags
+                    and not conn.execute(
+                        "SELECT 1 FROM entry_feed_tags WHERE feed_url = ? AND entry_id = ? AND source = ? LIMIT 1",
+                        (feed_url, entry_id, source),
+                    ).fetchone()
+                ):
+                    continue  # nothing stored: skip the DELETE so an untagged feed takes no write lock per refresh
                 conn.execute(
                     "DELETE FROM entry_feed_tags WHERE feed_url = ? AND entry_id = ? AND source = ?",
                     (feed_url, entry_id, source),
                 )
+                if not tags:
+                    continue
                 # INSERT OR IGNORE guards case-collisions within one entry's tags, and a tag the other source already holds.
                 conn.executemany(
                     "INSERT OR IGNORE INTO entry_feed_tags (feed_url, entry_id, tag, first_seen_at, source) VALUES (?, ?, ?, ?, ?)",
                     [(feed_url, entry_id, tag, now, source) for tag in tags],
                 )
+                if source == "feed":
+                    # The key ignores source, so a tag a page row already holds was skipped above. The feed is authoritative: take
+                    # the row over, so it follows the feed (and survives the page row's replace) instead of vanishing with it.
+                    conn.executemany(
+                        "UPDATE entry_feed_tags SET source = 'feed' WHERE feed_url = ? AND entry_id = ? AND tag = ? AND source != 'feed'",
+                        [(feed_url, entry_id, tag) for tag in tags],
+                    )
 
     def get_tags_for_entry(self, feed_url: str, entry_id: str) -> list[str]:
         with self._get_meta_connection() as conn:

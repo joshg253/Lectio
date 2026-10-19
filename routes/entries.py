@@ -481,7 +481,7 @@ def entry_feed_tags_route(
                 if cached is not None:
                     page_tags = feed_tags_service_mod.extract_page_tags(cached[1], entry_link)
                     if page_tags:
-                        feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)])
+                        feed_tag_service.record_entry_tags(feed_url, [(entry_id, page_tags)], source="open")
                         # Re-derive dismissal-aware, same reason as the pane build.
                         raw_tags = get_feed_tag_suggestions(feed_url, entry_id)
 
