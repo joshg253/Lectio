@@ -1377,6 +1377,10 @@ def select_all_visible_entries_route(
     return JSONResponse({"ok": True, "entries": entries, "count": len(entries)})
 
 
+# Most on-screen rows the browser may post with a whole-view move (the list itself chunks well below this).
+_MOVE_ON_SCREEN_CAP = 5000
+
+
 @router.post("/entries/move-visible-to-feed")
 def move_visible_entries_to_feed_route(
     target_url: str = Form(default=""),
@@ -1436,11 +1440,18 @@ def move_visible_entries_to_feed_route(
     try:
         shown = json.loads(on_screen) if on_screen else []
     except ValueError:
-        shown = []
-    for pair in shown if isinstance(shown, list) else []:
-        if isinstance(pair, list) and len(pair) == 2 and all(isinstance(v, str) and v for v in pair) and tuple(pair) not in seen:
-            seen.add((pair[0], pair[1]))
-            matches.append({"feed_url": pair[0], "id": pair[1]})
+        shown = None
+    # A malformed payload is refused, not ignored: ignoring it would quietly reproduce the omission this parameter exists to close.
+    if (
+        not isinstance(shown, list)
+        or len(shown) > _MOVE_ON_SCREEN_CAP
+        or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(v, str) and v for v in p) for p in shown)
+    ):
+        return JSONResponse({"ok": False, "error": "Could not read the rows on screen."}, status_code=400)
+    for feed_url_shown, entry_id_shown in shown:
+        if (feed_url_shown, entry_id_shown) not in seen:
+            seen.add((feed_url_shown, entry_id_shown))
+            matches.append({"feed_url": feed_url_shown, "id": entry_id_shown})
 
     if is_dry_run:
         return JSONResponse({"ok": True, "count": len(matches)})

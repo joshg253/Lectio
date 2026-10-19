@@ -331,14 +331,22 @@ def test_an_unread_view_with_nothing_unread_left_still_moves_the_rows_on_screen(
     assert data["moved"] == 1
 
 
-def test_a_malformed_on_screen_payload_is_ignored(tenant):
+def test_a_malformed_or_oversized_on_screen_payload_is_refused(tenant):
+    """Ignoring a bad payload would quietly omit the rows it was meant to add, so the request fails instead of moving a subset."""
+    import json
+
     _add_feed(FEED)
     _add_feed(DST)
     _add_entries(FEED, [(f"{FEED}a", "A", f"{FEED}a")])
 
     with TestClient(_app()) as client:
-        also = _post(client, on_screen='[["only-one"], 5, {"x": 1}]', dry_run="1")
-        data = _post(client, on_screen="not json")
-
-    assert also["count"] == 1, "bad pairs add nothing; only the view's own entry counts"
-    assert data["moved"] == 1
+        for bad in (
+            "not json",
+            '{"a": 1}',
+            '[["only-one"]]',
+            "[5]",
+            json.dumps([[FEED, f"{FEED}a"]] * (routes.entries._MOVE_ON_SCREEN_CAP + 1)),
+        ):
+            resp = client.post("/entries/move-visible-to-feed", data={"folder_id": UNCAT, "target_url": DST, "on_screen": bad})
+            assert resp.status_code == 400, bad
+    assert _entry_ids_in(DST) == set()
