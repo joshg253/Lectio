@@ -568,6 +568,10 @@ def _embed_host_allowed(src: str) -> bool:
         parsed = urlparse(src)
     except ValueError:
         return False
+    # Browsers read a backslash as a slash (so `https://evil.test\\@www.youtube.com/` loads evil.test) while urlparse reads it as
+    # userinfo; embeds never carry userinfo or control characters, so refuse them outright.
+    if "\\" in src or "@" in parsed.netloc or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in src):
+        return False
     if parsed.scheme.lower() not in ("https", ""):
         return False  # require TLS for embeds (relative src can't be an embed anyway)
     host = (parsed.hostname or "").lower().lstrip(".")
@@ -628,9 +632,9 @@ def _sanitize_iframe(tag) -> bool:
     src = str(tag.attrs.get("src", "")).strip()
     if not src:
         # Lazy-loaded embeds (Thrive/WP lazyload: guitarchalk.com ships ~30 per lesson) carry the
-        # URL in data-src and let JS set src. We run no such JS, so promote it — it is checked
+        # URL in data-src (or data-lazy-src) and let JS set src. We run no such JS, so promote it — it is checked
         # against the same host allowlist below.
-        src = str(tag.attrs.get("data-src", "")).strip()
+        src = next((v for v in (str(tag.attrs.get(a, "")).strip() for a in ("data-src", "data-lazy-src")) if v), "")
         if src:
             tag.attrs["src"] = src
     if not _embed_host_allowed(src):
