@@ -189,6 +189,20 @@ def test_host_in_cooldown_stays_queued_and_failure_pauses_host(tmp_path):
     assert _queued(connect) == []  # attempted once, not retried
 
 
+def test_a_not_richer_fetch_does_not_pause_the_host(tmp_path):
+    """A short post that the page can't improve is about the article, not the site: the host stays usable for the rest of the queue."""
+    connect = _meta(tmp_path)
+    _set_feed(connect, FEED, fcf.FEED_ON)
+    entries = {(FEED, "a"): _entry("a")}
+    svc, calls = _service(connect, entries, refetch_result={"ok": False, "error": "not richer", "not_richer": True})
+    svc.on_entry_updated(entries[(FEED, "a")], is_new=True)
+    svc.drain([FEED], "u1")
+
+    assert calls["refetch"] == ["a"]
+    assert calls["failed"] == []
+    assert _queued(connect) == []  # attempted once
+
+
 def test_reader_hook_reports_new_only_on_first_sight(tmp_path):
     feed_path = tmp_path / "feed.xml"
     item = "<item><guid>{0}</guid><title>{0}</title><link>https://example.test/{0}</link><description>x</description></item>"

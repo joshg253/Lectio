@@ -175,6 +175,10 @@ class FullContentFetchService:
             return
         if result.get("ok"):
             LOGGER.info("[full-fetch] %s/%s -> refreshed", feed_url, entry_id)
+        elif result.get("not_richer"):
+            # About the article (a short post, or a page that extracts to less), not the site: no cooldown, and the entry was already
+            # dequeued above so it is not retried.
+            LOGGER.info("[full-fetch] %s/%s -> fetched page not richer than the stored copy; left alone", feed_url, entry_id)
         else:
             LOGGER.info("[full-fetch] %s/%s -> %s (pausing %s)", feed_url, entry_id, result.get("error", "no change"), host)
             self._mark_host_failed(host)

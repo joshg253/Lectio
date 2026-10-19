@@ -142,6 +142,13 @@ since both come from reader's stored entry, never from the live fetch. Guard 2
 title* as a positive reference, which `_archive_entry` overwrites unconditionally
 from reader on every run regardless of outcome.
 
+A fourth, `is_richer`, applies only to the automatic callers (auto-refetch on keep, ingest full-content fetch), including the archive
+fallback: the stored body stays unless the fetch has more text (`_autofetch_is_richer`; images only break a tie, since the extractor
+prepends the page's og:image and a blurb with a share card would otherwise win). "Thin" can just mean a short post, and tagging a one-
+line shell command had it replaced by the site blurb (2026-10-19). A refused fetch writes nothing, puts no host in cooldown, and is
+remembered for 24 hours per entry so a later star or tag edit doesn't fetch again. The Reader View route applies the same plausibility
+test to the archived copy as the e-ink reader.
+
 **Guard 3 was wrongly believed unavailable, and its absence caused real damage
 the same day.** `extraction_matches_sibling` was first assumed to be scoped to
 `refresh_captured_article`'s in-memory batch dedupe with "no equivalent notion

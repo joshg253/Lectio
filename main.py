@@ -24663,6 +24663,40 @@ def _mark_autofetch_host_failed(host: str) -> None:
                 del _autofetch_failed_hosts[stale]
 
 
+# Entries whose automatic re-fetch came back no richer than the stored copy, so a later star or tag edit doesn't send the same fetch again.
+_AUTOFETCH_NOT_RICHER_TTL_S = 24 * 3600
+_autofetch_not_richer: dict[tuple[str, str], float] = {}
+
+
+def _autofetch_known_not_richer(feed_url: str, entry_id: str) -> bool:
+    with _autofetch_jobs_lock:
+        until = _autofetch_not_richer.get((feed_url, entry_id))
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            del _autofetch_not_richer[(feed_url, entry_id)]
+            return False
+        return True
+
+
+def _autofetch_note_not_richer(feed_url: str, entry_id: str) -> None:
+    with _autofetch_jobs_lock:
+        _autofetch_not_richer[(feed_url, entry_id)] = time.monotonic() + _AUTOFETCH_NOT_RICHER_TTL_S
+        if len(_autofetch_not_richer) > 2048:  # a memo, not a record
+            for stale in sorted(_autofetch_not_richer, key=lambda k: _autofetch_not_richer[k])[:512]:
+                del _autofetch_not_richer[stale]
+
+
+def _autofetch_is_richer(candidate: str, stored: str) -> bool:
+    """Is an automatic re-fetch worth replacing the stored body with? By text, not by image count.
+
+    ``_reader_copy_is_richer`` leads with images, which is right for a picture post but wrong here: the extractor prepends the page's
+    og:image to what it finds, so a site blurb with a share card would beat a short text post, and a teaser carrying tracking pixels
+    would beat the full article. More text wins; equal text needs more images."""
+    cand, cur = _reader_text_length(candidate), _reader_text_length(stored)
+    return cand > cur or (cand == cur and _reader_img_count(candidate) > _reader_img_count(stored))
+
+
 def _autofetch_prune_stale_jobs() -> None:
     now = time.monotonic()
     for key in list(_autofetch_jobs.keys()):
@@ -24730,6 +24764,8 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
         stored = (_best.value if _best is not None else None) or entry.summary or ""
         if _archived_copy_is_plausible(stored) and not _is_truncated_teaser(stored):
             return False  # a real article already — leave it alone
+        if _autofetch_known_not_richer(feed_url, entry_id):
+            return False  # the last fetch of this page was no better than what's stored
         host = urlparse(entry.link).netloc.lower()
         if _autofetch_host_in_cooldown(host):
             return False  # this host already refused us; don't keep asking
@@ -24750,10 +24786,14 @@ def _maybe_autofetch_on_keep(feed_url: str, entry_id: str) -> bool:
 
     def _work() -> None:
         try:
-            result = _refresh_captured_article_for_current_user(feed_url, entry_id)
+            result = _refresh_captured_article_for_current_user(feed_url, entry_id, only_if_richer=True)
             job["ok"] = bool(result.get("ok"))
             if result.get("ok"):
                 LOGGER.info("[auto-refetch] %s/%s -> refreshed", feed_url, entry_id)
+                return
+            if result.get("not_richer"):
+                _autofetch_note_not_richer(feed_url, entry_id)
+                LOGGER.info("[auto-refetch] %s/%s -> fetched page not richer than the stored copy; left alone", feed_url, entry_id)
                 return
             # A failure here is about the SITE, not this article — blocked,
             # unreachable, or serving something else entirely — so remember the
@@ -24804,7 +24844,9 @@ def _spawn_full_content_drain(feed_urls: list[str]) -> None:
 full_content_fetch_service = full_content_fetch.FullContentFetchService(
     get_meta_connection=lambda: get_meta_connection(),
     get_reader=lambda: get_reader(),
-    refetch=lambda feed_url, entry_id: _refresh_captured_article_for_current_user(feed_url, entry_id, bump_received=False),
+    refetch=lambda feed_url, entry_id: _refresh_captured_article_for_current_user(
+        feed_url, entry_id, bump_received=False, only_if_richer=True
+    ),
     is_thin=lambda html: not _archived_copy_is_plausible(html),
     host_in_cooldown=lambda host: _autofetch_host_in_cooldown(host),
     mark_host_failed=lambda host: _mark_autofetch_host_failed(host),
@@ -24891,6 +24933,7 @@ def _refresh_captured_article_for_current_user(
     date_choice: str | None = None,
     *,
     ignore_cooldown: bool = False,
+    only_if_richer: bool = False,
 ) -> dict:
     """Re-fetch a Lectio capture that lives on a real feed (post auto-filing),
     with the current tenancy's reader/meta DB.
@@ -24916,7 +24959,10 @@ def _refresh_captured_article_for_current_user(
     mechanisms and should stay well-behaved.
 
     *bump_received* and *date_choice* are forwarded as-is to
-    refresh_captured_article — see there."""
+    refresh_captured_article — see there.
+
+    *only_if_richer* is for the automatic callers (auto-refetch on keep, ingest full-content fetch): the stored body is kept unless
+    the fetch is richer, since "thin" can just mean a short post and readability can lock onto a site blurb."""
     from_archive: str | None = None
     if mode == CAPTURE_MODE_ARCHIVE:
         from_archive = wayback_snapshot_url(_entry_source_url(feed_url, entry_id) or entry_id)
@@ -24961,6 +25007,7 @@ def _refresh_captured_article_for_current_user(
             extract=extract,
             enqueue_archive=starred_archive_service.enqueue_archive,
             is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+            is_richer=_autofetch_is_richer if only_if_richer else None,
             bump_received=bump_received,
             date_choice=date_choice,
         )
@@ -24987,6 +25034,7 @@ def _refresh_captured_article_for_current_user(
                     extract=_from_archive,
                     enqueue_archive=starred_archive_service.enqueue_archive,
                     is_boilerplate_extraction=starred_archive_service.extraction_matches_sibling,
+                    is_richer=_autofetch_is_richer if only_if_richer else None,
                     bump_received=bump_received,
                     date_choice=date_choice,
                 )

@@ -75,7 +75,7 @@ def test_returns_false_and_no_job_when_the_stored_copy_is_already_plausible(thin
 
 
 def test_kicks_off_a_job_and_the_status_route_reflects_it_running_then_done(thin_entry, monkeypatch):
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e, **kw: {"ok": True})
 
     assert main._maybe_autofetch_on_keep(FEED, ENTRY) is True
     job = main._autofetch_jobs.get((FEED, ENTRY))
@@ -102,7 +102,7 @@ def test_status_route_is_a_harmless_noop_for_an_entry_with_no_job(thin_entry):
 
 
 def test_a_failed_refetch_is_reported_as_done_but_not_successful(thin_entry, monkeypatch):
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": False, "error": "blocked"})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e, **kw: {"ok": False, "error": "blocked"})
     monkeypatch.setattr(main, "_mark_autofetch_host_failed", lambda host: None)
 
     assert main._maybe_autofetch_on_keep(FEED, ENTRY) is True
@@ -114,7 +114,7 @@ def test_a_failed_refetch_is_reported_as_done_but_not_successful(thin_entry, mon
 
 
 def test_a_second_call_while_the_first_job_is_still_running_does_not_spawn_another_thread(thin_entry, monkeypatch):
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e, **kw: {"ok": True})
 
     assert main._maybe_autofetch_on_keep(FEED, ENTRY) is True
     first_thread = _FakeThread.last
@@ -128,7 +128,7 @@ def test_a_second_call_while_the_first_job_is_still_running_does_not_spawn_anoth
 
 
 def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e, **kw: {"ok": True})
     app = FastAPI()
     app.post("/entries/saved")(routes.entries.toggle_entry_saved)
     with TestClient(app) as client:
@@ -141,7 +141,7 @@ def test_star_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monk
 
 
 def test_tags_route_response_flags_autofetch_pending_for_a_stub(thin_entry, monkeypatch):
-    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e: {"ok": True})
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", lambda f, e, **kw: {"ok": True})
     app = FastAPI()
     app.post("/entries/tags")(routes.entries.set_entry_manual_tags)
     with TestClient(app) as client:
@@ -181,3 +181,50 @@ def test_truncated_teaser_with_read_more_trailer_counts_as_a_stub():
     assert main._archived_copy_is_plausible(teaser)  # the trailer alone clears the length floor
     assert main._is_truncated_teaser(teaser)
     assert not main._is_truncated_teaser("<p>" + "A full article that simply ends. " * 30 + "Read more on this elsewhere.</p>")
+
+
+def test_auto_refetch_on_keep_only_replaces_with_a_richer_fetch(thin_entry, monkeypatch):
+    """Tagging a short post must not let a worse extraction (a site blurb) replace it: the auto path asks for the richer guard, and a
+    "not richer" outcome is about the article, so it does not put the host in cooldown."""
+    seen: dict = {}
+
+    def _fake(f, e, **kw):
+        seen.update(kw)
+        return {"ok": False, "error": "not richer", "not_richer": True}
+
+    cooled: list[str] = []
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", _fake)
+    monkeypatch.setattr(main, "_mark_autofetch_host_failed", lambda host: cooled.append(host))
+
+    assert main._maybe_autofetch_on_keep(FEED, ENTRY) is True
+    _run_pending_job()
+
+    assert seen == {"only_if_richer": True}
+    assert cooled == []
+
+
+def test_a_not_richer_outcome_is_remembered_so_a_retag_does_not_fetch_again(thin_entry, monkeypatch):
+    calls: list[int] = []
+
+    def _fake(f, e, **kw):
+        calls.append(1)
+        return {"ok": False, "error": "not richer", "not_richer": True}
+
+    monkeypatch.setattr(main, "_refresh_captured_article_for_current_user", _fake)
+    main._autofetch_not_richer.clear()
+    assert main._maybe_autofetch_on_keep(FEED, ENTRY) is True
+    _run_pending_job()
+    main._autofetch_jobs.clear()
+
+    assert main._maybe_autofetch_on_keep(FEED, ENTRY) is False
+    assert calls == [1]
+
+
+def test_the_auto_refetch_metric_goes_by_text_not_by_image_count():
+    short_post = "<code>$ find . -type f | sort | tar -cJf a.tar.xz -T -</code> <p>Archive the tree in a stable order.</p>"
+    blurb_with_share_card = '<figure><img src="https://example.test/share.jpg"></figure><p>The site where people record their gems.</p>'
+    assert not main._autofetch_is_richer(blurb_with_share_card, short_post), "an og:image must not make a blurb beat a short post"
+
+    teaser_with_pixels = "<p>" + "Teaser text. " * 20 + '</p><img src="https://example.test/a.gif"><img src="https://example.test/b.gif">'
+    full_article = "<p>" + "The full article text, paragraph after paragraph. " * 40 + "</p>"
+    assert main._autofetch_is_richer(full_article, teaser_with_pixels), "tracking pixels must not block a real upgrade"

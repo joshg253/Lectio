@@ -160,6 +160,30 @@ def test_readability_route_prefers_stored_content_over_a_second_live_fetch(confi
     assert "The real stored article body, route level." in resp.text
 
 
+def test_readability_route_prefers_richer_stored_content_over_a_failed_archived_extraction(configured, monkeypatch):
+    """Tagging triggers a capture, and readability sometimes locks onto a site blurb instead of the post (a command-of-the-day feed:
+    a 257-character "what is this site" box beat the command itself). The implausible archived copy must not replace the stored body."""
+    monkeypatch.setattr(main, "AUTH_ENABLED", False)
+    _seed_entry("<p>" + "The real stored article body, route level. " * 8 + "</p>")
+    _seed_complete_archive_with_readability("<div><p>This site is the place to record command-line gems. Share your commands.</p></div>")
+    monkeypatch.setattr(routes.entries, "build_readability_response", lambda url: (_ for _ in ()).throw(AssertionError("no live fetch")))
+
+    resp = _client().get("/entries/readability", params={"url": LINK, "feed_url": FEED, "entry_id": ENTRY})
+    assert resp.status_code == 200
+    assert "The real stored article body, route level." in resp.text
+    assert "command-line gems" not in resp.text
+
+
+def test_readability_route_keeps_a_thin_archived_copy_when_stored_is_thinner(configured, monkeypatch):
+    monkeypatch.setattr(main, "AUTH_ENABLED", False)
+    _seed_entry("<p>x</p>")
+    _seed_complete_archive_with_readability("<p>A short but genuine archived article body.</p>")
+
+    resp = _client().get("/entries/readability", params={"url": LINK, "feed_url": FEED, "entry_id": ENTRY})
+    assert resp.status_code == 200
+    assert "A short but genuine archived article body." in resp.text
+
+
 def test_readability_route_with_no_archive_still_falls_through_to_live_fetch(configured, monkeypatch):
     monkeypatch.setattr(main, "AUTH_ENABLED", False)
     _seed_entry("<p>thin stub</p>")
