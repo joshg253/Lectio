@@ -1,9 +1,8 @@
 """Characterization tests for `_run_webhook_rules_after_refresh` -- the
 webhook dispatcher had zero fire-path test coverage before the main.py
 breakup's Step 2 (see Plan.md); test_webhook_rules.py only covers persistence
-and labeling. Webhook POSTs have no idempotency guard, so these pin today's
-behavior (single POST per match, or one batched POST) before the function
-moves to services/automation_rules.py."""
+and labeling. These pin the fire path (single POST per match, or one batched
+POST) and the per-entry claim that stops a second pass re-firing a match."""
 
 from __future__ import annotations
 
@@ -126,3 +125,67 @@ def test_entries_older_than_cutoff_are_ignored(configured, monkeypatch):
     monkeypatch.setattr(automation_rules, "datetime", _FakeDateTime)
     main._run_webhook_rules_after_refresh({FEED})
     assert posted == []
+
+
+def test_second_pass_does_not_repost(configured, monkeypatch):
+    posted = []
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
+    _add_rule()
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_webhook_rules_after_refresh({FEED})
+    main._run_webhook_rules_after_refresh({FEED})
+    assert len(posted) == 2  # the two seeded matches, once each across both passes
+
+
+def test_batch_second_pass_does_not_repost(configured, monkeypatch):
+    posted = []
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
+    _add_rule(webhook_batch=True)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_webhook_rules_after_refresh({FEED})
+    main._run_webhook_rules_after_refresh({FEED})
+    assert len(posted) == 1
+
+
+def test_failed_post_is_retried_on_next_pass(configured, monkeypatch):
+    results = iter([(False, "boom"), (False, "boom"), (True, None), (True, None)])
+    posted = []
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or next(results))
+    _add_rule()
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_webhook_rules_after_refresh({FEED})
+    main._run_webhook_rules_after_refresh({FEED})
+    assert len(posted) == 4
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM automation_dispatched").fetchone()[0] == 2
+
+
+def test_batch_post_failure_releases_claims(configured, monkeypatch):
+    results = iter([(False, "boom"), (True, None)])
+    posted = []
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or next(results))
+    _add_rule(webhook_batch=True)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_webhook_rules_after_refresh({FEED})
+    main._run_webhook_rules_after_refresh({FEED})
+    assert len(posted) == 2
+    assert len(posted[1]["entries"]) == 2
+
+
+def test_error_before_send_does_not_strand_claims(configured, monkeypatch):
+    posted = []
+    monkeypatch.setattr(automation_rules, "send_webhook", lambda url, payload: posted.append(payload) or (True, None))
+    real_tags = automation_rules.get_manual_tags_for_entry
+    monkeypatch.setattr(automation_rules, "get_manual_tags_for_entry", lambda *a: (_ for _ in ()).throw(RuntimeError("db locked")))
+    _add_rule(webhook_batch=True)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_webhook_rules_after_refresh({FEED})
+    assert posted == []
+    monkeypatch.setattr(automation_rules, "get_manual_tags_for_entry", real_tags)
+    main._run_webhook_rules_after_refresh({FEED})
+    assert len(posted) == 1

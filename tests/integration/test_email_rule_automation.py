@@ -171,3 +171,41 @@ def test_email_not_configured_short_circuits(configured, monkeypatch):
         _seed(reader)
     main._run_email_rules_after_refresh({FEED})
     assert calls == []
+
+
+def test_second_pass_does_not_resend_immediate_email(configured, monkeypatch):
+    sent = []
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
+    _add_rule()
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})
+    main._run_email_rules_after_refresh({FEED})
+    assert len(sent) == 1
+
+
+def test_failed_email_is_retried_on_next_pass(configured, monkeypatch):
+    results = iter([(False, "resend 500"), (True, None)])
+    sent = []
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: sent.append(1) or next(results))
+    _add_rule()
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})
+    main._run_email_rules_after_refresh({FEED})
+    assert len(sent) == 2
+
+
+def test_error_before_send_does_not_strand_claim(configured, monkeypatch):
+    sent = []
+    monkeypatch.setattr(automation_rules, "send_article_email", lambda *a, **kw: sent.append(1) or (True, None))
+    real_extras = automation_rules.email_article_extras
+    monkeypatch.setattr(automation_rules, "email_article_extras", lambda *a: (_ for _ in ()).throw(RuntimeError("db locked")))
+    _add_rule()
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})
+    assert sent == []
+    monkeypatch.setattr(automation_rules, "email_article_extras", real_extras)
+    main._run_email_rules_after_refresh({FEED})
+    assert len(sent) == 1

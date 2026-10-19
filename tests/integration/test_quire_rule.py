@@ -103,3 +103,29 @@ def test_run_backs_off_when_meter_blocked(env, monkeypatch):
         main.add_highlight_keyword(conn, "feed", FEED, "", "yellow", rule_type="quire", enabled=1)
     main._run_quire_rules_after_refresh({FEED})
     assert called == []
+
+
+def test_second_pass_does_not_create_duplicate_tasks(env, monkeypatch):
+    tasks = []
+    monkeypatch.setattr(main.quire_service, "create_task", lambda tok, oid, name, desc="": tasks.append(name))
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="quire", enabled=1, search_in="title")
+    main._run_quire_rules_after_refresh({FEED})
+    main._run_quire_rules_after_refresh({FEED})
+    assert tasks == ["Big metal show"]
+
+
+def test_failed_add_is_retried_on_next_pass(env, monkeypatch):
+    calls = []
+
+    def flaky(tok, oid, name, desc=""):
+        calls.append(name)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(main.quire_service, "create_task", flaky)
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "metal", "yellow", rule_type="quire", enabled=1, search_in="title")
+    main._run_quire_rules_after_refresh({FEED})
+    main._run_quire_rules_after_refresh({FEED})
+    assert calls == ["Big metal show", "Big metal show"]

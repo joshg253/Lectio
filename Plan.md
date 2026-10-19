@@ -21,8 +21,11 @@ Empty.
 
 **Do next** — small, concrete, decided.
 
-### Webhook, Quire and Instapaper rules have no per-entry duplicate guard
-These dispatchers pick entries "added in the last 15 minutes" with no claim table, so two automation passes for the same feed inside that window (scheduler tick plus a manual or WebSub refresh) fire a matching entry twice; Quire would create two tasks. Save-article and YouTube playlist rules are already idempotent. Fix with a per-rule, per-entry claim row like `youtube_playlist_added`.
+### Email batch mode can re-queue an entry after a flush (2026-10-18)
+
+`email_batch_queue` dedupes on `UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)`, but a flush deletes the rows, so a second pass
+inside the 15-minute window re-queues an already-digested entry. The key also lacks `feed_url` and `rule_uid`. Fix with the same
+`automation_dispatched` claim, taken at queue time.
 
 ### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
 Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
