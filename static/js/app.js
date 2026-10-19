@@ -19644,7 +19644,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             btn.className = `feed-tag-filter-sign ${cls}` + (signs[tag] === sign ? ' active' : inherited ? ' inherited' : '');
             btn.setAttribute('data-tag-filter-tag', tag);
             btn.setAttribute('data-tag-filter-sign', sign);
-            btn.title = `Feed filter: ${verb} #${tag} posts` + (inherited ? ' (set by a broader rule; clicking sets it on this feed)' : '');
+            btn.title = `Feed filter: ${verb} #${tag} posts`
+              + (inherited ? " (set by a broader rule; clicking edits this feed's own rule; the broader rule still applies)" : '');
             btn.setAttribute('aria-label', btn.title);
             btn.setAttribute('aria-pressed', signs[tag] === sign ? 'true' : 'false');
             btn.textContent = glyph;

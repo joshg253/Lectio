@@ -75,7 +75,7 @@
         {% elif selected_entry.author_filter_token %}
         {% set author_sign = selected_entry.feed_tag_filter_signs.get(selected_entry.author_filter_token) %}
         {% set author_inherited = (selected_entry.feed_tag_inherited_signs or {}).get(selected_entry.author_filter_token) if not author_sign else none %}
-        {% set author_inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}
+        {% set author_inherited_note = " (set by a broader rule; clicking edits this feed's own rule; the broader rule still applies)" %}
         <span class="author-filter-signs">
           <button
             type="button"
@@ -278,7 +278,7 @@
         {% set active_sign = selected_entry.feed_tag_filter_signs.get(tag) %}
         {# Set by an enabled broader (folder/global/multi-feed) rule, shown only where the feed's own rule is silent on the tag. #}
         {% set inherited_sign = (selected_entry.feed_tag_inherited_signs or {}).get(tag) if not active_sign else none %}
-        {% set inherited_note = " (set by a broader rule; clicking sets it on this feed)" %}
+        {% set inherited_note = " (set by a broader rule; clicking edits this feed's own rule; the broader rule still applies)" %}
         {# Past the collapse point the chip is present but hidden, not omitted:
            a publisher's platform tags sort late (RPS puts "PC" 10th of 28), and
            an absent chip cannot be filtered on at all. #}
