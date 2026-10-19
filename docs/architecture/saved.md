@@ -1100,6 +1100,12 @@ complete archives with `content_size_bytes = 0` and no status (`StarredArchiveSe
 `idx_archived_entry_capture`). It covers unsubscribed feeds too (`merge_orphan_saved_entries(capture_failed=True)`). The item shows only
 while something has failed. No per-row badge.
 
+Nightly maintenance retries transient failures (`timeout`, `connect`, `http_5xx`) through `requeue_transient_failures`: at most 20 rows a
+night and 3 per source host, 3 tries per row (`capture_retries`), 7+ days since the capture or last try (`capture_retried_at`). Blocks, TLS,
+4xx, bad links, other errors, and saves whose entry has left the reader (nothing to re-capture) are never retried. The row stays `complete`
+the whole time, so its current capture keeps serving and a failed retry loses nothing; the worker picks it up via `capture_retry_pending`,
+after any normal pending captures. After 3 tries the row stays on the filter.
+
 ## Saved/Kept item size: maintained, not computed live
 
 `archived_entry.content_size_bytes` is written once, at archive-completion

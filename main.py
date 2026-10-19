@@ -3472,6 +3472,10 @@ def ensure_starred_archive_schema() -> None:
             # error. NULL for rows captured before this existed. A failed fetch still archives as 'complete' (the feed's
             # own content may be all there is), so this is the only record of WHY a complete archive can be empty.
             ("source_fetch_status", "TEXT"),
+            # Nightly retry bookkeeping for transient fetch failures (see StarredArchiveService.requeue_transient_failures).
+            ("capture_retries", "INTEGER NOT NULL DEFAULT 0"),
+            ("capture_retried_at", "REAL"),
+            ("capture_retry_pending", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE archived_entry ADD COLUMN {col_name} {col_decl}")
@@ -20611,6 +20615,19 @@ def _daily_maintenance_for_user() -> None:
             LOGGER.info("[maintenance] archive orphan sweep: removed %d unrecoverable failed capture(s)", swept)
     except Exception:
         LOGGER.exception("[maintenance] archive orphan sweep failed")
+
+    # 2c. Flag captures that failed transiently (timeout, connect, 5xx) for retry: 20 rows a night, 3 per host, each row at most
+    # 3 times, 7+ days apart.
+    # Rows whose entry has left the reader (unsubscribed feeds) have nothing to re-capture and are skipped.
+    try:
+        with get_reader() as reader:
+            requeued = starred_archive_service.requeue_transient_failures(
+                lambda feed_url, entry_id: reader.get_entry((feed_url, entry_id), None) is not None
+            )
+        if requeued:
+            LOGGER.info("[maintenance] archive retry: flagged %d transient capture failure(s)", requeued)
+    except Exception:
+        LOGGER.exception("[maintenance] archive retry failed")
 
     # 3. VACUUM this user's own SQLite DBs (the shared thumb cache is global and
     # vacuumed once in _run_global_maintenance).

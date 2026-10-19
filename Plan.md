@@ -38,8 +38,7 @@ escaped term to the matching character classes.
 `archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`
 (2026-09-25), with reachable-now rows left NULL as recapture candidates. Decided:
 1. ~~A "Capture failed" filter in Saved~~ (done 2026-10-19, Saved filter menu; also covers unsubscribed feeds).
-2. Transient kinds (`timeout`/`connect`/`http_5xx`) retry in a weekly pass capped at about 20 rows (good web citizen); after 3 tries a row
-   stays on the filter for a manual call.
+2. ~~Transient kinds retry~~ (done 2026-10-19, in nightly maintenance: 7+ days apart, 20 rows a night, 3 tries; then the row stays on the filter).
 3. Recapture the 20 reachable-now rows once with `scripts/recapture_archived_entries.py`, dry-run first and the list shown, since it rewrites the capture.
 
 ### Refresh the screenshots (last 2026-08-09)
