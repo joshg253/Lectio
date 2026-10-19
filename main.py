@@ -22877,7 +22877,7 @@ def _home_inner(
         "selected_sort_by": selected_sort_by,
         "selected_sort_dir": selected_sort_dir,
         "selected_read_filter": selected_read_filter,
-        "has_capture_failed": bool(selected_star_only and starred_archive_service.get_capture_failed_keys()),
+        "has_capture_failed": bool(selected_star_only and starred_archive_service.has_capture_failed()),
         "selected_star_only": selected_star_only,
         "selected_saved_home": selected_saved_home,
         "selected_home": selected_home,

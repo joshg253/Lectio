@@ -173,3 +173,19 @@ def test_capture_failed_keys_include_failures_and_empty_unclassified(tmp_path):
             )
 
     assert svc.get_capture_failed_keys() == {(FEED, "a"), (FEED, "b"), (FEED, "e")}
+
+
+def test_has_capture_failed_and_missing_table(tmp_path):
+    svc, connect = _service(tmp_path, _entry())
+    assert svc.has_capture_failed() is False
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO archived_entry (feed_url, entry_id, status, starred_at, source_fetch_status)"
+            " VALUES (?, 'x', 'complete', 0, 'http_404')",
+            (FEED,),
+        )
+    assert svc.has_capture_failed() is True
+    with connect() as conn:
+        conn.execute("DROP TABLE archived_entry")
+    assert svc.has_capture_failed() is False
+    assert svc.get_capture_failed_keys() == set()
