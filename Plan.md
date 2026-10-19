@@ -42,11 +42,6 @@ escaped term to the matching character classes.
    stays on the filter for a manual call.
 3. Recapture the 20 reachable-now rows once with `scripts/recapture_archived_entries.py`, dry-run first and the list shown, since it rewrites the capture.
 
-### Tag-filter chip click under a shared rule: keep forking, say so (decided 2026-10-17)
-
-Clicking a post-header chip lit by a folder or global rule keeps creating a feed-level override (editing the shared rule from one feed could
-change dozens of feeds unnoticed). Add a tooltip making the fork explicit ("Overrides the folder rule for this feed").
-
 ### Refresh the screenshots (last 2026-08-09)
 
 `uv run python scripts/refresh_screenshots.py` is hermetic (synthetic demo data). Since August the UI gained tag-chip filtering in the filter bar,
