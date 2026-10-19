@@ -97,10 +97,6 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
 
-### Dead code: the in-app star-mode tree/JS
-
-The dormant in-app star-mode tree and JS that the Read Mode hijack bypasses. Safe to delete; check nothing in `tests/` reads those strings first.
-
 ## Tier 3 — sized, no open decision, ready to build
 
 Empty.
@@ -132,18 +128,31 @@ hand from Feeds. When the URLs differ only trivially (trailing slash, scheme, `w
 feedparser mishandles self-closing tags, so any feed shipping inline SVG art renders as a flat color block. Fix: re-parse SVG subtrees as XML at
 ingest. Real bug with a known fix; build when wanted.
 
-### `/api/*` cluster split — do it when next touched (decided 2026-10-17)
+### Code layout refactor (audit 2026-10-18, not started)
 
-Not worth its own change; move a route into its home when something else needs editing it: `/api/entry-thumb`, `/api/feed-thumb`,
-`/api/img`, `/api/favicon` are pure image-proxy concerns (candidate: a small `routes/media.py`);
-`/api/save`, `/api/bookmarklet/save` are external save-capture endpoints, natural fit in
-`routes/saved.py`; `/api/unread-counts` has no obvious owner yet — decide when picked up.
+Audit: `docs/layout-audit-2026-10.md` (read-only, line numbers as of f8be4d6; re-grep before cutting). Root problem: no storage layer.
+`main.py` (26k lines) holds the connection pools, ~1,350 lines of schema DDL, the settings store and the reader pool; 22 route
+modules and 4 services `from main import` them, so import order is load-bearing. Rules for every step: one extraction per PR, no
+behavior change, `main` keeps a re-export, and grep `setattr` for each moved name first (a moved function stops seeing
+`monkeypatch.setattr(main, ...)`, so the test passes without testing the patch).
 
-### Shared rendering core
+Sequence (details and line ranges in the audit): (1) `run_in_user_context` to `services/tenancy.py`; (2) `mine_publish_date` and
+`_append_site_embeds` out of `main` (kills the lazy imports in `scraper_service`); (3) shared leaf constants module; (4)
+`_view_filter_predicate` to `services/view_filter.py`; (5) `bulk_feed_action` to a service; (6) `LeadImageService` into mixins in a
+package; (7) `routes/feeds.py` into sub-routers; (8) `routes/entries.py` likewise; (9) split `app.js` into ordered classic scripts,
+Highlights/Automation block first; (10) schema DDL and connections to `storage/`; (11) settings store and `get_reader` pool to
+`storage/`; (12) HTML transforms and article extraction into `services/`; (13) per-integration credential getters and the DeviantArt
+sync into their services; (14) rules and tag helpers out, then drop `from main import` in the three services; (15) redesign work
+(scheduler, shared read/star mutation service, starred-archive split, `get_entry_detail` and listing), each behind a characterization
+test. Open before step 9: check whether `app.js` functions are called from template inline handlers.
 
-`_home_inner`, `list_entries_for_feeds`, `get_entry_detail`, and `build_reader_page` are reused by
-`/`, `/read`, pane-swap, and the greader/fever/v1 compat APIs. Not a mechanical split like the
-route-by-prefix work — its own carefully-tested project if ever undertaken.
+Folded in (2026-10-18): (a) the dormant in-app star-mode tree and JS that the Read Mode hijack bypasses is deleted before step 9
+(check nothing in `tests/` reads those strings first); (b) the `/api/*` cluster moves during steps 7-8: `/api/entry-thumb`,
+`/api/feed-thumb`, `/api/img`, `/api/favicon` to a small `routes/media.py`; `/api/save` and `/api/bookmarklet/save` to
+`routes/saved.py`; `/api/unread-counts` has no owner yet, decide then; (c) the shared rendering core (`_home_inner`,
+`list_entries_for_feeds`, `get_entry_detail`, `build_reader_page`, reused by `/`, `/read`, pane-swap and the greader/fever/v1 APIs) is
+step 15's last item, not a mechanical split. Sequencing: land "Inline SVG in feed content is mangled at ingest" before step 12, and
+do "Unify the escalation ladder" before or after step 12 and the `routes/media.py` move, never between (it touches `/api/img`).
 
 ### Page-fetch escalation ladder — follow-ups
 
