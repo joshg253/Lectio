@@ -383,7 +383,9 @@ def entry_readability(
     # archived readability HTML so the view stays available even if the
     # source is gone. Otherwise fall through to the live extractor.
     archived_html = _resolve_archived_readability_html(feed_url, entry_id)
-    if archived_html:
+    # A failed extraction (readability locking onto a site blurb or sidebar) is archived like a good one, and tagging an entry is what
+    # triggers the capture, so an implausible copy must not beat a richer stored body (same test the e-ink reader applies).
+    if archived_html and _archived_copy_is_plausible(archived_html):
         return _wrap_readability_html(archived_html, url)
     # A complete archive with no readability copy (the recapture mismatch
     # guard refused a parked/replaced page, or the live fetch failed outright)
@@ -396,8 +398,10 @@ def entry_readability(
     if feed_url and entry_id and starred_archive_service.has_complete_archive(feed_url, entry_id):
         detail = get_entry_detail(feed_url, entry_id)
         stored = str((detail or {}).get("content_html") or "")
-        if stored:
+        if stored and (not archived_html or _reader_copy_is_richer(stored, archived_html)):
             return _wrap_readability_html(stored, url)
+    if archived_html:
+        return _wrap_readability_html(archived_html, url)
     return build_readability_response(url)
 
 

@@ -659,3 +659,53 @@ def test_link_index_detection_needs_both_quantity_and_density():
     # Many links but mostly prose — a well-cited article.
     cited = _PROSE_HTML + "".join(f'<a href="/n{i}">{i}</a>' for i in range(40))
     assert not looks_like_a_link_index(cited)
+
+
+def _richer_by_length(new: str, stored: str) -> bool:
+    return len(new) > len(stored)
+
+
+def test_an_automatic_refetch_keeps_the_stored_body_when_the_fetch_is_not_richer(reader, meta_conn):
+    """Tagging a short post (a one-line shell command) auto-refetches it, and readability locked onto the site blurb, which replaced
+    the command. With ``is_richer`` the stored body stays unless the fetch beats it."""
+    _add_filed_capture(reader, meta_conn)
+    stored = "<p>By Jesse Will By Andrew Zaleski</p>"
+
+    result = refresh_captured_article(
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=lambda url: ("Blurb", "<p>x</p>"),
+        is_richer=_richer_by_length,
+    )
+
+    assert result["ok"] is False
+    assert result["not_richer"] is True
+    assert _stored_content(reader, REAL_FEED, ARTICLE) == stored
+    assert meta_conn.execute("SELECT COUNT(*) FROM entry_content_edits").fetchone()[0] == 0
+
+
+def test_an_automatic_refetch_still_replaces_a_stub_with_a_richer_fetch(reader, meta_conn):
+    _add_filed_capture(reader, meta_conn)
+
+    result = refresh_captured_article(
+        reader,
+        meta_conn,
+        REAL_FEED,
+        ARTICLE,
+        extract=lambda url: ("The Real Article", "<p>It's a familiar story, told at some length.</p>"),
+        is_richer=_richer_by_length,
+    )
+
+    assert result["ok"] is True
+    assert "familiar story" in _stored_content(reader, REAL_FEED, ARTICLE)
+
+
+def test_a_manual_refetch_replaces_even_when_not_richer(reader, meta_conn):
+    _add_filed_capture(reader, meta_conn)
+
+    result = refresh_captured_article(reader, meta_conn, REAL_FEED, ARTICLE, extract=lambda url: ("Short", "<p>x</p>"))
+
+    assert result["ok"] is True
+    assert _stored_content(reader, REAL_FEED, ARTICLE) == "<p>x</p>"

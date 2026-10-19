@@ -520,7 +520,7 @@ entries only" comes from reader's own `after_entry_update_hooks` (status NEW, fi
 (`not _archived_copy_is_plausible`, the same test the star/tag auto-refetch uses); a drain on its own thread, single-flight per user,
 spawned after each enhancement pass, re-fetches up to 10 per feed per cycle via `_refresh_captured_article_for_current_user`, so
 Revert and the refresh pin apply. Off-thread because the scheduled refresh runs enhancement in-line and a full-ladder fetch can take a
-minute. Each entry is attempted once; a failure pauses the host via the shared auto-refetch cooldown, and entries on a paused host
+minute. Each entry is attempted once; a failure pauses the host via the shared auto-refetch cooldown (a fetch no richer than the stored body is not a failure), and entries on a paused host
 stay queued. Comic/photo posts also fail the thin test — the opt-in is what keeps them out, not the threshold.
 
 The manual "Email → full article text" send reuses the same thin test at send time (`_email_full_body` in routes/entries.py): a thin

@@ -475,10 +475,15 @@ def refresh_captured_article(
     extract: Callable[[str], tuple[str, str]],
     enqueue_archive: Callable[[str, str], None] | None = None,
     is_boilerplate_extraction: Callable[[str, str, str], bool] | None = None,
+    is_richer: Callable[[str, str], bool] | None = None,
     bump_received: bool | None = None,
     date_choice: str | None = None,
 ) -> dict:
     """Re-fetch and re-extract a Lectio capture in place, wherever it lives.
+
+    *is_richer*, when given, is called as ``is_richer(new_html, stored_html)`` and the stored body is kept unless it says the fetch is
+    more of an article. Automatic re-fetches (on keep, at ingest) pass it, because a stored body they judged "thin" may simply be a
+    short post; a person clicking Re-fetch does not, since replacing the body is the point.
 
     *bump_received*, when given, overrides the default is_capture-based
     surfacing decision below — None keeps today's behavior (a capture bumps,
@@ -645,6 +650,16 @@ def refresh_captured_article(
                 return result
         except Exception:  # noqa: BLE001 — a guard must never break the feature
             LOGGER.debug("boilerplate check failed for %s", entry_id, exc_info=True)
+
+    if is_richer is not None:
+        try:
+            _stored = max([str(getattr(c, "value", "") or "") for c in (entry.content or [])] + [str(entry.summary or "")], key=len)
+            if _stored.strip() and not is_richer(article_html, _stored):
+                result["error"] = "The fetched page was not richer than the stored copy — the stored copy was left alone."
+                result["not_richer"] = True
+                return result
+        except Exception:  # noqa: BLE001 — a guard must never break the feature
+            LOGGER.debug("richer check failed for %s", entry_id, exc_info=True)
 
     # Snapshot the body BEFORE replacing it, so a bad re-fetch is one click to
     # undo. Two entries were destroyed this way before this existed — a parked
