@@ -476,6 +476,13 @@ always kept**: a feed that stops tagging must not have its firehose suppressed.
 The author rides along as a pseudo-tag (`by-steven-parker`), so author tokens work
 in every position. Runs after `update_feed`, since the sink fires during parse.
 
+On the scheduled paths (the scheduler and the folder-refresh job, which pass `inline_followups=True`) it runs right after *each* feed stores
+new entries, not only at the end-of-pass dispatch: a paced batch runs for 20+ minutes, and a post matching the rule sat unread in the list, and new
+videos had no duration, until the pass finished (reported 2026-10-19). `FeedRefreshService._after_new_entries` then fetches that feed's YouTube
+durations, re-pins the user's title/link/date/content overrides, and calls `on_new_entries`, which runs the feed's `tag_filter` and
+`mark_as_read` rules. Request-path refreshes (manual, bulk) don't, so they never wait on the YouTube API or a rule scan. The end-of-pass run
+stays as the backstop and finds those entries already handled (rules only act on unread entries).
+
 **Writing a spec needs autocomplete, because the failure is silent.** A spec can
 only match what ingest captured, stored lowercase-hyphenated, so typing against an
 unseen vocabulary (HackerNoon: 140 distinct tags in 20 items) is guesswork — and a

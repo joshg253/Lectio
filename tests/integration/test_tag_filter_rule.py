@@ -452,3 +452,26 @@ def test_dismissed_tags_are_still_removed_before_the_cap(env):
     main.feed_tag_service.record_entry_tags(FEED, [("e-linux", ["Keep Me", "Drop Me"])])
     main.feed_tag_service.set_tag_suppressed(FEED, "Drop Me", True)
     assert main.get_feed_tag_suggestions(FEED, "e-linux") == ["Keep Me"]
+
+
+def test_rules_run_per_feed_as_new_entries_land(env):
+    # The refresh calls this right after a feed stores new entries, so a match is marked read without waiting for the end-of-pass
+    # dispatch (a paced batch runs 20+ minutes). Both tag_filter and mark_as_read rules run; out-of-scope feeds are left alone.
+    with main.get_meta_connection() as conn:
+        main.add_highlight_keyword(conn, "feed", FEED, "-deals", "yellow", rule_type="tag_filter", enabled=1)
+        main.add_highlight_keyword(conn, "feed", FEED, "Windows", "yellow", rule_type="mark_as_read", enabled=1)
+
+    main._run_rules_on_new_entries(OTHER_FEED)
+    assert len(_unread_ids()) == 5
+
+    main._run_rules_on_new_entries(FEED)
+    assert _unread_ids() == {"e-linux", "e-untagged"}
+
+
+def test_the_service_is_wired_to_the_per_feed_rules_and_only_the_scheduled_paths_use_them():
+    import inspect
+
+    assert main.feed_refresh_service._on_new_entries is not None
+    src = inspect.getsource(main)
+    # The scheduler and the folder-refresh job opt in; request-path refreshes (manual, bulk) do not.
+    assert src.count("enhance=False, inline_followups=True") == 2

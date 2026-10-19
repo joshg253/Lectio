@@ -88,8 +88,13 @@ class FeedRefreshService:
         on_fetch_still_blocked_via_proxy: Callable[[str], bool] | None = None,
         on_proxy_unreachable: Callable[[str], None] | None = None,
         progress_hook: Callable[[str], None] | None = None,
+        on_new_entries: Callable[[str], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
+        # Called with a feed_url right after its refresh stored new entries (only for calls with ``inline_followups``), so per-feed
+        # automation (tag-filter and mark-as-read rules) acts while a long paced batch is still running instead of waiting for the
+        # end-of-pass dispatch.
+        self._on_new_entries = on_new_entries
         self._get_reader = get_reader
         self._fetch_and_store_youtube_durations = fetch_and_store_youtube_durations
         self._fetch_and_store_lead_images = fetch_and_store_lead_images
@@ -414,19 +419,23 @@ class FeedRefreshService:
         with self._in_flight_lock:
             self._in_flight.difference_update((user_id, u) for u in feed_urls)
 
-    def update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> list[str]:
+    def update_feeds(
+        self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False, inline_followups: bool = False
+    ) -> list[str]:
         """Update *feed_urls*, skipping any feed another pass (scheduler, manual refresh) is already updating: two passes inserting
         the same new entries collide on the entries primary key and fail both feeds. Returns the skipped feeds (usually empty)."""
         requested = list(dict.fromkeys(feed_urls))
         claimed = self._claim_feeds(requested)
         try:
-            self._update_feeds(claimed, enhance=enhance, bypass_backoff=bypass_backoff)
+            self._update_feeds(claimed, enhance=enhance, bypass_backoff=bypass_backoff, inline_followups=inline_followups)
         finally:
             self._release_feeds(claimed)
         claimed_set = set(claimed)
         return [u for u in requested if u not in claimed_set]
 
-    def _update_feeds(self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False) -> None:
+    def _update_feeds(
+        self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False, inline_followups: bool = False
+    ) -> None:
         """*bypass_backoff* skips the feed- and domain-level backoff checks (not
         reader's own update_after, which reflects the server's own Retry-After/
         Cache-Control — a real instruction from the site, not just our pacing).
@@ -591,7 +600,7 @@ class FeedRefreshService:
                         # immediately: a paced batch (e.g. ~700 YouTube subs)
                         # can run for an hour+, and the batch-end purge left
                         # resurrected entries visible the whole time.
-                        self.purge_tombstoned_entries([feed_url])
+                        feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                     _ok_duration_ms = int((time.perf_counter() - feed_started_at) * 1000)
                     if self._refresh_debug_enabled:
                         elapsed_ms = int((time.perf_counter() - feed_started_at) * 1000)
@@ -693,7 +702,7 @@ class FeedRefreshService:
                             success_count += 1
                             _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
                             if _new_entries:
-                                self.purge_tombstoned_entries([feed_url])
+                                feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                             self._logger.info("[refresh] direct fallback succeeded after proxy-unreachable for %s", feed_url)
                             with self._get_meta_connection() as conn:
                                 conn.execute(
@@ -745,7 +754,7 @@ class FeedRefreshService:
                                     success_count += 1
                                     _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
                                     if _new_entries:
-                                        self.purge_tombstoned_entries([feed_url])
+                                        feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                                     self._logger.info("[refresh] browser-identity retry succeeded for %s", feed_url)
                                     with self._get_meta_connection() as conn:
                                         conn.execute(
@@ -793,7 +802,7 @@ class FeedRefreshService:
                                     success_count += 1
                                     _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
                                     if _new_entries:
-                                        self.purge_tombstoned_entries([feed_url])
+                                        feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                                     self._logger.info("[refresh] proxy retry succeeded for %s", feed_url)
                                     with self._get_meta_connection() as conn:
                                         conn.execute(
@@ -839,7 +848,7 @@ class FeedRefreshService:
                                     success_count += 1
                                     _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
                                     if _new_entries:
-                                        self.purge_tombstoned_entries([feed_url])
+                                        feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                                     self._logger.info("[refresh] flaresolverr retry succeeded for %s", feed_url)
                                     with self._get_meta_connection() as conn:
                                         conn.execute(
@@ -885,7 +894,7 @@ class FeedRefreshService:
                                     success_count += 1
                                     _new_entries = int(getattr(_updated, "new", 0)) if _updated else 0
                                     if _new_entries:
-                                        self.purge_tombstoned_entries([feed_url])
+                                        feed_started_at += self._after_new_entries(feed_url, followups=inline_followups)
                                     self._logger.info("[refresh] last-resort retry succeeded for %s", feed_url)
                                     with self._get_meta_connection() as conn:
                                         conn.execute(
@@ -1039,6 +1048,38 @@ class FeedRefreshService:
                 skipped_count,
                 total_ms,
             )
+
+    def _after_new_entries(self, feed_url: str, *, followups: bool) -> float:
+        """Per-feed work run as soon as a refresh stores new entries; returns the seconds it took, so the caller can keep it out of the
+        feed's fetch time.
+
+        Always purges re-ingested tombstones. With ``followups`` (the scheduler and folder-refresh job, which run off the request path,
+        pass it) it also fetches YouTube durations (a no-op for other feeds; ids already cached cost nothing when the batch-end
+        enhancement repeats it), re-pins the user's corrected titles, links, dates and content so rules see what the end-of-pass run
+        would, and calls the new-entries hook. Each step's failure is logged and never fails the refresh."""
+        started = time.perf_counter()
+        try:
+            self.purge_tombstoned_entries([feed_url])
+        except Exception:  # noqa: BLE001
+            self._logger.exception("[refresh] tombstone purge failed for %s", feed_url)
+        if followups:
+            try:
+                self._fetch_and_store_youtube_durations(feed_url)
+            except Exception:  # noqa: BLE001
+                self._logger.exception("[refresh] duration fetch failed for %s", feed_url)
+            if self._on_new_entries is not None:
+                try:
+                    for reapply in (
+                        self.reapply_entry_date_overrides,
+                        self.reapply_entry_title_overrides,
+                        self.reapply_entry_link_overrides,
+                        self.reapply_entry_content_overrides,
+                    ):
+                        reapply([feed_url])
+                    self._on_new_entries(feed_url)
+                except Exception:  # noqa: BLE001
+                    self._logger.exception("[refresh] new-entries hook failed for %s", feed_url)
+        return time.perf_counter() - started
 
     def purge_tombstoned_entries(self, feed_urls: Iterable[str]) -> int:
         """Delete entries the user hard-removed (meta ``deleted_entries``) that a

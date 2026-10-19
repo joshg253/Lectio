@@ -93,6 +93,7 @@ def _build_service(
     on_fetch_still_blocked_via_proxy=None,
     on_proxy_unreachable=None,
     progress_hook=None,
+    on_new_entries=None,
 ):
     def get_meta_connection():
         return _make_conn(db_path)
@@ -113,7 +114,49 @@ def _build_service(
         on_bot_challenge_still_blocked=on_bot_challenge_still_blocked,
         on_fetch_still_blocked_via_proxy=on_fetch_still_blocked_via_proxy,
         on_proxy_unreachable=on_proxy_unreachable,
+        on_new_entries=on_new_entries,
     )
+
+
+class _NewCountReader:
+    """update_feed returns an UpdatedFeed-like object; records the order of updates in ``events``."""
+
+    def __init__(self, new_by_url: dict[str, int], events: list[str]):
+        self.new_by_url = new_by_url
+        self.events = events
+
+    def update_feed(self, feed_url: str):
+        self.events.append(f"update {feed_url}")
+        new = self.new_by_url.get(feed_url)
+        return None if new is None else type("Updated", (), {"new": new})()
+
+
+def test_new_entries_hook_runs_per_feed_while_the_batch_is_still_going(tmp_path: Path):
+    events: list[str] = []
+    reader = _NewCountReader({"https://a.test/feed": 2, "https://b.test/feed": 0, "https://c.test/feed": 1}, events)
+    service = _build_service(tmp_path / "m.sqlite", reader, [], [], on_new_entries=lambda url: events.append(f"hook {url}"))
+    service.update_feeds(["https://a.test/feed", "https://b.test/feed", "https://c.test/feed"], enhance=False, inline_followups=True)
+
+    assert events == [
+        "update https://a.test/feed",
+        "hook https://a.test/feed",
+        "update https://b.test/feed",
+        "update https://c.test/feed",
+        "hook https://c.test/feed",
+    ]
+
+
+def test_new_entries_hook_failure_does_not_break_the_refresh(tmp_path: Path):
+    events: list[str] = []
+    reader = _NewCountReader({"https://a.test/feed": 1, "https://b.test/feed": 1}, events)
+
+    def boom(_url: str) -> None:
+        raise RuntimeError("rule blew up")
+
+    service = _build_service(tmp_path / "m.sqlite", reader, [], [], on_new_entries=boom)
+    service.update_feeds(["https://a.test/feed", "https://b.test/feed"], enhance=False, inline_followups=True)
+
+    assert events == ["update https://a.test/feed", "update https://b.test/feed"]
 
 
 def test_is_fetch_refusal_classifies_only_refusals():
@@ -1279,3 +1322,39 @@ def test_in_flight_claims_are_per_user(tmp_path):
         assert service._claim_feeds(["https://a.xml"]) == ["https://a.xml"]  # another user's pass doesn't block this one
     with tenancy.user_context("u_one"):
         assert service._claim_feeds(["https://a.xml"]) == []
+
+
+def test_youtube_durations_are_fetched_right_after_new_entries_not_at_batch_end(tmp_path: Path):
+    events: list[str] = []
+    reader = _NewCountReader({"https://a.test/feed": 1, "https://b.test/feed": 0, "https://c.test/feed": 3}, events)
+    yt_calls: list[str] = []
+    service = _build_service(tmp_path / "m.sqlite", reader, yt_calls, [])
+    service.update_feeds(["https://a.test/feed", "https://b.test/feed", "https://c.test/feed"], enhance=False, inline_followups=True)
+
+    assert yt_calls == ["https://a.test/feed", "https://c.test/feed"]
+
+
+def test_request_path_refreshes_run_no_inline_followups(tmp_path: Path):
+    """A manual refresh from a request handler passes no ``inline_followups``: no duration API call and no rule scans there."""
+    events: list[str] = []
+    reader = _NewCountReader({"https://a.test/feed": 2}, events)
+    yt_calls: list[str] = []
+    service = _build_service(tmp_path / "m.sqlite", reader, yt_calls, [], on_new_entries=lambda url: events.append(f"hook {url}"))
+    service.update_feeds(["https://a.test/feed"], enhance=False)
+
+    assert events == ["update https://a.test/feed"]
+    assert yt_calls == []
+
+
+def test_a_raising_duration_fetch_still_lets_the_hook_run(tmp_path: Path):
+    events: list[str] = []
+    reader = _NewCountReader({"https://a.test/feed": 1}, events)
+
+    def boom(_url: str) -> None:
+        raise RuntimeError("quota")
+
+    service = _build_service(tmp_path / "m.sqlite", reader, [], [], on_new_entries=lambda url: events.append(f"hook {url}"))
+    service._fetch_and_store_youtube_durations = boom
+    service.update_feeds(["https://a.test/feed"], enhance=False, inline_followups=True)
+
+    assert events == ["update https://a.test/feed", "hook https://a.test/feed"]
