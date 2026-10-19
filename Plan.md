@@ -39,18 +39,17 @@ escaped term to the matching character classes.
 (2026-09-25), with reachable-now rows left NULL as recapture candidates. Decided:
 1. ~~A "Capture failed" filter in Saved~~ (done 2026-10-19, Saved filter menu; also covers unsubscribed feeds).
 2. ~~Transient kinds retry~~ (done 2026-10-19, in nightly maintenance: 7+ days apart, 20 rows a night, 3 tries; then the row stays on the filter).
-3. Recapture the 20 reachable-now rows once with `scripts/recapture_archived_entries.py`, dry-run first and the list shown, since it rewrites the capture.
+3. ~~Recapture reachable-now rows~~ (dropped 2026-10-19: only 1 transient row left; the ~15k NULL rows can't be told apart without a full re-fetch sweep).
 
 ### YouTube facade thumbnail recovery skips `data-lazy-src` (2026-10-19)
 
 `_extract_source_embed_iframes` reads a facade's `<img>` from `src`/`data-src` only (found in review of the iframe `data-lazy-src` fix). A WP-lazyload facade
 with the thumbnail only in `data-lazy-src` isn't recovered. One-line fix; do it when a real feed shows it.
 
-### Refresh the screenshots (last 2026-08-09)
+### Unstar racing an in-flight capture can resurrect it (2026-10-19)
 
-`uv run python scripts/refresh_screenshots.py` is hermetic (synthetic demo data). Since August the UI gained tag-chip filtering in the filter bar,
-the Disabled chip in Automations, disabled-feed reasons, the grouped Utilities tab and regrouped right-click menus. Add one filter-bar shot and
-a right-click menu shot. Needs `uv run playwright install chromium` (the venv's Playwright wants a newer Chromium than the cached one).
+The final `UPDATE` in `_archive_entry` has no status guard, so an unstar that deletes the archive row while its capture is running can be
+overwritten back to `complete`. Pre-existing; found in review of the nightly retry. Guard the write on the row still existing.
 
 **Dated** — act on or after the date.
 
