@@ -637,6 +637,8 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
                 (item["title"], feed["id"], item["url"]),
             )
 
+    conn.commit()  # the heal UPDATEs above must not hold the write lock across the per-entry page fetches below
+
     now = datetime.now(timezone.utc).isoformat()
     new_visible = 0
     content_selector = str(feed.get("content_selector") or "").strip()
@@ -656,6 +658,7 @@ def _scrape_link_list(conn: sqlite3.Connection, feed: dict, initial: bool = Fals
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (entry_id, feed["id"], abs_url, title, content, published or now, hidden),
         )
+        conn.commit()  # next iteration fetches another page
         if not initial:
             new_visible += 1
 
@@ -817,11 +820,15 @@ def refresh_all_scraped_feeds(conn: sqlite3.Connection) -> None:
         rows = conn.execute("SELECT id FROM scraped_feeds").fetchall()
     except Exception:
         return  # table may not exist in test environments
+    conn.commit()  # never start the round inside a transaction the caller left open
     for row in rows:
         try:
             refresh_scraped_feed_by_id(conn, str(row["id"]))
         except Exception:
             LOGGER.exception("[scraper] error refreshing feed %s", row["id"])
+        # Release the write lock between feeds: each refresh is a network round trip, and an open implicit transaction here blocked every
+        # other writer (a tag-chip click took 8s) for the whole round.
+        conn.commit()
 
 
 def get_all_scraped_feeds(conn: sqlite3.Connection) -> list[dict]:

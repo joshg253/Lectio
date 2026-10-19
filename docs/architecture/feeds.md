@@ -450,6 +450,11 @@ are different questions, and this only answers the filing one). Pinned tags
 (`get_feed_pinned_tags`) are a separate, stronger signal — a deliberate per-feed
 choice — and are not filtered by this list.
 
+**Refresh rounds don't hold the write lock across the network.** The scheduler runs the scraped-feed, dev.to, DeviantArt and Reddit rounds on one
+pooled meta connection, and sqlite3 keeps an implicit transaction open from the first write until commit. Each round commits before it starts,
+after every feed and before each page or metadata fetch inside a feed, so a UI write (a tag-chip click took 8 s once) waits for one short write
+instead of the round.
+
 ### The chip row, and the tag-filter rule
 
 Chips render as **[ + tag ▲ ▼ ]**. **+** applies the tag manually. **▲/▼** edit

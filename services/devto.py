@@ -504,6 +504,7 @@ def refresh_all_devto_feeds(conn: sqlite3.Connection, max_feeds: int = 40) -> No
         # (renamed column, bad migration) still surfaces at debug level.
         LOGGER.debug("[devto] skipping refresh; devto_feeds unavailable: %s", exc)
         return
+    conn.commit()  # never start the round inside a transaction the caller left open
     for row in rows:
         try:
             refresh_devto_feed_by_id(conn, str(row["id"]))
@@ -512,6 +513,9 @@ def refresh_all_devto_feeds(conn: sqlite3.Connection, max_feeds: int = 40) -> No
             return
         except Exception:
             LOGGER.exception("[devto] error refreshing feed %s", row["id"])
+        # Release the write lock between feeds: each refresh is a network round trip, and an open implicit transaction here blocked every
+        # other writer (a tag-chip click took 8s) for the whole round.
+        conn.commit()
 
 
 def delete_devto_feed(conn: sqlite3.Connection, reader, feed_id: str) -> None:

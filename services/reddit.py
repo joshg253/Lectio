@@ -255,6 +255,7 @@ def refresh_all_reddit_feeds(
             "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
             (f"reddit_last_sync:{feed_url}", now_iso),
         )
+        meta_conn.commit()  # don't hold the write lock across the next feed's network call
     if rows:
         meta_conn.commit()
     return added
