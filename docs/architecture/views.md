@@ -67,7 +67,11 @@ filter and says nothing about it — which `Move visible to feed…` did.
 read/star filters, filter term) and re-resolves it at an effectively unbounded
 limit. Correct at any size, and with no id payload to bound `_MOVE_BATCH_CAP`
 does not apply. `dry_run=1` returns the count so the dialog can state the real
-number rather than the rows in the DOM, naming both when they differ.
+number rather than the rows in the DOM, naming both when they differ. The browser
+also posts the rows it shows (`on_screen`, JSON pairs) and the server takes the
+union, each entry once: the predicate resolves by read filter, but rows marked read
+while shown stay on screen, so on an unread view it could otherwise miss them or
+resolve nothing (the same gap Select All had).
 
 "Shown" means everything matching the active filters regardless of scroll —
 chunking is a rendering optimization, not user intent. Orphan archive rows

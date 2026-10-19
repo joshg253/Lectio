@@ -1377,6 +1377,10 @@ def select_all_visible_entries_route(
     return JSONResponse({"ok": True, "entries": entries, "count": len(entries)})
 
 
+# Most on-screen rows the browser may post with a whole-view move (the list itself chunks well below this).
+_MOVE_ON_SCREEN_CAP = 5000
+
+
 @router.post("/entries/move-visible-to-feed")
 def move_visible_entries_to_feed_route(
     target_url: str = Form(default=""),
@@ -1391,6 +1395,7 @@ def move_visible_entries_to_feed_route(
     kept: str | None = Form(default=None),
     filter_term: str = Form(default=""),
     dry_run: str = Form(default=""),
+    on_screen: str = Form(default=""),
 ):
     """Move every entry matching the current view + filter, resolved server-side.
 
@@ -1403,6 +1408,10 @@ def move_visible_entries_to_feed_route(
 
     ``dry_run`` returns just the count, so the confirm dialog can state the real
     number instead of the number of rows in the DOM.
+
+    ``on_screen`` (optional JSON ``[[feed_url, entry_id], ...]``) adds the rows the browser is showing to the set. The view is resolved
+    by its read filter, but rows marked read while shown stay on screen, so on an unread view the predicate alone can miss them (or
+    resolve nothing). The union is taken here, each entry once, so the count and the move agree.
     """
     target = target_url.strip()
     is_dry_run = dry_run in ("1", "true", "on", "yes")
@@ -1427,6 +1436,22 @@ def move_visible_entries_to_feed_route(
 
     matches_filter = _view_filter_predicate(filter_term, folder_id=folder_id)
     matches = [p for p in posts if matches_filter(p)]
+    seen = {(str(p["feed_url"]), str(p["id"])) for p in matches}
+    try:
+        shown = json.loads(on_screen) if on_screen else []
+    except ValueError:
+        shown = None
+    # A malformed payload is refused, not ignored: ignoring it would quietly reproduce the omission this parameter exists to close.
+    if (
+        not isinstance(shown, list)
+        or len(shown) > _MOVE_ON_SCREEN_CAP
+        or not all(isinstance(p, list) and len(p) == 2 and all(isinstance(v, str) and v for v in p) for p in shown)
+    ):
+        return JSONResponse({"ok": False, "error": "Could not read the rows on screen."}, status_code=400)
+    for feed_url_shown, entry_id_shown in shown:
+        if (feed_url_shown, entry_id_shown) not in seen:
+            seen.add((feed_url_shown, entry_id_shown))
+            matches.append({"feed_url": feed_url_shown, "id": entry_id_shown})
 
     if is_dry_run:
         return JSONResponse({"ok": True, "count": len(matches)})

@@ -11887,6 +11887,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
       const predicate = currentViewParams();
       predicate.set('filter_term', document.getElementById('posts-filter-input')?.value?.trim() || '');
+      // The server resolves the view by its read filter, but rows marked read as you work through a list stay on screen, so on an
+      // unread view it can resolve fewer posts (or none) than the pane shows. Send the rows shown; the server takes the union.
+      predicate.set('on_screen', JSON.stringify(entries.map(e => [e.feedUrl, e.entryId])));
 
       // The browser holds a page of the view (250 on first load), so the row
       // count is a floor, not the total. Ask the server what the predicate
