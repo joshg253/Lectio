@@ -27,12 +27,6 @@ Empty.
 inside the 15-minute window re-queues an already-digested entry. The key also lacks `feed_url` and `rule_uid`. Fix with the same
 `automation_dispatched` claim, taken at queue time.
 
-### Feed-tag capture gaps that predate the YouTube hashtags (2026-10-14)
-Found by PR review; all three apply to every tag source, so they want their own change: (1) `_collect_entry_tags` skips an entry whose
-extraction is empty, so a feed that drops all of an entry's tags never clears the stored `source='feed'` rows; (2) `entry_feed_tags` is
-keyed `(feed_url, entry_id, tag)`, so a feed tag equal to a page tag is ignored on insert and vanishes if the page row is later removed;
-(3) a failed meta-DB write during parse is logged and not retried, and a 304 never re-parses.
-
 ### Move-all-shown-to-feed may share the Select All gap (2026-10-16; plausible, not reproduced)
 
 Select All now also takes on-screen rows because the server resolves by read filter while rows marked read stay visible. "Move all shown

@@ -99,8 +99,24 @@ def test_case_duplicate_tags_do_not_raise(service, conn):
 
 def test_empty_pairs_and_empty_tags_noop(service, conn):
     service.record_entry_tags(FEED, [])
-    service.record_entry_tags(FEED, [("e1", []), ("", ["x"])])
+    service.record_entry_tags(FEED, [("e1", []), ("", ["x"])])  # nothing stored, so nothing to clear
     assert conn.execute("SELECT COUNT(*) FROM entry_feed_tags").fetchone()[0] == 0
+
+
+def test_empty_tags_clear_that_sources_rows_only(service, conn):
+    service.record_entry_tags(FEED, [("e1", ["a"])])
+    service.record_entry_tags(FEED, [("e1", ["p"])], source="page")
+    service.record_entry_tags(FEED, [("e1", [])])  # the feed dropped every tag
+    assert _rows(conn) == ["p"]
+
+
+def test_feed_takes_over_a_tag_a_page_row_holds(service, conn):
+    service.record_entry_tags(FEED, [("e1", ["shared", "p"])], source="page")
+    service.record_entry_tags(FEED, [("e1", ["shared"])])
+    service.record_entry_tags(FEED, [("e1", ["p"])], source="page")  # the page pass re-runs and drops "shared"
+    assert _rows(conn) == ["p", "shared"]
+    service.record_entry_tags(FEED, [("e1", [])])  # the feed drops it, so it goes
+    assert _rows(conn) == ["p"]
 
 
 def test_delete_for_feed(service, conn):
@@ -164,7 +180,7 @@ def test_parser_captures_category_tags(sink):
         "<item><guid>e2</guid><link>https://x.test/2</link></item>"
     )
     SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
-    assert sink == [(FEED, [("e1", ["Python", "AI"])])]
+    assert sink == [(FEED, [("e1", ["Python", "AI"]), ("e2", [])])]  # e2 listed empty so stale rows clear
 
 
 def test_parser_guidless_rss_maps_by_link(sink):
@@ -190,10 +206,10 @@ def test_parser_skipped_entry_produces_no_pair(sink):
     assert sink == [(FEED, [("e1", ["Kept"])])]
 
 
-def test_parser_no_tags_no_sink_call(sink):
+def test_parser_untagged_entry_sent_empty(sink):
     raw = _feed_xml("<item><guid>e1</guid><link>https://x.test/1</link></item>")
     SanitizingFeedparserParser()(FEED, io.BytesIO(raw), {})
-    assert sink == []
+    assert sink == [(FEED, [("e1", [])])]
 
 
 def test_raising_sink_does_not_break_parse():

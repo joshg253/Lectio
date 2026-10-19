@@ -364,10 +364,15 @@ keeping services free of main/DB imports.
   `_youtube_description_hashtags` scans it for `yt:video:` entries only (a `#` in other feeds' prose or code is not a tag), skips URL
   fragments, entities and tags over 30 characters, drops the Shorts markers, and keeps the first 20.
   Older entries were filled by `scripts/backfill_youtube_hashtags.py` (additive).
-- **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at)`, tags
+- **Storage.** `entry_feed_tags(feed_url, entry_id, tag, first_seen_at, source)`, tags
   stored **raw** and normalized only at display, because the raw text is the
   foundation for tag-filtered feed adapters. Replace-per-entry semantics, so
-  publisher edits propagate; entries outside the fetch window keep theirs.
+  publisher edits propagate; entries outside the fetch window keep theirs. An entry the feed lists with no tags has its `source='feed'`
+  rows cleared. Ingest page topics are `source='page'` and tags harvested on open or by the background fetch are
+  `source='open'`, so that clearing never touches either (only 'page' rows count as page-sourced for
+  auto-enabling topic capture). The key ignores `source`, so a feed
+  tag equal to another source's tag takes over that row; the reverse (another source's insert ignored while the feed holds it) is
+  accepted, and the tag is gone if the feed later drops it.
 - **Synthetic feeds** (dev.to, DeviantArt) emit `<category>` in their generated
   RSS and flow through the same capture — one code path. ⚠ That XML is
   regenerated from their per-user entry tables, so tags must persist in those rows

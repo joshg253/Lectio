@@ -8387,12 +8387,13 @@ lead_image_service = LeadImageService(
 
 def _persist_page_tags(feed_url: str, entry_id: str, page_html: str, source_url: str | None = None) -> None:
     """Background source-HTML fetch sink: persist article-page tags for
-    entries the feed never tagged (feed-provided tags stay authoritative)."""
+    entries the feed never tagged. Stored as ``source='open'`` (not 'feed', so a feed refresh listing the entry untagged doesn't clear
+    them; not 'page', which would auto-enable ingest-time page topics for the feed)."""
     if feed_tag_service.get_tags_for_entry(feed_url, entry_id):
         return
     tags = feed_tags_service_mod.extract_page_tags(page_html, source_url)
     if tags:
-        feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)])
+        feed_tag_service.record_entry_tags(feed_url, [(entry_id, tags)], source="open")
 
 
 lead_image_service.set_page_tag_sink(_persist_page_tags)
@@ -17844,7 +17845,7 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
                 if _cached_page is not None:
                     _page_tags = feed_tags_service_mod.extract_page_tags(_cached_page[1], str(entry.link))
                     if _page_tags:
-                        feed_tag_service.record_entry_tags(str(entry.feed_url), [(str(entry.id), _page_tags)])
+                        feed_tag_service.record_entry_tags(str(entry.feed_url), [(str(entry.id), _page_tags)], source="open")
                         # Re-derive through the dismissal-aware getter rather
                         # than using _page_tags directly: dismissing every
                         # suggested tag for a feed makes get_feed_tag_suggestions
