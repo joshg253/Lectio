@@ -20089,6 +20089,9 @@ def _scheduled_refresh_tick() -> None:
         if folders_to_mark:
             for key, val in folders_to_mark:
                 set_setting(conn, key, val)
+            # set_setting opened an implicit transaction on this pooled connection; the refresh rounds below share it and fetch over
+            # the network, so commit first or the first fetch of every round holds the write lock.
+            conn.commit()
             # Keep legacy global timestamp for monitoring / debug.
             app.state.last_scheduled_refresh_started_at = time.monotonic()
             with get_meta_connection() as _sc:

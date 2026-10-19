@@ -681,10 +681,12 @@ def refresh_deviantart_feed_by_id(
     else:
         deviations = fetch_gallery(client_id, client_secret, str(row["username"]), access_token=access_token)
     added = _upsert_entries(conn, feed_id, deviations)
+    conn.commit()  # the metadata calls below are network round trips; don't hold the write lock across them
     # Tag suggestion chips: fill tags for never-checked entries (one metadata
     # call max). Deliberately refresh-only — the bulk watchlist sync's
     # create_deviantart_feed path skips it so adding N artists stays N calls.
     fetch_and_store_missing_tags(conn, feed_id, client_id, client_secret, access_token=access_token)
+    conn.commit()  # the author lookup below is another network call
     # Same one-call-per-refresh backfill, for entries stored before the author
     # column existed.
     fetch_and_store_missing_authors(conn, feed_id, client_id, client_secret, access_token=access_token)
@@ -772,6 +774,7 @@ def refresh_all_deviantart_feeds(
         due = due[:max_feeds]
     if not due:
         return
+    conn.commit()  # never start the round inside a transaction the caller left open
     for row in due:
         try:
             refresh_deviantart_feed_by_id(conn, str(row["id"]), client_id, client_secret, access_token=access_token)
@@ -780,6 +783,9 @@ def refresh_all_deviantart_feeds(
             return
         except Exception:
             LOGGER.exception("[deviantart] error refreshing feed %s", row["id"])
+        # Release the write lock between feeds: each refresh is a network round trip, and an open implicit transaction here blocked every
+        # other writer (a tag-chip click took 8s) for the whole round.
+        conn.commit()
 
 
 def delete_deviantart_feed(conn: sqlite3.Connection, reader, feed_id: str) -> None:
