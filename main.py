@@ -3618,6 +3618,39 @@ def bootstrap_admin() -> None:
         LOGGER.info("Bootstrapped admin user %r.", username)
 
 
+def _rebuild_email_batch_queue(conn: sqlite3.Connection) -> None:
+    """Swap email_batch_queue to the wider UNIQUE key, keeping rows and ids (the caller owns the transaction)."""
+    conn.execute("ALTER TABLE email_batch_queue RENAME TO email_batch_queue_old")
+    conn.execute(
+        """
+        CREATE TABLE email_batch_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_scope TEXT NOT NULL,
+            rule_scope_id TEXT NOT NULL,
+            rule_keyword TEXT NOT NULL,
+            queued_at TEXT NOT NULL,
+            feed_url TEXT NOT NULL,
+            entry_id TEXT NOT NULL,
+            title TEXT,
+            link TEXT,
+            feed_title TEXT,
+            excerpt TEXT,
+            email_to TEXT NOT NULL,
+            cc_me INTEGER NOT NULL DEFAULT 0,
+            rule_uid TEXT NOT NULL DEFAULT '',
+            UNIQUE(rule_scope, rule_scope_id, rule_keyword, rule_uid, feed_url, entry_id)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO email_batch_queue (id, rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at, feed_url, entry_id,"
+        " title, link, feed_title, excerpt, email_to, cc_me)"
+        " SELECT id, rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at, feed_url, entry_id,"
+        " title, link, feed_title, excerpt, email_to, cc_me FROM email_batch_queue_old ORDER BY id"
+    )
+    conn.execute("DROP TABLE email_batch_queue_old")
+
+
 def ensure_meta_schema() -> None:
     with get_meta_connection() as conn:
         conn.execute(
@@ -4617,7 +4650,8 @@ def ensure_meta_schema() -> None:
                 excerpt TEXT,
                 email_to TEXT NOT NULL,
                 cc_me INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)
+                rule_uid TEXT NOT NULL DEFAULT '',
+                UNIQUE(rule_scope, rule_scope_id, rule_keyword, rule_uid, feed_url, entry_id)
             )
             """
         )
@@ -4634,6 +4668,22 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE email_batch_queue ADD COLUMN rule_uid TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # The original UNIQUE key omitted feed_url and rule_uid, so two rules sharing scope and keyword text (different
+        # recipients), or one entry_id in two feeds, collided and the second INSERT OR IGNORE was dropped. A UNIQUE
+        # constraint can't be altered in place: rebuild the table when the stored DDL still has the old key.
+        _bq_ddl = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='email_batch_queue'").fetchone()
+        if _bq_ddl and "rule_keyword, entry_id)" in (_bq_ddl[0] or ""):
+            # Python's sqlite3 doesn't open a transaction before DDL, so make one explicit: a failure mid-rebuild must roll back
+            # the rename and create too, or the queued rows are stranded in the _old table and detection never fires again.
+            if conn.in_transaction:
+                conn.commit()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _rebuild_email_batch_queue(conn)
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
         # Per-rule, per-entry claim for the webhook / Quire / immediate-email dispatchers: they select entries "added in the last
         # 15 minutes", so two passes for one feed inside that window would otherwise fire a match twice. A row is inserted before
         # the send and deleted if the send fails (batch-mode email claims with the queue insert, never released);

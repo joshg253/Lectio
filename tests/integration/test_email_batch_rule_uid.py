@@ -169,3 +169,90 @@ def test_scheduled_batch_flush_catches_the_full_backlog_across_a_scope_edit(conf
 
     assert len(calls) == 1
     assert {a["title"] for a in calls[0]} == {"before-edit", "after-edit"}
+
+
+def test_queue_key_allows_same_entry_for_different_rules_and_feeds(configured):
+    """The UNIQUE key includes rule_uid and feed_url: two rules sharing scope/keyword text, or one entry_id in two feeds, both queue."""
+    kw = dict(scope="all", scope_id="", keyword="news")
+    _queue_row(FEED, "e1", rule_uid="ra", email_to="a@example.test", **kw)
+    _queue_row(FEED, "e1", rule_uid="rb", email_to="b@example.test", **kw)
+    _queue_row("https://other.example.test/feed", "e1", rule_uid="ra", **kw)
+    with main.get_meta_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM email_batch_queue").fetchone()[0] == 3
+
+
+def test_old_unique_key_table_is_rebuilt_keeping_rows(tmp_path):
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    configure_test_tenancy(tmp_path)
+    try:
+        main.ensure_meta_schema()
+        with main.get_meta_connection() as conn:
+            conn.execute("DROP TABLE email_batch_queue")
+            conn.execute(
+                "CREATE TABLE email_batch_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, rule_scope TEXT NOT NULL,"
+                " rule_scope_id TEXT NOT NULL, rule_keyword TEXT NOT NULL, queued_at TEXT NOT NULL, feed_url TEXT NOT NULL,"
+                " entry_id TEXT NOT NULL, title TEXT, link TEXT, feed_title TEXT, excerpt TEXT, email_to TEXT NOT NULL,"
+                " cc_me INTEGER NOT NULL DEFAULT 0, rule_uid TEXT NOT NULL DEFAULT '',"
+                " UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id))"
+            )
+            conn.execute(
+                "INSERT INTO email_batch_queue (id, rule_scope, rule_scope_id, rule_keyword, queued_at, feed_url, entry_id, title,"
+                " email_to, rule_uid) VALUES (7,'all','','news','t',?, 'e1','kept title','me@example.test','ra')",
+                (FEED,),
+            )
+        main.ensure_meta_schema()
+        main.ensure_meta_schema()  # idempotent
+        _queue_row(FEED, "e1", scope="all", scope_id="", keyword="news", rule_uid="rb")
+        with main.get_meta_connection() as conn:
+            rows = conn.execute("SELECT id, rule_uid, title, email_to, queued_at FROM email_batch_queue ORDER BY id").fetchall()
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert [(r[0], r[1]) for r in rows] == [(7, "ra"), (8, "rb")]
+        assert (rows[0][2], rows[0][3], rows[0][4]) == ("kept title", "me@example.test", "t")
+        assert "email_batch_queue_old" not in tables
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved
+
+
+def test_failed_rebuild_rolls_back_so_the_next_start_retries(tmp_path, monkeypatch):
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    configure_test_tenancy(tmp_path)
+    try:
+        main.ensure_meta_schema()
+        with main.get_meta_connection() as conn:
+            conn.execute("DROP TABLE email_batch_queue")
+            conn.execute(
+                "CREATE TABLE email_batch_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, rule_scope TEXT NOT NULL,"
+                " rule_scope_id TEXT NOT NULL, rule_keyword TEXT NOT NULL, queued_at TEXT NOT NULL, feed_url TEXT NOT NULL,"
+                " entry_id TEXT NOT NULL, title TEXT, link TEXT, feed_title TEXT, excerpt TEXT, email_to TEXT NOT NULL,"
+                " cc_me INTEGER NOT NULL DEFAULT 0, rule_uid TEXT NOT NULL DEFAULT '',"
+                " UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id))"
+            )
+            conn.execute(
+                "INSERT INTO email_batch_queue (rule_scope, rule_scope_id, rule_keyword, queued_at, feed_url, entry_id, email_to)"
+                " VALUES ('all','','news','t',?, 'e1','me@example.test')",
+                (FEED,),
+            )
+        real = main._rebuild_email_batch_queue
+
+        def _boom(conn):
+            conn.execute("ALTER TABLE email_batch_queue RENAME TO email_batch_queue_old")
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(main, "_rebuild_email_batch_queue", _boom)
+        with pytest.raises(RuntimeError):
+            main.ensure_meta_schema()
+        with main.get_meta_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM email_batch_queue").fetchone()[0] == 1
+        monkeypatch.setattr(main, "_rebuild_email_batch_queue", real)
+        main.ensure_meta_schema()
+        with main.get_meta_connection() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM email_batch_queue").fetchone()[0] == 1
+            assert (
+                "rule_uid, feed_url, entry_id" in conn.execute("SELECT sql FROM sqlite_master WHERE name='email_batch_queue'").fetchone()[0]
+            )
+    finally:
+        main.close_thread_db_pools()
+        tenancy._layout = saved

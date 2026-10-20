@@ -34,12 +34,6 @@ Empty.
 `_extract_source_embed_iframes` reads a facade's `<img>` from `src`/`data-src` only (found in review of the iframe `data-lazy-src` fix). A WP-lazyload facade
 with the thumbnail only in `data-lazy-src` isn't recovered. One-line fix; do it when a real feed shows it.
 
-### Email batch queue key lacks `feed_url` and `rule_uid` (2026-10-19)
-
-`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)`, so two batch rules with the same scope and keyword text but
-different `rule_uid`s (say, different recipients), or one `entry_id` in two feeds, collide: the second `INSERT OR IGNORE` is dropped. Needs a
-per-user startup migration to rebuild the index. Found in review of the batch re-queue fix.
-
 **Dated** — act on or after the date.
 
 ### Reddit RSS ends 2026-11-13 (2026-10-04)
