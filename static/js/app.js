@@ -16275,6 +16275,14 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
     function applyHighlights() {
       const rules = window.HIGHLIGHT_RULES || [];
 
+      // Mirror of main.py's fold_for_match for the browser: each apostrophe, double quote and space in a term (straight or curly) becomes a
+      // class of its variants, so a rule `Apple's` also highlights `Apple’s`. One character for one, so match offsets stay valid.
+      function foldTermForRegex(term) {
+        return term.replace(/['\u2018\u2019\u201b\u2032]/g, "['\u2018\u2019\u201b\u2032]")
+          .replace(/["\u201c\u201d\u201e\u201f\u2033]/g, '["\u201c\u201d\u201e\u201f\u2033]')
+          .replace(/[ \u00a0\u2007\u202f]/g, '[ \u00a0\u2007\u202f]');
+      }
+
       // One RegExp per rule. A plain keyword may list several comma-separated terms (as main.py's split_keyword_terms reads it), each a
       // case-insensitive literal; they are joined longest-first so "Pixel Watch" wins over "Pixel" at the same position, and one pass
       // covers the rule. A regex rule is its own pattern. Invalid regexes yield none.
@@ -16283,7 +16291,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (!rule.is_regex) {
           const terms = String(rule.keyword || '').split(',').map(t => t.trim()).filter(Boolean);
           terms.sort((a, b) => b.length - a.length);
-          source = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+          source = terms.map(t => foldTermForRegex(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('|');
         }
         if (!source) return [];
         try { return [new RegExp(source, 'gi')]; } catch { return []; /* invalid regex */ }

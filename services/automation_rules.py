@@ -629,8 +629,17 @@ def _run_email_rules_after_refresh(refreshed_feed_urls: set[str]) -> None:
                                     _release_dispatch(claim_key, fu, article["entry_id"])
                                     LOGGER.warning("[email-auto] send failed: %s", err)
                             else:
-                                # batch mode — queue for digest
+                                # batch mode — queue for digest. The claim (never released: the queue row is the durable record)
+                                # keeps a second pass inside the window from re-queuing an entry whose digest already flushed. It is
+                                # taken on the same connection as the queue insert, so a rollback undoes both and the next pass retries.
                                 with get_meta_connection() as conn:
+                                    claimed = conn.execute(
+                                        "INSERT OR IGNORE INTO automation_dispatched (rule_key, feed_url, entry_id, dispatched_at)"
+                                        " VALUES (?, ?, ?, ?)",
+                                        (_rule_claim_key(rule, "email"), fu, article["entry_id"], datetime.now().isoformat()),
+                                    ).rowcount
+                                    if claimed != 1:
+                                        continue
                                     conn.execute(
                                         "INSERT OR IGNORE INTO email_batch_queue"
                                         " (rule_scope, rule_scope_id, rule_keyword, rule_uid, queued_at,"

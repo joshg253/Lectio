@@ -209,3 +209,39 @@ def test_error_before_send_does_not_strand_claim(configured, monkeypatch):
     monkeypatch.setattr(automation_rules, "email_article_extras", real_extras)
     main._run_email_rules_after_refresh({FEED})
     assert len(sent) == 1
+
+
+def test_batch_flush_does_not_requeue_the_same_entry_on_a_second_pass(configured, monkeypatch):
+    digests: list[list[dict]] = []
+    monkeypatch.setattr(main, "send_digest_email", lambda *a, **kw: (digests.append(a[3]), (True, None))[1])
+    _add_rule(delivery="batch", batch_count=1)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})
+    main._run_email_rules_after_refresh({FEED})
+
+    assert len(digests) == 1
+    with main.get_meta_connection() as conn:
+        remaining = conn.execute("SELECT COUNT(*) FROM email_batch_queue WHERE feed_url = ?", (FEED,)).fetchone()[0]
+    assert remaining == 0
+
+
+def test_batch_entry_is_retried_when_the_flush_raises(configured, monkeypatch):
+    digests: list[list[dict]] = []
+    calls = {"n": 0}
+
+    def flaky_digest(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        digests.append(a[3])
+        return True, None
+
+    monkeypatch.setattr(main, "send_digest_email", flaky_digest)
+    _add_rule(delivery="batch", batch_count=1)
+    with main.get_reader() as reader:
+        _seed(reader)
+    main._run_email_rules_after_refresh({FEED})  # raises inside the flush; the rollback must drop the claim with the queue row
+    main._run_email_rules_after_refresh({FEED})
+
+    assert len(digests) == 1

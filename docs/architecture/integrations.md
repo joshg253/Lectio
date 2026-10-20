@@ -34,7 +34,8 @@ Per-user OAuth destinations, quotas and the automation that drives them.
 
 > The webhook, Quire and immediate-email dispatchers pick entries "added in the last 15 minutes", so each claims
 > `automation_dispatched (rule_key, feed_url, entry_id)` with `INSERT OR IGNORE` just before sending (rowcount 0 means another pass
-> already did) and releases the claim if the send fails or raises, so it retries. A process crash between claim and send loses that
+> already did) and releases the claim if the send fails or raises, so it retries. Batch-mode email claims too, on the same connection as the
+queue insert and never released (the queue row is the durable record; a rollback undoes both). A process crash between claim and send loses that
 > entry (at-most-once; the window is one HTTP call). Rows are pruned after 7 days. Instapaper dedupes by URL upstream, and save-article
 > is idempotent.
 
@@ -183,7 +184,7 @@ Plain terms also fold **curly punctuation** (`’ ‘ “ ” → ' "`, plus the
 non-breaking spaces) and lowercase, on both sides of the compare: publishers
 spell the same apostrophe two ways — 2,773 stored titles use the typographic one,
 6,761 the ASCII one — and the reader cannot see which a given title used. Regex
-mode is never folded; a pattern says what it says.
+mode is never folded; a pattern says what it says. The browser highlighter (`foldTermForRegex` in `app.js`) mirrors this set; keep the two in step.
 
 The split deliberately does **not** imply a word boundary: measured across the
 live library, 4 plain rules match only *inside* words and would stop matching
