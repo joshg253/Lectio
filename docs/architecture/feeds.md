@@ -100,6 +100,8 @@ Three tables have needed this so far, each hitting the identity break in a diffe
   unrelated rule's digest if the old text was later reused by a new rule. Both flush paths, and the
   batch-count threshold check, now prefer `rule_uid` when present; `_flush_all_email_batches` groups
   legacy (`rule_uid = ''`) rows by the old text tuple as before.
+  The table's UNIQUE key is `(scope, scope_id, keyword, rule_uid, feed_url, entry_id)`; the original key lacked `rule_uid` and
+  `feed_url`, so rules sharing text, or one entry ID in two feeds, silently dropped the second row. Startup rebuilds old tables.
 - **`highlight_keywords` itself**, for `dedup_fuzzy_pct`/`dedup_min_title_words` and friends: these
   are columns on the rule row, so they migrate with the row automatically and never needed a
   separate identity fix — included here as the reason `rule_uid` exists on that table at all, not
