@@ -189,3 +189,30 @@ def test_has_capture_failed_and_missing_table(tmp_path):
         conn.execute("DROP TABLE archived_entry")
     assert svc.has_capture_failed() is False
     assert svc.get_capture_failed_keys() == set()
+
+
+def test_unstar_during_capture_is_not_overwritten_back_to_complete(tmp_path):
+    svc, connect = _service(tmp_path, _entry())
+
+    def _unstar_then_fetch(url):
+        svc.enqueue_removal(FEED, "e1")  # the user unstars while the page fetch is in flight
+        raise _status_error(404)
+
+    svc._fetch_guarded = _unstar_then_fetch
+    svc._archive_entry(FEED, "e1")
+
+    assert _stored_row(connect)["status"] == "pending_removal"
+
+
+def test_unstar_during_a_crashing_capture_is_not_overwritten_to_failed(tmp_path):
+    svc, connect = _service(tmp_path, _entry())
+
+    def _unstar_then_crash(url):
+        svc.enqueue_removal(FEED, "e1")
+        raise ValueError("weird")
+
+    svc._archive_entry = lambda feed_url, entry_id: _unstar_then_crash(None)
+    with connect() as conn:
+        conn.execute("UPDATE archived_entry SET status = 'pending' WHERE entry_id = 'e1'")
+    assert svc._process_one_pending() is True
+    assert _stored_row(connect)["status"] == "pending_removal"

@@ -4636,7 +4636,8 @@ def ensure_meta_schema() -> None:
             pass
         # Per-rule, per-entry claim for the webhook / Quire / immediate-email dispatchers: they select entries "added in the last
         # 15 minutes", so two passes for one feed inside that window would otherwise fire a match twice. A row is inserted before
-        # the send and deleted if the send fails; rows past the window are pruned nightly.
+        # the send and deleted if the send fails (batch-mode email claims with the queue insert, never released);
+        # rows past the window are pruned nightly.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS automation_dispatched (

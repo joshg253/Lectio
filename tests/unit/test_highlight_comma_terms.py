@@ -18,3 +18,12 @@ def test_both_highlight_paths_build_one_pattern_per_comma_term():
     assert block.count("of rulePatterns(rule)") == 2  # titles and rich bodies
     # The old whole-keyword literal must not come back.
     assert "new RegExp(rule.keyword" not in block
+
+
+def test_plain_terms_fold_curly_quotes_and_spaces_like_the_server_matcher():
+    start = APP_JS.index("function foldTermForRegex(")
+    block = APP_JS[start : start + 600]
+    for variant in ("\\u2019", "\\u201c", "\\u201d", "\\u00a0"):  # same set as main.py's _MATCH_FOLD
+        assert variant in block
+    # Folded after escaping, for plain terms only: a regex rule says what it says.
+    assert "foldTermForRegex(t.replace(" in APP_JS

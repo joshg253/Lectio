@@ -21,18 +21,6 @@ Empty.
 
 **Do next** — small, concrete, decided.
 
-### Email batch mode can re-queue an entry after a flush (2026-10-18)
-
-`email_batch_queue` dedupes on `UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)`, but a flush deletes the rows, so a second pass
-inside the 15-minute window re-queues an already-digested entry. The key also lacks `feed_url` and `rule_uid`. Fix with the same
-`automation_dispatched` claim, taken at queue time.
-
-### Highlighter doesn't fold curly quotes like the server matcher (2026-10-19)
-
-The server's plain matcher folds curly apostrophes, quotes and non-breaking spaces on both sides (`fold_for_match`); the browser highlighter
-(`applyHighlights`) searches the literal term, so a rule `Apple's` highlights `Apple's` but not `Apple’s`. Fix by mapping `'`, `"` and a space in each
-escaped term to the matching character classes.
-
 ### Archive fetch-status follow-ups (decided 2026-10-17)
 
 `archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`
@@ -46,10 +34,11 @@ escaped term to the matching character classes.
 `_extract_source_embed_iframes` reads a facade's `<img>` from `src`/`data-src` only (found in review of the iframe `data-lazy-src` fix). A WP-lazyload facade
 with the thumbnail only in `data-lazy-src` isn't recovered. One-line fix; do it when a real feed shows it.
 
-### Unstar racing an in-flight capture can resurrect it (2026-10-19)
+### Email batch queue key lacks `feed_url` and `rule_uid` (2026-10-19)
 
-The final `UPDATE` in `_archive_entry` has no status guard, so an unstar that deletes the archive row while its capture is running can be
-overwritten back to `complete`. Pre-existing; found in review of the nightly retry. Guard the write on the row still existing.
+`email_batch_queue` is `UNIQUE(rule_scope, rule_scope_id, rule_keyword, entry_id)`, so two batch rules with the same scope and keyword text but
+different `rule_uid`s (say, different recipients), or one `entry_id` in two feeds, collide: the second `INSERT OR IGNORE` is dropped. Needs a
+per-user startup migration to rebuild the index. Found in review of the batch re-queue fix.
 
 **Dated** — act on or after the date.
 

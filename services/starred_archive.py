@@ -1351,7 +1351,8 @@ class StarredArchiveService:
                 try:
                     with self._archive_conn() as conn:
                         conn.execute(
-                            "UPDATE archived_entry SET status = 'failed', error = ? WHERE feed_url = ? AND entry_id = ?",
+                            "UPDATE archived_entry SET status = 'failed', error = ?"
+                            " WHERE feed_url = ? AND entry_id = ? AND status != 'pending_removal'",
                             (str(exc)[:512], feed_url, entry_id),
                         )
                 except sqlite3.Error:
@@ -1559,7 +1560,8 @@ class StarredArchiveService:
             try:
                 with self._archive_conn() as conn:
                     conn.execute(
-                        "UPDATE archived_entry SET status = 'failed', error = ? WHERE feed_url = ? AND entry_id = ?",
+                        "UPDATE archived_entry SET status = 'failed', error = ?"
+                        " WHERE feed_url = ? AND entry_id = ? AND status != 'pending_removal'",
                         (str(exc)[:512], feed_url, entry_id),
                     )
             except sqlite3.Error:
@@ -1855,7 +1857,7 @@ class StarredArchiveService:
                        content_size_bytes = ?,
                        source_fetch_status = ?,
                        error = NULL
-                 WHERE feed_url = ? AND entry_id = ?
+                 WHERE feed_url = ? AND entry_id = ? AND status != 'pending_removal'
                 """,
                 (
                     time.time(),
