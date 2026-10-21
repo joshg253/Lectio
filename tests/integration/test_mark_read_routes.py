@@ -602,3 +602,23 @@ def test_newer_than_unread_only_touches_entries_in_the_view(monkeypatch):
     assert [e for _f, e in reader.unread] == ["hit"]
     assert seen["search_query"] == "needle"
     assert seen["read_filter"] == "all"
+
+
+def test_newer_than_unread_resolves_the_starred_filter_as_such(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    app, _reader, *_ = _build_newer_than_app(monkeypatch, [_UnreadEntry("a", datetime.now(timezone.utc) - timedelta(hours=1))])
+    seen = {}
+
+    def fake_list(_urls, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(routes.entries, "list_entries_for_feeds", fake_list)
+    with TestClient(app) as client:
+        client.post(
+            "/entries/mark-newer-than-unread",
+            data={"folder_id": "1", "min_age_days": "7", "read_filter": "starred"},
+            headers=_ASYNC_HEADER,
+        )
+    assert seen["read_filter"] == "starred"

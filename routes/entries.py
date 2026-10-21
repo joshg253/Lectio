@@ -1264,9 +1264,9 @@ def _resolve_view_posts(
     """Re-resolve the post list a browser view is showing, unclipped.
 
     Mirrors the home route's scope derivation (disabled-feed exclusion, the
-    kept-feed and Saved Articles widening under the star filter, and the
-    search-forces-``all`` rule) so a whole-set action lands on the same entries
-    the user is looking at.
+    kept-feed and Saved Articles widening under the star filter) with the
+    read filter left as the user chose it, search included, so a whole-set
+    action lands on the same entries the user is looking at.
 
     Orphan archive entries ARE merged in, same condition and same
     ``merge_orphan_saved_entries`` call the home route's whole-backlog star view
@@ -2539,7 +2539,9 @@ def mark_entries_newer_than_unread(
     # exactly what an Unread view hides. Resolving it lists every entry in scope, so it only runs when something narrows the view.
     post_filter = _view_filter_predicate(filter_term, folder_id=folder_id) if filter_term.strip() else None
     in_view: set[tuple[str, str]] | None = None
-    if post_filter or q or tag or normalize_star_only(star_only):
+    # Starred is a read-filter value, not star_only: its view is all kept posts, so resolve it as such (they are skipped below).
+    resolve_filter = "starred" if normalize_read_filter(read_filter) == "starred" else "all"
+    if post_filter or q or tag or normalize_star_only(star_only) or resolve_filter == "starred":
         in_view = {
             (post["feed_url"], post["id"])
             for post in list_entries_for_feeds(
@@ -2547,7 +2549,7 @@ def mark_entries_newer_than_unread(
                 limit=_RANGE_READ_LIMIT,
                 sort_by=sort_by or "post",
                 sort_dir=sort_dir or "asc",
-                read_filter="all",
+                read_filter=resolve_filter,
                 star_only=normalize_star_only(star_only),
                 selected_tag=tag,
                 search_query=q,
