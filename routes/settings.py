@@ -87,6 +87,7 @@ from main import (
     SETTING_LOGIN_MAX_FAILURES,
     SETTING_LOGIN_WINDOW_SECONDS,
     SETTING_MAINTENANCE_HOUR,
+    SETTING_MARK_READ_ON_NEW_TAB,
     SETTING_MINIFLUX_IMPORT_TOKEN,
     SETTING_MINIFLUX_IMPORT_URL,
     SETTING_PINTEREST_OAUTH_CLIENT_ID,
@@ -202,6 +203,7 @@ from main import (
     is_async_action_request,
     is_quire_configured,
     is_quire_connected,
+    mark_read_on_new_tab_enabled,
     normalize_auto_refresh_minutes,
     normalize_read_filter,
     normalize_search_query,
@@ -277,6 +279,7 @@ def get_all_settings():
             "tz_display": get_runtime_setting(SETTING_TZ_DISPLAY),
             "portrait_img_max_width": get_portrait_img_max_width(),
             "proxy_body_images": proxy_body_images_enabled(),
+            "mark_read_on_new_tab": mark_read_on_new_tab_enabled(),
             # Raw own row ("" = inherit the instance default) vs. the resolved value
             # actually in effect for this user right now — the UI shows the former
             # as the select's value and the latter as a hint when it's "inherit".
@@ -416,6 +419,7 @@ async def save_all_settings(request: Request):
         SETTING_TZ_DISPLAY,
         SETTING_PORTRAIT_IMG_MAX_WIDTH,
         SETTING_PROXY_BODY_IMAGES,
+        SETTING_MARK_READ_ON_NEW_TAB,
         SETTING_PROXY_URL,
         SETTING_PROXY_MODE,
         SETTING_TAILSCALE_URL,

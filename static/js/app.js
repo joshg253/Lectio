@@ -9571,20 +9571,57 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           continue;
         }
         postMainLink.dataset.boundClick = '1';
+        // Ctrl/Cmd-click and middle-click open the article itself, natively, so the browser decides foreground vs background
+        // (window.open can't open behind). The href is the in-app post URL, so it is swapped to the article URL for the click only.
+        const inAppHref = postMainLink.getAttribute('href');
+        // Only web URLs may be swapped into the href: the article link is feed-controlled and a javascript: href would run here.
+        const articleHref = () => {
+          const url = postMainLink.dataset.articleUrl || '';
+          try { return /^https?:$/.test(new URL(url).protocol) ? url : ''; } catch (_e) { return ''; }
+        };
+        let swapped = false;
+        const restoreHref = () => {
+          swapped = false;
+          postMainLink.setAttribute('href', inAppHref);
+        };
+        // Optional (Settings): the new-tab open also marks the post read, via the row's own read-toggle form.
+        const markReadIfWanted = () => {
+          const row = postMainLink.closest('.post-item');
+          if (!window.MARK_READ_ON_NEW_TAB || row?.getAttribute('data-post-read') !== '0') return;
+          const form = row.querySelector('.post-read-toggle-form');
+          if (form instanceof HTMLFormElement) {
+            form.dataset.noNavigateFallback = '1';
+            form.requestSubmit();
+          }
+        };
+        postMainLink.addEventListener('mousedown', (event) => {
+          const url = articleHref();
+          if (!url || !(event.button === 1 || (event.button === 0 && (event.ctrlKey || event.metaKey)))) return;
+          swapped = true;
+          postMainLink.setAttribute('href', url);
+        });
+        // A click that never arrives (drag, context menu, the modifier released before mouseup) must not leave the article URL behind
+        // for the code that reads this link's href to navigate the pane.
+        for (const name of ['mouseleave', 'dragend', 'contextmenu']) postMainLink.addEventListener(name, restoreHref);
+        postMainLink.addEventListener('auxclick', () => {
+          const wasSwapped = swapped;
+          setTimeout(restoreHref, 0);
+          if (wasSwapped) markReadIfWanted();
+        });
         postMainLink.addEventListener('click', (event) => {
           if (event.defaultPrevented) {
             return;
           }
+          if (swapped && (event.ctrlKey || event.metaKey)) {
+            setTimeout(restoreHref, 0);
+            markReadIfWanted();
+            return;
+          }
+          restoreHref();
           event.preventDefault();
           const postItem = postMainLink.closest('.post-item');
           if (postItem) selectOnlyPost(postItem);
-          loadEntryPaneWithoutFullRefresh(postMainLink.href);
-        });
-        postMainLink.addEventListener('auxclick', (event) => {
-          if (event.button !== 1) return;
-          event.preventDefault();
-          const url = postMainLink.dataset.articleUrl;
-          if (url) window.open(url, '_blank', 'noopener');
+          loadEntryPaneWithoutFullRefresh(inAppHref);
         });
       }
 
@@ -9851,6 +9888,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               }
             }
           } catch (_error) {
+            // A mark-read fired from a title opened in another tab must not take this tab to the redirect on failure.
+            if (readForm.dataset.noNavigateFallback) return;
             readForm.submit();
           }
         });
@@ -15436,6 +15475,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         const pwEl = document.getElementById('sett-portrait-img-width');
         if (pwEl && d.portrait_img_max_width != null) pwEl.value = String(d.portrait_img_max_width);
         { const el = document.getElementById('sett-proxy-body-images'); if (el) el.checked = !!d.proxy_body_images; }
+        { const el = document.getElementById('sett-mark-read-on-new-tab'); if (el) el.checked = !!d.mark_read_on_new_tab; }
         {
           const el = document.getElementById('sett-proxy-mode');
           if (el) el.value = d.proxy_mode_own || '';
@@ -15798,6 +15838,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             auto_read_days_user: g('sett-auto-read-days'),
             portrait_img_max_width: g('sett-portrait-img-width'),
             proxy_body_images: (document.getElementById('sett-proxy-body-images')?.checked ? '1' : '0'),
+            mark_read_on_new_tab: (document.getElementById('sett-mark-read-on-new-tab')?.checked ? '1' : '0'),
             proxy_mode: document.getElementById('sett-proxy-mode')?.value || '',
           };
         } else if (scope === 'profile') {
@@ -15854,6 +15895,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           if (scope === 'profile' || scope === 'account') {
             window.PROFILE_NAME = payload.profile_name;
             window.PROFILE_EMAIL = payload.profile_email;
+            if (scope === 'account') window.MARK_READ_ON_NEW_TAB = payload.mark_read_on_new_tab === '1';
             settRenderContacts();
             updateSettAvatar();
           }

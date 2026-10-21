@@ -63,6 +63,10 @@ sidebar folder feed lists, the Settings → Feeds table, and the Stale view)
 load as HTML fragments on first open instead of shipping with every page, and
 the app script is a cacheable static file rather than inline JS.
 
+**Opening a post in a new tab.** Ctrl/Cmd-click or middle-click on a post title opens the article itself in a new tab (the browser decides
+foreground or background) without opening it in the reader, so the post stays unread. Settings → Account → "Mark read when opened in a new
+tab" (off by default) marks it read as well. The O and B hotkeys act on the selected post, which is already open in the reader.
+
 **Automation details.** An **auto-read age** (off by default) marks new posts read at fetch once they're older than N days, so a quiet site
 that finally updates doesn't flood the unread list; set it for the instance, an account, a folder or a feed, each only able to shorten the
 one above. Tag-filter rules also work on tags scraped from article pages: for a feed whose tags exist only on the page, saving the rule
