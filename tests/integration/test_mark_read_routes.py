@@ -477,6 +477,12 @@ def _build_newer_than_app(monkeypatch, entries, kept=frozenset(), saved=()):
     monkeypatch.setattr(routes.entries, "get_reader", lambda: reader)
     monkeypatch.setattr(main, "unread_counts_cache", {})
     monkeypatch.setattr(routes.entries, "unread_counts_cache", {})
+    # The view scope (tag/search/...) is list_entries_for_feeds' job; here every entry is "in view".
+    monkeypatch.setattr(
+        routes.entries,
+        "list_entries_for_feeds",
+        lambda *_a, **_k: [{"feed_url": e.feed_url, "id": e.id} for e in entries],
+    )
     return app, reader, datetime, timedelta, timezone
 
 
@@ -576,3 +582,23 @@ def test_a_fresh_aware_token_is_accepted(monkeypatch):
     from datetime import datetime, timezone
 
     assert main._undo_token_problem(datetime.now(timezone.utc).isoformat()) is None
+
+
+def test_newer_than_unread_only_touches_entries_in_the_view(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    entries = [_UnreadEntry("hit", now - timedelta(hours=1)), _UnreadEntry("miss", now - timedelta(hours=1))]
+    app, reader, *_ = _build_newer_than_app(monkeypatch, entries)
+    seen = {}
+
+    def fake_list(_urls, **kwargs):
+        seen.update(kwargs)
+        return [{"feed_url": "http://feed/", "id": "hit"}]
+
+    monkeypatch.setattr(routes.entries, "list_entries_for_feeds", fake_list)
+    with TestClient(app) as client:
+        client.post("/entries/mark-newer-than-unread", data={"folder_id": "1", "min_age_days": "7", "q": "needle"}, headers=_ASYNC_HEADER)
+    assert [e for _f, e in reader.unread] == ["hit"]
+    assert seen["search_query"] == "needle"
+    assert seen["read_filter"] == "all"

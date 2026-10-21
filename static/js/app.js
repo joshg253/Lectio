@@ -10035,6 +10035,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       form.closest('details.mark-read-menu')?.removeAttribute('open');
       const body = new URLSearchParams();
       for (const [k, v] of new FormData(form).entries()) body.append(k, String(v));
+      const loadedAt = document.querySelector('.posts')?.getAttribute('data-view-loaded-at') || '';
+      if (loadedAt && !body.has('loaded_before')) body.append('loaded_before', loadedAt);
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const headers = {
         'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
@@ -10164,7 +10166,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       const menu = event.target;
       if (!(menu instanceof HTMLDetailsElement) || !menu.classList.contains('mark-read-menu') || !menu.open) return;
       const term = (document.getElementById('posts-filter-input')?.value || '').trim();
-      menu.querySelectorAll('.mark-read-action-form').forEach((form, index) => {
+      menu.querySelectorAll('.mark-read-action-form, .mark-unread-action-form').forEach((form, index) => {
         let input = form.querySelector('input[name="filter_term"]');
         if (term && !input) {
           input = document.createElement('input');
@@ -10178,8 +10180,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         const icon = form.querySelector('.mark-read-action-icon');
         if (!label || !icon) return;
         if (!label.dataset.scopeLabel) { label.dataset.scopeLabel = label.textContent; icon.dataset.scopeIcon = icon.textContent; }
-        label.textContent = term ? 'Current view' : label.dataset.scopeLabel;
-        icon.textContent = term ? 'filter_alt' : icon.dataset.scopeIcon;
+        const scoped = term || form.querySelector('input[name="q"]');
+        label.textContent = scoped ? 'Current view' : label.dataset.scopeLabel;
+        icon.textContent = scoped ? 'filter_alt' : icon.dataset.scopeIcon;
       });
     }, true);
 
@@ -19013,15 +19016,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         targetUrl.searchParams.set(key, valueText);
       }
-      // Search always spans All; clearing it restores the pre-search filter
-      // (carried in the form's resume_read_filter).
-      if (targetUrl.searchParams.get('q')) {
-        targetUrl.searchParams.set('read_filter', 'all');
-      } else {
-        const resume = String(formData.get('resume_read_filter') || 'all');
-        targetUrl.searchParams.set('read_filter', resume);
-      }
-
       loadScopePanesWithoutFullRefresh(targetUrl.toString())
         .then(() => {
           if (window.isSingleMode && window.isSingleMode()) {
@@ -20530,7 +20524,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         return;
       }
       // Clear returns to the same view without the query; the form's submit
-      // handler drops `q` and restores the pre-search read filter.
+      // handler drops `q` and keeps the active read filter.
       if (event.target.closest?.('#topbar-search-clear')) {
         const input = document.getElementById('topbar-search-input');
         const form = document.querySelector('.posts-search-form');

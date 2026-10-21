@@ -25,6 +25,10 @@ name, link, authors, summary. **Filter this view** narrows *what is already in
 front of you*, instantly, matching only title/link/feed name, and is transient:
 a pane swap comes back empty by design.
 
+**Search keeps the read filter.** Searching from Unread stays in Unread (it used to widen to All). The mark-read menu (this feed/folder,
+Older than, Mark as unread → Newer than) posts the active `q`, so "Current view" acts on the search's matches only, never the whole
+feed. Mark as unread ignores the read filter on purpose: the read posts it restores are what an Unread view hides.
+
 **Terms.** Every word must match (any order, substring of title/link/feed); `"a phrase"` in quotes must match contiguously, and
 `!word` / `!"a phrase"` excludes. A bare `tag:` or `!` while typing is skipped so the list doesn't blank mid-keystroke.
 

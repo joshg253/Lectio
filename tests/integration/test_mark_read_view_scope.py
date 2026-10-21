@@ -314,3 +314,71 @@ def test_non_finite_loaded_before_is_ignored(configured):
     with TestClient(_folder_app()) as client:
         r = client.post("/folders/mark-read", data={"folder_id": str(UNCAT), "loaded_before": "nan"}, headers=_ASYNC_HEADER)
     assert r.status_code == 200 and r.json()["marked"] == 2
+
+
+def test_feed_and_folder_mark_read_respect_search_query(configured):
+    with main.get_reader() as reader:
+        reader.add_feed(FEED_A, allow_invalid_url=True, exist_ok=True)
+        for entry_id in ("miss", "miss2"):
+            _seed_entry(reader, feed_url=FEED_A, entry_id=entry_id)
+
+    with main.get_reader() as reader:
+        for entry_id in ("hit", "hit2"):
+            reader.add_entry(
+                {"feed_url": FEED_A, "id": entry_id, "link": f"{FEED_A}#{entry_id}", "title": f"Needle {entry_id}", "published": OLD}
+            )
+
+    with TestClient(_feed_app()) as client:
+        r = client.post(
+            "/feeds/mark-read",
+            data={"folder_id": str(UNCAT), "feed_url": FEED_A, "q": "needle"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 2
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "hit")).read
+        assert not reader.get_entry((FEED_A, "miss")).read
+
+    with TestClient(_folder_app()) as client:
+        r = client.post("/folders/mark-read", data={"folder_id": str(UNCAT), "q": "no-such-term"}, headers=_ASYNC_HEADER)
+    assert r.json()["marked"] == 0
+
+
+def test_older_than_and_newer_than_unread_respect_search_query(configured):
+    old, recent = OLD, datetime.now(timezone.utc)
+    with main.get_reader() as reader:
+        reader.add_feed(FEED_A, allow_invalid_url=True, exist_ok=True)
+        for entry_id, title, published in (
+            ("hit-old", "Needle old", old),
+            ("miss-old", "Plain old", old),
+            ("hit-new", "Needle new", recent),
+            ("miss-new", "Plain new", recent),
+        ):
+            reader.add_entry({"feed_url": FEED_A, "id": entry_id, "link": f"{FEED_A}#{entry_id}", "title": title, "published": published})
+
+    with TestClient(_older_than_app()) as client:
+        r = client.post(
+            "/entries/mark-older-than-read",
+            data={"folder_id": str(UNCAT), "max_age_days": "30", "list_feed_url": FEED_A, "q": "needle"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["marked"] == 1
+    with main.get_reader() as reader:
+        assert reader.get_entry((FEED_A, "hit-old")).read
+        assert not reader.get_entry((FEED_A, "miss-old")).read
+
+    with main.get_reader() as reader:
+        for entry_id in ("hit-new", "miss-new"):
+            reader.mark_entry_as_read((FEED_A, entry_id))
+    app = FastAPI()
+    app.post("/entries/mark-newer-than-unread")(routes.entries.mark_entries_newer_than_unread)
+    with TestClient(app) as client:
+        r = client.post(
+            "/entries/mark-newer-than-unread",
+            data={"folder_id": str(UNCAT), "min_age_days": "30", "list_feed_url": FEED_A, "q": "needle"},
+            headers=_ASYNC_HEADER,
+        )
+    assert r.json()["unmarked"] == 1
+    with main.get_reader() as reader:
+        assert not reader.get_entry((FEED_A, "hit-new")).read
+        assert reader.get_entry((FEED_A, "miss-new")).read

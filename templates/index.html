@@ -693,6 +693,7 @@
                 {% endset %}
                 {% if selected_feed_url %}
                 <form method="post" action="/feeds/mark-read" class="mark-read-action-form">
+                  {% if selected_query %}<input type="hidden" name="q" value="{{ selected_query }}" />{% endif %}
                   <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                   <input type="hidden" name="feed_url" value="{{ selected_feed_url }}" />
                   <input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />
@@ -709,6 +710,7 @@
                 </form>
                 {% else %}
                 <form method="post" action="/folders/mark-read" class="mark-read-action-form">
+                  {% if selected_query %}<input type="hidden" name="q" value="{{ selected_query }}" />{% endif %}
                   <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                   {% if selected_tag %}<input type="hidden" name="tag" value="{{ selected_tag }}" />{% endif %}
                   <input type="hidden" name="sort_by" value="{{ selected_sort_by }}" />
@@ -727,6 +729,7 @@
 
                 {% for age_days, age_label in [(1, '1 day'), (2, '2 days'), (7, '1 week'), (14, '2 weeks'), (30, '1 month')] %}
                 <form method="post" action="/entries/mark-older-than-read" class="mark-read-action-form">
+                  {% if selected_query %}<input type="hidden" name="q" value="{{ selected_query }}" />{% endif %}
                   <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                   <input type="hidden" name="max_age_days" value="{{ age_days }}" />
                   {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
@@ -755,6 +758,7 @@
 
                 {% for age_days, age_label in [(1, '1 day'), (7, '1 week'), (30, '1 month')] %}
                 <form method="post" action="/entries/mark-newer-than-unread" class="mark-unread-action-form">
+                  {% if selected_query %}<input type="hidden" name="q" value="{{ selected_query }}" />{% endif %}
                   <input type="hidden" name="folder_id" value="{{ selected_folder_id }}" />
                   <input type="hidden" name="min_age_days" value="{{ age_days }}" />
                   {% if selected_feed_url %}<input type="hidden" name="list_feed_url" value="{{ selected_feed_url }}" />{% endif %}
