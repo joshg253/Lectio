@@ -18508,6 +18508,7 @@ def _mark_entries_as_read_for_view(
     older_than_cutoff: datetime | None = None,
     post_filter: Callable[[dict], bool] | None = None,
     loaded_before: float | None = None,
+    search_query: str | None = None,
 ) -> tuple[int, str | None]:
     """Mark as read only the entries the current filtered view actually shows —
     tag, star_only, read_filter, and every hide_* display preference
@@ -18534,6 +18535,8 @@ def _mark_entries_as_read_for_view(
 
     loaded_before (epoch seconds, the moment the list page was rendered) leaves out entries stored after it: a post that
     arrived while the list sat open was never in front of the user, so a blanket mark-read must not swallow it.
+
+    search_query is the view's server-side search (the topbar box / DA artist link): only its matches are marked.
     """
     if not feed_urls:
         return 0, None
@@ -18554,6 +18557,7 @@ def _mark_entries_as_read_for_view(
             read_filter=read_filter or "all",
             star_only=normalize_star_only(star_only),
             selected_tag=tag,
+            search_query=search_query,
             enrich=post_filter is not None,
         )
         if post_filter is None or post_filter(post)
@@ -22442,13 +22446,6 @@ def _home_inner(
     selected_star_only = normalize_star_only(star_only) or legacy_saved_mode
     if selected_read_filter == "capture_failed" and not selected_star_only:
         selected_read_filter = "all"  # a Saved-only filter must not leak into Feeds (e.g. via History's resume link)
-    # Search always spans All (searching only unread is never the intent);
-    # the pre-search filter is carried in resume_read_filter so clearing the
-    # search restores it. History keeps its own machinery.
-    if normalize_search_query(q) and selected_read_filter in {"all", "unread"}:
-        if resume_read_filter is None and selected_read_filter != "all":
-            selected_resume_read_filter = selected_read_filter
-        selected_read_filter = "all"
     # Scope-tab landing state (`home=1`, either mode; legacy `saved_home=1` for
     # Saved): the tab shows its tree without loading any posts (All can be huge)
     # — the user picks All / a folder / a feed explicitly.

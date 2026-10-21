@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import re
 import sqlite3
 import threading
@@ -1263,9 +1264,9 @@ def _resolve_view_posts(
     """Re-resolve the post list a browser view is showing, unclipped.
 
     Mirrors the home route's scope derivation (disabled-feed exclusion, the
-    kept-feed and Saved Articles widening under the star filter, and the
-    search-forces-``all`` rule) so a whole-set action lands on the same entries
-    the user is looking at.
+    kept-feed and Saved Articles widening under the star filter) with the
+    read filter left as the user chose it, search included, so a whole-set
+    action lands on the same entries the user is looking at.
 
     Orphan archive entries ARE merged in, same condition and same
     ``merge_orphan_saved_entries`` call the home route's whole-backlog star view
@@ -1282,10 +1283,6 @@ def _resolve_view_posts(
     normalized_query = normalize_search_query(search_query)
     normalized_star_only = normalize_star_only(star_only)
     normalized_read_filter = normalize_read_filter(read_filter)
-    # Search always spans All, exactly as the home route widens it — otherwise
-    # the set resolved here would be narrower than the list on screen.
-    if normalized_query and normalized_read_filter in {"all", "unread"}:
-        normalized_read_filter = "all"
 
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
@@ -2168,11 +2165,6 @@ def mark_entries_range_read(
     normalized_star_only = normalize_star_only(star_only)
     normalized_tag = normalize_tag_value(tag)
     normalized_query = normalize_search_query(q)
-    # Search always spans All, exactly as the home route (and
-    # _resolve_view_posts) widen it — otherwise the anchor is resolved
-    # against a narrower set than the search results actually on screen.
-    if normalized_query and normalized_read_filter in {"all", "unread"}:
-        normalized_read_filter = "all"
 
     with get_meta_connection() as conn:
         feed_urls = get_folder_feed_urls(conn, folder_id)
@@ -2306,6 +2298,7 @@ def mark_entries_older_than_read(
     resume_read_filter: str | None = Form(default=None),
     filter_term: str = Form(default=""),
     loaded_before: float | None = Form(default=None),
+    q: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     with get_meta_connection() as conn:
@@ -2323,6 +2316,7 @@ def mark_entries_older_than_read(
         older_than_cutoff=cutoff,
         post_filter=_view_filter_predicate(filter_term, folder_id=folder_id) if filter_term.strip() else None,
         loaded_before=loaded_before,
+        search_query=q,
     )
     if marked_count:
         _bump_unread_counts_generation()
@@ -2512,6 +2506,9 @@ def mark_entries_newer_than_unread(
     read_filter: str | None = Form(default=None),
     star_only: str | None = Form(default=None),
     resume_read_filter: str | None = Form(default=None),
+    filter_term: str = Form(default=""),
+    loaded_before: float | None = Form(default=None),
+    q: str | None = Form(default=None),
 ):
     normalized_tag = normalize_tag_value(tag)
     with get_meta_connection() as conn:
@@ -2538,13 +2535,47 @@ def mark_entries_newer_than_unread(
                 )
             }
 
+    # The view's own scope (tag, star_only, search, "Filter this view"), but not its read filter: the read posts this un-marks are
+    # exactly what an Unread view hides. Resolving it lists every entry in scope, so it only runs when something narrows the view.
+    post_filter = _view_filter_predicate(filter_term, folder_id=folder_id) if filter_term.strip() else None
+    in_view: set[tuple[str, str]] | None = None
+    # Starred is a read-filter value, not star_only: its view is all kept posts, so resolve it as such (they are skipped below).
+    resolve_filter = "starred" if normalize_read_filter(read_filter) == "starred" else "all"
+    if post_filter or q or tag or normalize_star_only(star_only) or resolve_filter == "starred":
+        in_view = {
+            (post["feed_url"], post["id"])
+            for post in list_entries_for_feeds(
+                filtered_feed_urls,
+                limit=_RANGE_READ_LIMIT,
+                sort_by=sort_by or "post",
+                sort_dir=sort_dir or "asc",
+                read_filter=resolve_filter,
+                star_only=normalize_star_only(star_only),
+                selected_tag=tag,
+                search_query=q,
+                enrich=post_filter is not None,
+            )
+            if post_filter is None or post_filter(post)
+        }
+    added_cutoff = datetime.fromtimestamp(loaded_before, tz=timezone.utc) if loaded_before and math.isfinite(loaded_before) else None
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
     unmarked_count = 0
     to_delete: list[tuple[str, str]] = []
     with get_reader() as reader:
         for fu in filtered_feed_urls:
             for entry in reader.get_entries(feed=fu, read=True):
-                if (entry.feed_url, entry.id) in kept or entry.important:
+                if (
+                    (entry.feed_url, entry.id) in kept
+                    or entry.important
+                    or (in_view is not None and (entry.feed_url, entry.id) not in in_view)
+                ):
+                    continue
+                if (
+                    added_cutoff is not None
+                    and entry.added is not None
+                    and entry.added.replace(tzinfo=entry.added.tzinfo or timezone.utc) > added_cutoff
+                ):
                     continue
                 # Same date basis as the list / optimistic client (published or
                 # updated or added) so mark-newer mirrors what the UI un-marks.

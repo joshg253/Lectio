@@ -21,6 +21,11 @@ Empty.
 
 **Do next** — small, concrete, decided.
 
+### Mark-read menu ignores the feed-tag chip and the Inbox scope (2026-10-20)
+
+The menu forms post `q`, `tag`, `star_only` and the Filter-this-view term, but not `feed_tag` (`selected_feed_tag`) or the Inbox
+`kept=starred` scope. With a feed-tag chip active, "This feed" still marks the whole feed. Pass them through the same way as `q`.
+
 ### Archive fetch-status follow-ups (decided 2026-10-17)
 
 `archived_entry.source_fetch_status` exists (2026-09-23); the pre-column empty archives were backfilled by `scripts/probe_empty_archives.py --write`
