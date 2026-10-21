@@ -125,7 +125,21 @@ maintenance (rule-log prune, orphan cleanup, meta/starred VACUUM, email-batch
 flush) runs against each user's DBs. Users are processed sequentially within a
 tick (every user every tick); `_rotate_for_fairness` rotates the per-tick start
 user round-robin so there's no fixed first-mover bias — adequate at the 1–3 user
-target, with per-user concurrency and fetch budgets deferred behind that seam. The startup tasks follow the same rule:
+target, with per-user concurrency and fetch budgets deferred behind that seam.
+
+**Admin vacuum.** A VACUUM in WAL mode writes the whole rebuilt DB through the `-wal` file, and `PRAGMA wal_checkpoint(TRUNCATE)` returns
+`busy` (it does not raise) while a pooled reader holds the WAL, so a single attempt used to leave a DB-sized WAL behind and the total
+came out larger. `truncate_wal` retries (probing with a 250 ms busy timeout so writers aren't held off) and logs when it still can't, and
+pooled meta/reader connections set `journal_size_limit` (64 MB) so the next checkpoint that restarts the WAL cuts the file back on its own.
+The Admin button runs a *full* pass (empty the WAL first, retry for up to ~40 s afterward) only when `user_busy_reasons` finds nothing in
+the way: the user seen in the last 10 minutes (`last_seen_at` is written at most once per 5, and Fever/Miniflux clients never write it;
+skipped when an admin vacuums their own account) or running work, which is the `busy_work` marks (scheduled refresh, YouTube sync, the
+vacuum itself) plus the existing DeviantArt / reprobe / re-fetch / auto-fetch / folder-refresh registries. It re-checks before each DB and
+drops to the light pass if work started meanwhile; a second vacuum of the same user is refused. Otherwise it falls back to the light pass
+and says why. Pooled handles are thread-local, so they can't be force-closed from the admin thread; a restart is the only guaranteed way
+to release them.
+
+The startup tasks follow the same rule:
 the scraped-feed sync, auto-taggers, guid-churn dedup, and the YouTube /
 lead-image / starred-archive / read-history backfills all run once per enabled
 user via `_for_each_background_user` — a bare daemon thread inherits no

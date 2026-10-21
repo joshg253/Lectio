@@ -191,6 +191,7 @@ class _LectioReaderStorage(_ReaderStorage):
         _reader_storage_setup_db(db, migrate)
         try:
             db.execute("PRAGMA wal_autocheckpoint=200")
+            db.execute("PRAGMA journal_size_limit=67108864")  # shrink the WAL file back after a checkpoint restarts it
             # Wait (up to 10s) for a lock instead of failing instantly with
             # "database is locked" — matches the meta connections. Concurrent
             # writers (background refresh, FTS index build, startup backfills)

@@ -1905,6 +1905,90 @@ def get_maintenance_hour() -> int | None:
     return _ENV_MAINTENANCE_HOUR
 
 
+_busy_work_lock = threading.Lock()
+_busy_work: dict[str, dict[str, int]] = {}
+
+
+@contextlib.contextmanager
+def busy_work(label: str):
+    """Mark the current tenancy user as running long background work (also usable as a decorator).
+
+    Admin "Full vacuum" refuses to touch a user's databases while any of these is open; see user_busy_reasons."""
+    uid = tenancy.current_user_id()
+    with _busy_work_lock:
+        counts = _busy_work.setdefault(uid, {})
+        counts[label] = counts.get(label, 0) + 1
+    try:
+        yield
+    finally:
+        with _busy_work_lock:
+            counts = _busy_work.get(uid, {})
+            counts[label] = counts.get(label, 1) - 1
+            if counts[label] <= 0:
+                counts.pop(label, None)
+            if not counts:
+                _busy_work.pop(uid, None)
+
+
+def user_busy_reasons(uid: str, *, include_activity: bool = True, ignore: tuple[str, ...] = ()) -> list[str]:
+    """Why a full vacuum of *uid*'s databases should wait, as short phrases; empty means it is safe to go ahead.
+
+    Background work is read from the busy_work marks plus the existing per-user job registries (those need the user's own tenancy
+    context). include_activity=False skips the "recently active" check, for an admin vacuuming their own account. Web, Google
+    Reader-style and session requests touch last_seen_at; Fever and Miniflux API clients do not, so they can read as idle."""
+    reasons: list[str] = []
+    if include_activity:
+        row = user_store.get_by_id(uid)
+        last_seen = float(row["last_seen_at"] or 0) if row else 0.0
+        # last_seen_at is written at most once per throttle window, so a user active a second ago can read as up to a window old.
+        if time.time() - last_seen < 2 * _LAST_SEEN_THROTTLE_SECONDS:
+            reasons.append("the user was active in the last 10 minutes")
+    with _busy_work_lock:
+        reasons += [f"{label} is running" for label in _busy_work.get(uid, {}) if label not in ignore]
+    with tenancy.user_context(uid):
+        with _da_sync_lock:
+            if uid in _da_sync_active:
+                reasons.append("a DeviantArt sync is running")
+        if uid in _escalation_reprobe_running:
+            reasons.append("an escalation reprobe is running")
+        for name, jobs in (
+            ("a bulk re-fetch", _refetch_jobs),
+            ("a folder refresh", _folder_refresh_jobs),
+        ):
+            job = jobs.get("job")
+            if isinstance(job, dict) and job.get("running"):
+                reasons.append(f"{name} is running")
+        with _autofetch_jobs_lock:
+            # Keyed by (feed_url, entry_id), one job per post, so look through the values rather than for a single "job".
+            if any(isinstance(j, dict) and j.get("running") for j in _autofetch_jobs.values()):
+                reasons.append("an auto-fetch is running")
+    return reasons
+
+
+def truncate_wal(conn: sqlite3.Connection, label: str, *, attempts: int = 10, delay: float = 1.0) -> bool:
+    """Fold the WAL back and truncate it, retrying while live readers block it.
+
+    ``PRAGMA wal_checkpoint(TRUNCATE)`` does not raise when a reader holds the WAL: it returns ``busy=1`` and leaves the file alone.
+    After a VACUUM (which writes the whole rebuilt DB through the WAL) that left the WAL at ~DB size, so the total came out larger
+    than before. Pooled connections only read briefly, so a short retry usually gets through; if not, say so instead of staying silent.
+    """
+    # A busy checkpoint waits out the connection's whole busy timeout (30 s on the admin path) before it reports busy, and holds off other
+    # writers while it waits; probe quickly instead so the retries take attempts * (0.25 s + delay) and nobody else is locked out for long.
+    original_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    conn.execute("PRAGMA busy_timeout=250")
+    try:
+        for attempt in range(attempts):
+            busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+            if not busy:
+                return True
+            if attempt + 1 < attempts:
+                time.sleep(delay)
+    finally:
+        conn.execute(f"PRAGMA busy_timeout={int(original_timeout)}")
+    LOGGER.warning("[maintenance] %s: WAL not truncated (readers still active); it shrinks at the next checkpoint", label)
+    return False
+
+
 def get_portrait_img_max_width() -> int:
     """Max width (px) for portrait (taller-than-wide) images in article bodies;
     landscape images stay full container width. 0 = disabled. Per-user DB
@@ -3215,6 +3299,8 @@ def get_meta_connection() -> sqlite3.Connection:
     # capture found near-zero real work across many different queries in both
     # DBs, arguing against checkpoint frequency as the mechanism.
     conn.execute("PRAGMA wal_autocheckpoint=200")
+    # Whenever a checkpoint restarts the WAL, cut the file back to this size instead of leaving a vacuum-sized one behind.
+    conn.execute("PRAGMA journal_size_limit=67108864")
     # synchronous=NORMAL 2026-09-03 (Plan.md Tier 1, Read Above/Below lead),
     # replacing SQLite's compiled-in FULL default -- see
     # services/reader_api.py's _LectioReaderStorage docstring for the full
@@ -19755,6 +19841,7 @@ def get_push_active_feed_urls() -> set[str]:
         return set()
 
 
+@busy_work("YouTube sync")
 def _run_youtube_sync(folder_id: int | None = None) -> dict:
     """Run YouTube subscription sync, creating the target folder if needed.
 
@@ -20127,6 +20214,7 @@ def scheduler_watchdog_loop(stop_event: threading.Event) -> None:
             LOGGER.exception("[scheduler] watchdog iteration failed")
 
 
+@busy_work("scheduled refresh")
 def _scheduled_refresh_tick() -> None:
     """One scheduled-refresh pass for the currently-bound tenancy user."""
     global_minutes = _effective_auto_refresh_minutes()
@@ -20705,7 +20793,7 @@ def _daily_maintenance_for_user() -> None:
             conn.execute("VACUUM")
             # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
             # app's pooled connections holding the DB open it lingers otherwise.
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            truncate_wal(conn, f"VACUUM {label}")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
@@ -20799,7 +20887,7 @@ def _run_global_maintenance() -> None:
             conn.execute("VACUUM")
             # Fold the vacuum's WAL (≈ DB-sized) back and truncate it — with the
             # app's pooled connections holding the DB open it lingers otherwise.
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            truncate_wal(conn, f"VACUUM {label}")
             conn.close()
             LOGGER.info("[maintenance] VACUUM %s done", label)
         except Exception:
