@@ -435,8 +435,10 @@
             await postForm('/admin/users/delete', { user_id: userId });
             location.reload();
           } else if (act === 'vacuum') {
-            await postForm('/admin/users/vacuum', { user_id: userId });
-            toast(`Vacuum started for ${username} — DB sizes update after it finishes (check Logs).`);
+            const data = await (await postForm('/admin/users/vacuum', { user_id: userId })).json();
+            toast(data.mode === 'full'
+              ? `Full vacuum started for ${username} — DB sizes update after it finishes (check Logs).`
+              : `Light vacuum started for ${username} (full skipped: ${(data.reasons || []).join('; ')}). Try the full one when they're idle.`);
           }
         } catch {
           toast(`Action failed for ${username}.`);

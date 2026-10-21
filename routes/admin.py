@@ -55,6 +55,7 @@ from main import (
     _parse_local_ts,
     _read_log_tail,
     _run_in_user_context,
+    busy_work,
     delete_user_storage,
     get_reader,
     get_thumb_connection,
@@ -62,6 +63,8 @@ from main import (
     provision_user_storage,
     starred_archive_service,
     tenancy,
+    truncate_wal,
+    user_busy_reasons,
     user_store,
 )
 from services.users import UserExistsError
@@ -272,8 +275,13 @@ async def admin_vacuum_user(request: Request):
     """Admin action: VACUUM one user's reader/meta/starred DBs in the background.
 
     Nightly maintenance vacuums meta/starred but skips the reader DB (the big
-    one); this reclaims space after a large purge or unsubscribe spree. A DB
-    busy with another writer just logs and skips — the nightly pass retries."""
+    one); this reclaims space after a large purge or unsubscribe spree.
+
+    Runs a *full* vacuum when nothing else is using the user's databases: the WAL is emptied first and truncated afterwards,
+    retrying for about 40 s while the app's own pooled readers let go (a single attempt leaves a DB-sized WAL behind, so the total
+    grew). If the user was active in the last 10 minutes, or any of their background work (refresh, YouTube/DeviantArt sync, bulk
+    re-fetch...) is running, it falls back to the *light* pass instead and says why; it re-checks before each DB.
+    Vacuuming your own account ignores the activity check. A DB busy with another writer just logs and skips — the nightly pass retries."""
     admin = _current_web_user(request)
     if not _is_web_admin(admin):
         return Response(status_code=403)
@@ -282,7 +290,15 @@ async def admin_vacuum_user(request: Request):
     if user_store.get_by_id(target_id) is None:
         return JSONResponse({"ok": False, "error": "No such user."}, status_code=404)
 
+    include_activity = target_id != admin
+    reasons = user_busy_reasons(target_id, include_activity=include_activity)
+    if "an admin vacuum is running" in reasons:
+        return JSONResponse({"ok": False, "error": "A vacuum is already running for that user."}, status_code=409)
+    full = not reasons
+
+    @busy_work("an admin vacuum")
     def _vacuum() -> None:
+        nonlocal full, reasons
         for label, path in [
             ("reader", tenancy.reader_db_path()),
             ("meta", tenancy.meta_db_path()),
@@ -292,23 +308,35 @@ async def admin_vacuum_user(request: Request):
                 p = Path(path)
                 if not p.exists():
                     continue
+                if full:
+                    # The check above was at click time and this runs for minutes: drop to the light pass if work has started since.
+                    reasons = user_busy_reasons(target_id, include_activity=include_activity, ignore=("an admin vacuum",))
+                    full = not reasons
                 before = _dir_bytes(p)
                 conn = sqlite3.connect(str(p), timeout=30)
+                if full:
+                    truncate_wal(conn, f"admin-vacuum {label} (before)", attempts=5)
                 conn.execute("VACUUM")
                 # In WAL mode the vacuum copies the whole rebuilt DB through the
                 # -wal file, which then lingers at ~DB size while the app's
                 # pooled connections keep the DB open — making the total LARGER
-                # than before. Fold it back and truncate to zero.
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                # than before. Fold it back and truncate it, retrying while a
+                # pooled reader blocks the checkpoint.
+                truncate_wal(conn, f"admin-vacuum {label}", attempts=30 if full else 3)
                 conn.close()
                 LOGGER.info(
-                    "[admin-vacuum] %s %s: %.1f MB -> %.1f MB (incl. sidecars)", target_id, label, before / 1048576, _dir_bytes(p) / 1048576
+                    "[admin-vacuum] %s %s (%s): %.1f MB -> %.1f MB (incl. sidecars)",
+                    target_id,
+                    label,
+                    "full" if full else "light",
+                    before / 1048576,
+                    _dir_bytes(p) / 1048576,
                 )
             except Exception:
                 LOGGER.exception("[admin-vacuum] %s %s failed", target_id, label)
 
     threading.Thread(target=_run_in_user_context, args=(target_id, _vacuum), daemon=True, name=f"admin-vacuum-{target_id[:12]}").start()
-    return JSONResponse({"ok": True, "started": True})
+    return JSONResponse({"ok": True, "started": True, "mode": "full" if full else "light", "reasons": reasons})
 
 
 @router.get("/admin/logs")
