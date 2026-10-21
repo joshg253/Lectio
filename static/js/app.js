@@ -9589,7 +9589,10 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const row = postMainLink.closest('.post-item');
           if (!window.MARK_READ_ON_NEW_TAB || row?.getAttribute('data-post-read') !== '0') return;
           const form = row.querySelector('.post-read-toggle-form');
-          if (form instanceof HTMLFormElement) form.requestSubmit();
+          if (form instanceof HTMLFormElement) {
+            form.dataset.noNavigateFallback = '1';
+            form.requestSubmit();
+          }
         };
         postMainLink.addEventListener('mousedown', (event) => {
           const url = articleHref();
@@ -9885,6 +9888,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               }
             }
           } catch (_error) {
+            // A mark-read fired from a title opened in another tab must not take this tab to the redirect on failure.
+            if (readForm.dataset.noNavigateFallback) return;
             readForm.submit();
           }
         });
