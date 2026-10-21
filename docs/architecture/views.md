@@ -1245,3 +1245,11 @@ returned, never reorders or drops from it.
 cross-feed duplicate inside the first chunk's window and chaining a full chunk_delta sequence
 through it — confirmed to fail against the pre-fix code (reverted main.py, same test) and pass
 against the fix.
+
+## Title clicks open the article, not the reader
+
+The post title is a link to the in-app post. A plain click loads the reader pane in place; Ctrl/Cmd-click and middle-click swap the
+href to `data-article-url` on `mousedown` (restored after the click) so the browser's own gesture opens the article natively. A script
+can't open a tab behind the current one (`window.open` always focuses it, and some browsers ignore script-made modified clicks), which
+is why the B hotkey can't either; see the extension item in `Plan.md`. The per-user `mark_read_on_new_tab` setting reaches the page as
+`window.MARK_READ_ON_NEW_TAB`, refreshed on save, and the click reuses the row's own read-toggle form.

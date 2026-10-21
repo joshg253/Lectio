@@ -501,6 +501,9 @@ PROFILE_NAME_SETTING_KEY = "profile_name"
 PROFILE_EMAIL_SETTING_KEY = "profile_email"
 SETTING_TZ_DISPLAY = "tz_display"
 SETTING_PORTRAIT_IMG_MAX_WIDTH = "portrait_img_max_width"
+# Per-user: Ctrl/Cmd-click or middle-click on a post title (opens the article in a new tab without opening it in the reader) marks the
+# post read. Off ("0") by default: those clicks leave it unread.
+SETTING_MARK_READ_ON_NEW_TAB = "mark_read_on_new_tab"
 # Per-user: rewrite every third-party <img src> in the article pane body to
 # /api/img?u=… instead of loading it directly. Off ("0") by default — raises
 # /api/img traffic and cache size, and drops srcset (so high-DPI screens fetch
@@ -1916,6 +1919,11 @@ def get_portrait_img_max_width() -> int:
         except ValueError:
             pass
     return _ENV_PORTRAIT_IMG_MAX_WIDTH
+
+
+def mark_read_on_new_tab_enabled() -> bool:
+    """Per-user: opening a post's article in a new tab from its list title also marks it read. Off by default."""
+    return get_runtime_setting(SETTING_MARK_READ_ON_NEW_TAB, "0") == "1"
 
 
 def proxy_body_images_enabled() -> bool:
@@ -15303,7 +15311,7 @@ def merge_orphan_saved_entries(
                 "feed_url": orphan["feed_url"],
                 "id": orphan["id"],
                 "title": orphan["title"],
-                "link": orphan["link"],
+                "link": html_sanitize.safe_link_url(orphan["link"]),
                 "thumbnail_url": None,
                 "feed_title": orphan["feed_title"],
                 "feed_icon_url": None,
@@ -22897,6 +22905,7 @@ def _home_inner(
     _tmpl_ctx = {
         "page_title": page_title,
         "portrait_img_max_width": get_portrait_img_max_width(),
+        "mark_read_on_new_tab": mark_read_on_new_tab_enabled(),
         "request": request,
         "folder_rows": folder_rows,
         "root_folder_row": root_folder_row,

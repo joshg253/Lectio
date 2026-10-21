@@ -330,6 +330,11 @@ pick up only when ready to invest. Value order:
 3. **Dual-extension use** — one browser running save-to-Readit and save-to-Lectio side by side.
 4. Nice-to-haves once forked: badge feedback distinguishing saved/duplicate/refreshed, prefilled
    Backend, username+API-token auth.
+5. **Keyboard flow in the background.** Pages can't open a tab behind the current one (`window.open` always
+   focuses it; Vivaldi also ignores script-made Ctrl-clicks), so B can't do it today; middle-click and Ctrl/Cmd-click
+   on a title work because they're real gestures. An extension can open with `active: false`: Lectio would hand B (and
+   an open-the-selection action) to the extension and keep `window.open` as the fallback when none is present. Triage use:
+   j through an artist's unread posts, B to queue the worth-checking ones behind the reader.
 
 Keep the wire protocol unchanged (`/api/bookmarklet/save`) so the stock extension keeps working.
 

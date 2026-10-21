@@ -77,6 +77,7 @@
     window.NO_RSS_URL = {{ no_rss_url | tojson }};
     window.FORCE_URL = {{ force_url | tojson }};
     window.PORTRAIT_IMG_MAX_WIDTH = {{ portrait_img_max_width | tojson }};
+    window.MARK_READ_ON_NEW_TAB = {{ mark_read_on_new_tab | tojson }};
   </script>
   <script>
     // CSRF shim — installs BEFORE any other handler registers.
@@ -935,7 +936,7 @@
           <div class="post-item-card">
             <div class="post-content">
               <div class="post-title-row">
-                <a class="post-main-link"
+                <a class="post-main-link" rel="noopener noreferrer"
                   href="/?folder_id={{ selected_folder_id }}{{ list_feed_query }}{{ tag_query }}{{ sort_query }}{{ read_filter_query }}&feed_url={{ post.feed_url | urlencode }}&entry_id={{ post.id | urlencode }}"
                   data-article-url="{{ post.link or '' }}">
                   <div class="post-title" title="{{ post.link or '' }}">{% if post.title_html %}{{ post.title_html | safe }}{% else %}{{ post.title or "(untitled)" }}{% endif %}</div>
