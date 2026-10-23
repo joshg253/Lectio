@@ -488,7 +488,9 @@
         }).join('\n');
       }
 
+      let _logsSeq = 0;
       async function loadLogs() {
+        const seq = ++_logsSeq;
         const out = $('adm-log-output');
         const status = $('adm-log-status');
         const level = $('adm-log-level')?.value || 'all';
@@ -502,6 +504,7 @@
           if (until) params.set('until', until);
           const r = await fetch(`/admin/logs?${params.toString()}`, { credentials: 'same-origin' });
           const d = await r.json();
+          if (seq !== _logsSeq) return;  // a newer filter change superseded this request
           if (!d.available) {
             out.innerHTML = '';
             status.textContent = 'File logging is not enabled (set LECTIO_LOG_DIR).';
@@ -516,7 +519,7 @@
           status.textContent = `${d.count} line${d.count === 1 ? '' : 's'} (${range})${cap}.`;
           out.scrollTop = out.scrollHeight;
         } catch {
-          if (status) status.textContent = 'Failed to load logs.';
+          if (seq === _logsSeq && status) status.textContent = 'Failed to load logs.';
         }
       }
 

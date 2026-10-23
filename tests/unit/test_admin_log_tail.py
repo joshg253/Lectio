@@ -4,6 +4,8 @@ their record."""
 
 from __future__ import annotations
 
+import re
+
 import main
 
 SAMPLE = """\
@@ -231,4 +233,10 @@ def test_category_combines_with_level_and_window(tmp_path, monkeypatch):
 
 
 def test_log_category_names_cover_the_dropdown():
-    assert main.LOG_CATEGORY_NAMES == {"automations", "maintenance", "refresh", "youtube", "integrations", "images", "other"}
+    from pathlib import Path
+
+    html = (Path(main.__file__).parent / "templates" / "administration.html").read_text()
+    select = html[html.index('id="adm-log-category"') :]
+    select = select[: select.index("</select>")]
+    options = set(re.findall(r'<option value="([a-z]+)"', select))
+    assert options == main.LOG_CATEGORY_NAMES | {"all"}
