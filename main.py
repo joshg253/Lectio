@@ -287,6 +287,22 @@ def _configure_reader_logging() -> None:
     logging.getLogger("reader.update").addFilter(_ReaderUpdateFetchErrorFilter())
 
 
+# Query-string secrets that reach the log in request URLs: httpx logs every outgoing URL (the YouTube Data API takes its key as
+# ``&key=``, signed image URLs carry a signature) and the access log records incoming ones (OAuth callbacks carry ``code``/``state``).
+_LOG_SECRET_RE = re.compile(
+    r"([?&](?:key|api_key|access_token|refresh_token|client_secret|token|code|state|password|jwt|sig|signature"
+    r"|x-amz-signature|x-amz-security-token)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Log formatter that masks URL query-string secrets before the line is written anywhere."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _LOG_SECRET_RE.sub(r"\1<redacted>", super().format(record))
+
+
 def _configure_persistent_logging() -> None:
     """Attach a rotating file handler when LECTIO_LOG_DIR is set.
 
@@ -309,7 +325,7 @@ def _configure_persistent_logging() -> None:
         backupCount=backup_count,
         encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     # Attach to the root logger so it captures everything (uvicorn, reader, app).
     root = logging.getLogger()
     if root.level > logging.INFO or root.level == logging.NOTSET:
@@ -333,9 +349,11 @@ def _configure_console_logging() -> None:
     root = logging.getLogger()
     for existing in root.handlers:
         if isinstance(existing, logging.StreamHandler) and not isinstance(existing, logging.FileHandler):
+            if not isinstance(existing.formatter, _RedactingFormatter):
+                existing.setFormatter(_RedactingFormatter(existing.formatter._fmt if existing.formatter else None))
             return
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     # INFO by default, because the whole point is that app logs become visible. But loosening the root
     # level is a decision about someone else's process, so LECTIO_LOG_LEVEL takes precedence when set —
     # a deployment that wants a quieter console says so instead of being overruled.
@@ -22223,6 +22241,95 @@ def _dir_bytes(*paths: Path) -> int:
 # Log levels ranked so the Logs tab's filter can select a minimum severity.
 _LOG_LEVEL_RANK = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 _LOG_LINE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+ (\w+) ")
+# The ``[tag]`` that opens a record's message, right after "<timestamp> <LEVEL> <logger>: ". Anchored so a bracketed word quoted
+# later in an untagged line (a URL or title) isn't mistaken for a subsystem tag.
+_LOG_TAG_RE = re.compile(r"^\S+ \S+ \w+ [^\s:]+: \[([a-z][a-z0-9 _-]*)\]", re.IGNORECASE)
+
+# Admin → Logs "Category" filter: groups the bracketed ``[subsystem]`` tags that log records carry. Exact tags
+# match whole; a trailing "*" matches by prefix and a leading "*" by suffix. Untagged records (HTTP access
+# lines etc.) and unlisted tags fall under "other".
+_LOG_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "automations": ("automation", "on-star", "tag-filter", "autofile", "*-auto", "curation"),
+    "maintenance": (
+        "maintenance",
+        "purge",
+        "dedup",
+        "saved-dedup",
+        "guid-churn*",
+        "reprobe",
+        "auto-refetch",
+        "hide-locked-comics",
+        "perf",
+        "admin-vacuum",
+        "archive-old-stars",
+        "startup",
+        "shutdown",
+    ),
+    "refresh": (
+        "refresh",
+        "scheduler",
+        "websub",
+        "scraper",
+        "full-fetch",
+        "page-fetch",
+        "re-fetch",
+        "refetch-batch",
+        "canonical-link",
+        "page-topics",
+        "extract",
+        "prefetch-diag",
+    ),
+    "youtube": ("yt-*", "youtube*", "hide-unpremiered", "backfill-hide-shorts"),
+    "integrations": (
+        "deviantart",
+        "devto",
+        "reddit",
+        "inoreader*",
+        "pinterest-oauth",
+        "quire*",
+        "freshrss-import",
+        "bsky",
+        "greader",
+        "fever",
+        "takeout",
+        "ttrss-import",
+        "miniflux-import",
+        "webtoons",
+        "webcomic",
+        "tapas",
+        "instapaper*",
+        "email*",
+        "webhook*",
+    ),
+    "images": ("img-cache", "feed-thumb", "entry-thumb"),
+}
+
+
+LOG_CATEGORY_NAMES = frozenset({*_LOG_CATEGORIES, "other"})
+
+
+def _log_categories(line: str) -> set[str]:
+    """Categories of a log record (see ``_LOG_CATEGORIES``), from the first ``[tag]`` after its header. A record can
+    belong to several (a YouTube playlist automation is both "automations" and "youtube"); YouTube API calls
+    logged by httpx carry no tag and are recognized by URL. Records matching nothing are "other"."""
+    found: set[str] = set()
+    tag_m = _LOG_TAG_RE.match(line)
+    if tag_m:
+        tag = tag_m.group(1).lower()
+        for category, patterns in _LOG_CATEGORIES.items():
+            for pat in patterns:
+                if pat.endswith("*"):
+                    hit = tag.startswith(pat[:-1])
+                elif pat.startswith("*"):
+                    hit = tag.endswith(pat[1:])
+                else:
+                    hit = tag == pat
+                if hit:
+                    found.add(category)
+                    break
+    if "googleapis.com/youtube/" in line:
+        found.add("youtube")
+    return found or {"other"}
 
 
 def _log_line_dt(line: str) -> datetime | None:
@@ -22256,11 +22363,11 @@ def _parse_local_ts(value: str) -> tuple[datetime | None, bool]:
 
 
 def _read_log_tail(
-    max_lines: int, min_level: str, since: datetime | None = None, until: datetime | None = None
+    max_lines: int, min_level: str, since: datetime | None = None, until: datetime | None = None, category: str = ""
 ) -> tuple[list[str], bool, bool]:
     """Return (lines, available, truncated). Reads the current lectio.log, keeps
-    records at or above ``min_level`` and within [``since``, ``until``] —
-    continuation lines like tracebacks stay attached to their record — and
+    records at or above ``min_level``, within [``since``, ``until``] and (when
+    ``category`` is set) of that category — continuation lines like tracebacks stay attached to their record — and
     returns the last ``max_lines`` of the match. ``truncated`` is True when the
     cap dropped older matching records. available=False when file logging isn't
     configured."""
@@ -22271,11 +22378,14 @@ def _read_log_tail(
     if not path.exists():
         return [], True, False
     threshold = _LOG_LEVEL_RANK.get(min_level.upper(), 0)
+    category = category.strip().lower()
+    if category == "all":
+        category = ""
     try:
         raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return [], True, False
-    if threshold <= 0 and since is None and until is None:
+    if threshold <= 0 and since is None and until is None and not category:
         return raw[-max_lines:], True, len(raw) > max_lines
     kept: list[str] = []
     include_current = False
@@ -22287,6 +22397,8 @@ def _read_log_tail(
                 dt = _log_line_dt(line)
                 if dt is not None and ((since is not None and dt < since) or (until is not None and dt > until)):
                     include_current = False
+            if include_current and category and category not in _log_categories(line):
+                include_current = False
             if include_current:
                 kept.append(line)
         elif include_current:

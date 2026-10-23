@@ -85,3 +85,7 @@ one, it checks each video afterward and re-adds one that disappeared (it lands a
 
 **Add to playlist** (button, auto-add rules, star-to-playlist) works only on posts from YouTube feeds and adds only that post's own video,
 never other videos linked in its description. Every add is logged.
+
+**Admin → Logs** opens on the last 15 minutes. Besides level and time range, a Category filter narrows to automations, maintenance, refresh
+and fetch, YouTube, integrations, images, or other (untagged records such as HTTP access lines). Categories group the `[tag]` that log lines
+carry, and a line can belong to more than one (a YouTube playlist automation is both).
