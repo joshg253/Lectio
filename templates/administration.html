@@ -313,6 +313,18 @@
               <option value="error">Error only</option>
             </select>
           </label>
+          <label class="fld">Category
+            <select id="adm-log-category">
+              <option value="all" selected>All</option>
+              <option value="automations">Automations</option>
+              <option value="maintenance">Maintenance</option>
+              <option value="refresh">Refresh &amp; fetch</option>
+              <option value="youtube">YouTube</option>
+              <option value="integrations">Integrations</option>
+              <option value="images">Images</option>
+              <option value="other">Other / untagged</option>
+            </select>
+          </label>
           <div class="adm-log-presets">
             <button type="button" class="adm-log-preset" data-mins="15">15m</button>
             <button type="button" class="adm-log-preset" data-mins="60">1h</button>
@@ -482,9 +494,10 @@
         const level = $('adm-log-level')?.value || 'all';
         const since = $('adm-log-since')?.value || '';
         const until = $('adm-log-until')?.value || '';
+        const category = $('adm-log-category')?.value || 'all';
         if (status) status.textContent = 'Loading…';
         try {
-          const params = new URLSearchParams({ level });
+          const params = new URLSearchParams({ level, category });
           if (since) params.set('since', since);
           if (until) params.set('until', until);
           const r = await fetch(`/admin/logs?${params.toString()}`, { credentials: 'same-origin' });
@@ -519,19 +532,20 @@
       });
       $('adm-log-refresh')?.addEventListener('click', loadLogs);
       $('adm-log-level')?.addEventListener('change', loadLogs);
+      $('adm-log-category')?.addEventListener('change', loadLogs);
       $('adm-log-since')?.addEventListener('change', loadLogs);
       $('adm-log-until')?.addEventListener('change', loadLogs);
       $('adm-log-wrap')?.addEventListener('change', (e) => {
         $('adm-log-output')?.classList.toggle('wrap', e.target.checked);
       });
       // Lazy-load logs the first time the Logs tab is opened; default to the
-      // last hour so the view isn't the whole file.
+      // last 15 minutes so the view isn't the whole file.
       let _logsLoaded = false;
       document.querySelector('.adm-tab[data-panel="panel-logs"]')?.addEventListener('click', () => {
         if (!_logsLoaded) {
           _logsLoaded = true;
           const sinceInput = $('adm-log-since');
-          if (sinceInput && !sinceInput.value) sinceInput.value = toLocalInput(new Date(Date.now() - 3600000));
+          if (sinceInput && !sinceInput.value) sinceInput.value = toLocalInput(new Date(Date.now() - 15 * 60000));
           loadLogs();
         }
       });
