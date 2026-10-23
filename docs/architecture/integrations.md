@@ -124,7 +124,9 @@ queue insert and never released (the queue row is the durable record; a rollback
   so accounts are never shared. The redirect URI is fixed at
   `/integrations/youtube/oauth/callback` to match the Google client registration.
   Client-side, `enhanceYoutubeEmbeds()` injects an "Add to playlist" control beneath
-  each YT iframe (video id parsed from the `/embed/` src); it lazily fetches
+  the post's own video iframe in a YouTube feed (the pane carries `data-own-video-id`; embeds of other videos get none).
+  Every playlist path (auto-add rules, star-to-playlist, the backfill script) likewise takes only
+  `youtube_embeds.own_video_id()`, never video links found in a description. Each add is logged (`[yt-playlist]`, plus `[yt-playlist-auto]` with the entry for rule adds). It lazily fetches
   `/api/youtube/playlists` (cached per page session). The playlist menu is positioned
   `fixed` at open so it escapes the article pane's `overflow:auto` clipping, flipping
   upward near the viewport bottom. `quotaExceeded` surfaces as a
@@ -267,15 +269,14 @@ For `tag_filter` feed rules (`_find_redundant_tag_filter_feed_rules`): `covered`
 tag_filter rules that rescue no more than the feed rule does; `no_op` when the spec is `+` only, since a `+` never rescues from
 another rule's drops. `++` feed rules are never flagged.
 
-  It's a **general** automation rule (any feed/folder scope, via the shared
-  `highlight_keywords` table + after-refresh pass), not YT-folder-bound, because a
-  YouTube video can be embedded in any feed's article and an entry can carry several.
+  It's an automation rule on the shared `highlight_keywords` table + after-refresh pass, scoped to any folder or feed, but it only ever
+  acts on posts from YouTube feeds and only on the post's own video (see below).
   `_run_youtube_playlist_rules_after_refresh` runs last in `_run_automation_after_refresh`
   (after mark_as_read so its own "mark read after add" doesn't fight an earlier rule):
-  for each new (since the persisted last-check watermark) matching entry it extracts **all** video ids
-  from the entry link + content (`youtube_embeds.video_ids_in_text`, which also matches
-  `/shorts/`), inserts each via `playlistItems.insert`, and optionally marks the post
-  read. The rule's keyword is an **optional filter** — empty = every new video in
+  for each new (since the persisted last-check watermark) matching entry it takes the post's
+  own video id from the entry link (`youtube_embeds.own_video_id`, which also matches `/shorts/` and returns None for a
+  non-YouTube feed), inserts it via `playlistItems.insert`, and optionally marks the post read. Video links in the description
+  are ignored: channels credit other videos there, and each post that did so re-added the credited one. The rule's keyword is an **optional filter** — empty = every new video in
   scope. Per-rule columns on `highlight_keywords`: `yt_playlist_id`,
   `yt_playlist_title`, `yt_include_shorts` (default off — Shorts detected by the `/shorts/` link;
   **it overrides Hide Shorts**, the rule being a deliberate per-rule opt-in), `yt_mark_read` (default on), and
@@ -311,18 +312,14 @@ another rule's drops. `++` feed rules are never flagged.
   rule-builder until connected) so it can't be created without a token. Runs in the
   per-user background context like the other after-refresh rules.
 
-  **The rule stays general-purpose; only the editor's default changed (2026-08-30).**
-  The paragraph above still holds — the engine matches any feed/folder scope, because
-  a YouTube video can be embedded in an article from any feed. But the rule-builder's
+  **The editor defaults to the YouTube folder (2026-08-30).** The rule-builder's
   feed picker used to default to showing every folder's feeds regardless, which made
   finding your actual YouTube channel feeds (the common case for this rule type) hard
   once a library has more than a handful of folders. Switching the type dropdown to
   "Add to YT Playlist" now snaps the picker to `window.YT_FOLDER_ID` (a page-wide
   global, main.py's home-route context — has to be correct on first paint rather than
   fetched lazily from Settings, same reasoning as the neighboring `is_yt_folder` flag).
-  The folder dropdown itself is untouched, so the general-purpose case — scoping the
-  rule to some other feed that happens to embed videos — is still one manual
-  re-selection away, not removed.
+  The folder dropdown itself is untouched; a rule scoped to a non-YouTube feed is accepted but never adds anything.
 
   **Manual bulk add (`/api/youtube/playlists/add-batch`) is a separate action from
   the rule above** — the post list's multi-selection "Add to YouTube Playlist…" — and

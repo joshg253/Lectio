@@ -86,15 +86,15 @@ def _scan_scope(rule: dict, feed_urls: set[str], cutoff: datetime) -> Iterator[t
                     continue
                 if not include_shorts and main._is_youtube_short(entry):
                     continue
-                link = str(entry.link or "")
-                body = "".join((c.value or "") for c in (entry.content or []))
-                body += str(entry.summary or "")
-                for vid in main.youtube_embeds.video_ids_in_text(link, body):
-                    if min_secs or max_secs:
-                        dur = main.youtube_duration_service.get_cached_duration(vid)[0]
-                        if dur is None or (min_secs and dur < min_secs) or (max_secs and dur > max_secs):
-                            continue
-                    yield entry, vid
+                # Same as the live rule: only a YouTube-feed post's own video, never ones its description mentions.
+                vid = main.youtube_embeds.own_video_id(str(entry.feed_url or ""), str(entry.link or ""))
+                if not vid:
+                    continue
+                if min_secs or max_secs:
+                    dur = main.youtube_duration_service.get_cached_duration(vid)[0]
+                    if dur is None or (min_secs and dur < min_secs) or (max_secs and dur > max_secs):
+                        continue
+                yield entry, vid
 
 
 def _playlist_video_ids(token: str, playlist_id: str) -> set[str]:

@@ -71,6 +71,14 @@ def test_add_video_posts_resource_id(monkeypatch):
     assert snip["resourceId"] == {"kind": "youtube#video", "videoId": "dQw4w9WgXcQ"}
 
 
+def test_add_video_logs_the_add(monkeypatch, caplog):
+    handler = lambda request: httpx.Response(200, json={"id": "item1"}, headers={"content-type": "application/json"})  # noqa: E731
+    monkeypatch.setattr(httpx, "Client", _mock_client_factory(handler))
+    with caplog.at_level("INFO", logger="services.youtube_oauth"):
+        yt.add_video_to_playlist("tok", "PL1", "dQw4w9WgXcQ")
+    assert "[yt-playlist] added dQw4w9WgXcQ to PL1" in caplog.text
+
+
 def test_quota_exceeded_raises_distinct_error(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

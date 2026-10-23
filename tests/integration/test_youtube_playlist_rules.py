@@ -733,7 +733,7 @@ def test_members_only_skipped_when_hidden_globally(env, monkeypatch):
     assert _run_with(monkeypatch, members_only=True) == []
 
 
-def test_hide_settings_leave_a_video_embedded_in_a_non_youtube_feed_alone(env, monkeypatch):
+def test_a_video_embedded_in_a_non_youtube_feed_is_never_added(env, monkeypatch):
     other = "https://blog.example.test/feed"
     with main.get_meta_connection() as conn:  # a stale per-feed pref on a non-YouTube feed
         main.upsert_feed_display_pref(conn, other, "hide_members_only", 1)
@@ -757,4 +757,25 @@ def test_hide_settings_leave_a_video_embedded_in_a_non_youtube_feed_alone(env, m
     monkeypatch.setattr(automation_rules.youtube_duration_service, "get_cached_members_only", lambda vid: True)
     _add_rule()
     main._run_youtube_playlist_rules_after_refresh({other})
-    assert calls == [VID]
+    assert calls == []
+
+
+def test_videos_mentioned_in_a_youtube_entry_description_are_not_added(env, monkeypatch):
+    calls = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, pl, vid: calls.append(vid))
+    _add_entry(link="https://www.youtube.com/watch?v=zzzzzzzzzzz")  # e1: out of the way
+    reader = main.get_reader()
+    reader.add_entry(
+        {
+            "feed_url": FEED,
+            "id": "e2",
+            "title": "Vid",
+            "link": f"https://www.youtube.com/watch?v={VID}",
+            "published": dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+            "summary": "Source: https://www.youtube.com/watch?v=abcdEFGHijk",
+        }
+    )
+    _add_rule()
+    main._run_youtube_playlist_rules_after_refresh({FEED})
+    assert sorted(calls) == sorted(["zzzzzzzzzzz", VID])  # each post's own video; the description's abcdEFGHijk is not added

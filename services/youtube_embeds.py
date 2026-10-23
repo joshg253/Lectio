@@ -13,6 +13,7 @@ Pure parsing only — fetching and persistence live in the app layer.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 import feedparser
 
@@ -59,6 +60,21 @@ def video_ids_in_text(*texts: str) -> list[str]:
     (entry link, content HTML, summary). Public wrapper around the internal scanner
     used by the auto-add-to-playlist automation."""
     return _video_ids("\n".join(t for t in texts if t))
+
+
+_YT_FEED_HOSTS = frozenset({"www.youtube.com", "youtube.com", "m.youtube.com"})
+
+
+def own_video_id(feed_url: str, link: str) -> str | None:
+    """The video a YouTube-feed entry *is*, from its link, or None for any other feed.
+
+    The playlist features act on this and nothing else: description text and embeds routinely mention other
+    videos (credits, "watch next", sources), and non-YouTube feeds are not video posts at all."""
+    parsed = urlparse(str(feed_url or ""))
+    if parsed.scheme not in ("http", "https") or parsed.hostname not in _YT_FEED_HOSTS or parsed.path != "/feeds/videos.xml":
+        return None
+    ids = _video_ids(str(link or ""))
+    return ids[0] if ids else None
 
 
 def extract_youtube_embeds(raw: bytes | str) -> dict[str, list[str]]:

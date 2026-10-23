@@ -11,11 +11,14 @@ call playlists.list / playlistItems.list / playlistItems.insert / playlistItems.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 import httpx
+
+LOGGER = logging.getLogger(__name__)
 
 _AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -421,6 +424,7 @@ def add_video_to_playlist(access_token: str, playlist_id: str, video_id: str) ->
         resp = client.post(f"{_API_BASE}/playlistItems", params={"part": "snippet"}, json=body)
     _raise_for_quota(resp, "playlistItems.insert")
     _bill(50)
+    LOGGER.info("[yt-playlist] added %s to %s", video_id, playlist_id)
     return resp.json()
 
 
