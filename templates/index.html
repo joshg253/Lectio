@@ -41,8 +41,7 @@
         var target = new URL(saved.url, window.location.origin);
         if (target.origin !== window.location.origin) return;
 
-        // Already where we want to be: keep the payload so scroll can be
-        // restored once the panes exist.
+        // Already where we want to be: nothing to redirect. (The payload is kept on window.__lectioResume, informational only.)
         if (target.pathname + target.search === window.location.pathname + window.location.search) {
           window.__lectioResume = saved;
           return;
@@ -1127,9 +1126,41 @@
     // back to the folder list mid-read.
     let singlePaneLevel = 0;
 
+    // The article level sets the list pane to display:none, and a hidden element
+    // loses its scroll offset, so Back landed at the top of the list. Remember the
+    // offset keyed to the element: a scope swap replaces .posts, and a stale offset
+    // must not be applied to a different list.
+    let listScrollMemo = null;
+
     function setSinglePaneLevel(level, persist = true) {
-      singlePaneLevel = Math.max(0, Math.min(2, Number(level) || 0));
+      const prevLevel = singlePaneLevel;
+      const nextLevel = Math.max(0, Math.min(2, Number(level) || 0));
+      const listEl = layoutMode === 'single' ? document.querySelector('.posts') : null;
+      if (listEl && nextLevel === 2 && prevLevel !== 2) {
+        listScrollMemo = { el: listEl, top: listEl.scrollTop };
+      }
+      if (!listEl) listScrollMemo = null;  // outside single mode the list is visible and scrolls freely; a stale offset must not return
+      singlePaneLevel = nextLevel;
       bodyEl.setAttribute('data-single-pane-level', String(singlePaneLevel));
+      let restoredOffset = false;
+      if (listEl && prevLevel === 2 && nextLevel !== 2 && listScrollMemo
+          && listScrollMemo.el === listEl && listScrollMemo.top > 0) {
+        listEl.scrollTop = listScrollMemo.top;
+        restoredOffset = true;
+      }
+      // Fallback when there is no usable offset (the list was re-rendered, or the
+      // remembered spot is gone): bring the article just read back into view.
+      if (listEl && prevLevel === 2 && nextLevel !== 2 && !restoredOffset) {
+        const active = listEl.querySelector('.post-item.active');
+        if (active && active.offsetParent !== null) {
+          const top = active.offsetTop;
+          const bottom = top + active.offsetHeight;
+          if (top < listEl.scrollTop || bottom > listEl.scrollTop + listEl.clientHeight) {
+            listEl.scrollTop = Math.max(0, top - (listEl.clientHeight - active.offsetHeight) / 2);
+          }
+        }
+      }
+      if (nextLevel !== 2 && prevLevel !== 2) listScrollMemo = null;
       // The backdrop's `hidden` attribute has to come off, not be out-specified:
       // a global [hidden] { display: none !important } beats any selector.
       if (mediumPaneBackdrop) {
@@ -1177,6 +1208,7 @@
       } else {
         bodyEl.removeAttribute('data-single-pane-level');
         mediumPaneBackdrop?.setAttribute('hidden', '');
+        listScrollMemo = null;  // the list is visible and scrolls freely outside single mode; a stale offset must not return
       }
       // A rotated phone is "medium" mode but still ~390px tall, where the desktop
       // header stack is taller than the article itself. A narrow desktop window is
@@ -1516,28 +1548,14 @@
     // closing, and sessionStorage dies with it.
     const RESUME_KEY = 'lectio-last-position';
 
-    function currentScrollers() {
-      // Which element scrolls depends on the layout, exactly as it does for the
-      // chunking and pull-to-read code.
-      return {
-        posts: (window.isSingleMode && window.isSingleMode())
-          ? document.querySelector('.pane-posts')
-          : document.querySelector('.posts'),
-        entry: document.querySelector('.pane-entry'),
-      };
-    }
-
     function rememberPosition() {
       try {
         // The landing is not a position worth returning to, and saving it would
         // overwrite a real one every time the wordmark is clicked.
         if (window.location.pathname !== '/' || !window.location.search) return;
-        const s = currentScrollers();
         window.localStorage.setItem(RESUME_KEY, JSON.stringify({
           url: window.location.pathname + window.location.search,
           level: singlePaneLevel,
-          postsScroll: s.posts ? s.posts.scrollTop : 0,
-          entryScroll: s.entry ? s.entry.scrollTop : 0,
           ts: Date.now(),
         }));
       } catch (e) { /* private mode, or quota — resume is optional */ }
@@ -1560,25 +1578,6 @@
       rememberPosition();
       return out;
     };
-
-    // Restore scroll once the panes are actually rendered and sized. Two frames
-    // plus a short delay: the entry pane's height depends on images and the
-    // chunked post list grows as it reveals, so a scrollTop set too early lands
-    // against a shorter document and clamps to the bottom.
-    if (window.__lectioResume) {
-      const saved = window.__lectioResume;
-      const applyScroll = () => {
-        const s = currentScrollers();
-        if (s.entry && saved.entryScroll) s.entry.scrollTop = saved.entryScroll;
-        if (s.posts && saved.postsScroll) s.posts.scrollTop = saved.postsScroll;
-      };
-      window.addEventListener('load', () => {
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          applyScroll();
-          window.setTimeout(applyScroll, 400);
-        }));
-      });
-    }
 
     // Registered before app.js loads, so stopImmediatePropagation() suppresses
     // that file's popstate handler too — which is the point when the spare is

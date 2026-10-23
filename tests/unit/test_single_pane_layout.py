@@ -712,3 +712,33 @@ def test_a_modal_outranks_the_whole_phone_overlay_band():
     ):
         assert base > _z_of(marker), marker
     assert _z_of("#unsub-migrate-modal {") > base
+
+
+def test_list_scroll_survives_opening_an_article():
+    """Level 2 sets the list pane to display:none, which resets the scroll offset
+    of the .posts element inside it, so Back from an article landed at the top of
+    the list. The offset is remembered on the way in and restored on the way out,
+    keyed to the element so a scope swap does not inherit a stale one."""
+    assert "listScrollMemo = { el: listEl, top: listEl.scrollTop };" in INDEX
+    assert "listScrollMemo.el === listEl" in INDEX
+
+
+def test_back_from_article_falls_back_to_the_active_post():
+    assert "listEl.querySelector('.post-item.active')" in INDEX
+
+
+def test_the_fallback_only_runs_when_no_offset_was_restored():
+    """Centering the active post after a successful restore would move the list off the spot the reader left."""
+    assert "restoredOffset = true;" in INDEX
+    assert "nextLevel !== 2 && !restoredOffset" in INDEX
+
+
+def test_the_saved_offset_is_dropped_when_leaving_single_mode():
+    """Outside single mode the list is visible and scrolls freely; coming back must not restore the older offset."""
+    assert "listScrollMemo = null;  // the list is visible and scrolls freely outside single mode" in INDEX
+
+
+def test_landing_on_a_list_url_is_stamped_as_a_scope_list():
+    """A list the app opened onto had no history state, so Back from an article
+    refetched it (chunk=1, top of list) instead of keeping the one on screen."""
+    assert "lectioScopePane: true, lectioPaneLevel: window.isSingleMode" in APP_JS

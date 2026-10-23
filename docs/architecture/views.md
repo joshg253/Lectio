@@ -391,7 +391,7 @@ Chrome marks script-pushed entries skippable to defeat back-traps, and Android
 exits any app at its root — a WebAPK install does not change that.
 
 So the app stops trying to keep you in it and makes leaving cost nothing. The
-current position (URL, pane level, both scroll offsets) is written to
+current position (URL and pane level; no scroll offsets) is written to
 `localStorage` — not `sessionStorage`, which dies with the tab, the exact event
 being defended against — on `pagehide`, on `visibilitychange` to hidden, and on
 every navigation. The restore runs inline in `<head>` before anything renders, as
@@ -406,9 +406,10 @@ Three rules stop it becoming its own trap:
 - **Positions older than 7 days are ignored** — long enough for a weekend, past
   which it is a surprise rather than a convenience.
 
-Scroll is re-applied after two animation frames plus a short delay: the article
-pane's height depends on images and the chunked list grows as it reveals, so a
-`scrollTop` set too early clamps against a shorter document.
+Scroll is deliberately not remembered: after the app has been closed for a while, resuming just reloads the saved URL (the saved pane level
+is not restored). Returning from an article within a session is separate (the list keeps its offset, falling back to the opened article).
+A list the app opened straight onto is stamped `lectioScopePane` so Back keeps it instead of refetching; that only takes effect in the wide
+layout, because the drawer layouts push their own spare history entry and handle Back in `index.html`.
 
 Read Mode has its own resume, shipped 2026-08-25 (`templates/read_mode.html`)
 — a separate `lectio-read-last-position` key, deliberately not shared with

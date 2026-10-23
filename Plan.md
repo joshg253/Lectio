@@ -469,3 +469,8 @@ Two Mark as Read rules on Deals could be one if the plain-text rule became regex
 - A playlist rule scoped to a non-YouTube feed or folder is accepted but can never add anything; warn in the editor when the scope has no YouTube feeds.
 - Dedup is per (rule, entry, video) plus a live playlist check, so a video that arrives as a new entry (a channel feed plus a playlist feed, or an old video re-added to a followed playlist) is re-added after the user removed it. Consider also deduping per (rule, video).
 - Saved posts whose feed was deleted get no pane "Add to playlist" button (the orphan detail builder has no `video_id`).
+
+### Back-navigation browser test
+The single-pane Back tests only check source text. Add a headless-Chromium check at phone width (load a list, scroll it, open an article, press Back; assert pane level, `.posts` scrollTop and that no scope-panes refetch fired) and one for the wide layout. It would also settle whether the direct-landing refetch ever happened in the drawer layouts.
+
+- Back after a late article fetch: a pending entry-pane request can still land after Back returns to a list that needs no reload (`scopeStateNoReload` returns without invalidating `entryPaneRequestToken`). Predates the direct-landing stamp but is reachable the same way; needs care so the loading indicator still ends.
