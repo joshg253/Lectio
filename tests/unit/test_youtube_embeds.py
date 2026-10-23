@@ -81,6 +81,9 @@ def test_own_video_id_only_for_youtube_feeds():
     assert own("https://www.youtube.com/feeds/videos.xml?channel_id=UCx", "https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
     assert own("https://www.youtube.com/feeds/videos.xml?channel_id=UCx", "https://example.test/post") is None
     assert own("https://blog.example.test/feed", link) is None
+    # the marker appearing elsewhere in a non-YouTube URL doesn't make it a YouTube feed
+    assert own("https://evil.test/feed?u=youtube.com/feeds/videos.xml", link) is None
+    assert own("https://youtube.com.evil.test/feeds/videos.xml?channel_id=UCx", link) is None
 
 
 def test_pane_embed_button_is_limited_to_the_posts_own_video():

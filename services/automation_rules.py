@@ -1319,7 +1319,9 @@ def _apply_youtube_playlist_rules(
                                     entry_added_any = True  # on the playlist is as good as added: mark-read still applies
                                     continue
                                 youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
-                                LOGGER.info("[yt-playlist-auto] added %s from entry %s (%s)", vid, eid, fu)
+                                LOGGER.info(
+                                    "[yt-playlist-auto] added %s from entry %r (%s)", vid, eid, fu
+                                )  # %r: entry ids are feed-controlled
                                 added_total += 1
                                 entry_added_any = True
                             except youtube_oauth_service.QuotaExceeded:
