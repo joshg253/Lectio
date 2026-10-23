@@ -19115,6 +19115,25 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       loadScopePanesWithoutFullRefresh(currentUrl, false);
     });
 
+    // A list the app was opened straight onto (resume, bookmark, relaunch) has no
+    // history state, so Back from an article read it as "someone else's entry" and
+    // refetched the list from scratch — chunks gone, back at the top. Mark it as the
+    // scope list it is so that Back keeps the list already on screen. In the drawer
+    // (phone/tablet) layouts index.html has already pushed its own spare entry and
+    // handles Back itself, so this only takes effect in the wide layout.
+    try {
+      const landed = new URL(window.location.href);
+      const landedOnList = !landed.searchParams.has('entry_id')
+        && (landed.searchParams.has('folder_id') || landed.searchParams.has('list_feed_url')
+          || landed.searchParams.has('tag') || landed.searchParams.has('q'));
+      if (landedOnList && !(history.state && (history.state.lectioScopePane || history.state.lectioDrawerSpare))) {
+        history.replaceState(
+          { ...(history.state || {}), lectioScopePane: true, lectioPaneLevel: window.isSingleMode && window.isSingleMode() ? 1 : 0 },
+          '', window.location.href,
+        );
+      }
+    } catch (_e) { /* best effort */ }
+
     // Existing manual-tag names, for tag-input autocomplete (page-load snapshot).
     let lectioTagNames = [];
     try {
