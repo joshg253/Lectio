@@ -287,6 +287,17 @@ def _configure_reader_logging() -> None:
     logging.getLogger("reader.update").addFilter(_ReaderUpdateFetchErrorFilter())
 
 
+# Query-string secrets httpx logs with every request URL (the YouTube Data API takes its key as ``&key=``).
+_LOG_SECRET_RE = re.compile(r"([?&](?:key|api_key|access_token|refresh_token|client_secret|token)=)[^&\s\"']+", re.IGNORECASE)
+
+
+class _RedactingFormatter(logging.Formatter):
+    """Log formatter that masks URL query-string secrets before the line is written anywhere."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _LOG_SECRET_RE.sub(r"\1<redacted>", super().format(record))
+
+
 def _configure_persistent_logging() -> None:
     """Attach a rotating file handler when LECTIO_LOG_DIR is set.
 
@@ -309,7 +320,7 @@ def _configure_persistent_logging() -> None:
         backupCount=backup_count,
         encoding="utf-8",
     )
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     # Attach to the root logger so it captures everything (uvicorn, reader, app).
     root = logging.getLogger()
     if root.level > logging.INFO or root.level == logging.NOTSET:
@@ -335,7 +346,7 @@ def _configure_console_logging() -> None:
         if isinstance(existing, logging.StreamHandler) and not isinstance(existing, logging.FileHandler):
             return
     handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     # INFO by default, because the whole point is that app logs become visible. But loosening the root
     # level is a decision about someone else's process, so LECTIO_LOG_LEVEL takes precedence when set —
     # a deployment that wants a quieter console says so instead of being overruled.
