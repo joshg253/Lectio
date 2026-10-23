@@ -82,3 +82,7 @@ stay), plus members-only ones Lectio has already identified; and remove videos b
 YouTube lists for each video, which can miss some rights-holder blocks. Because YouTube sometimes removes both copies when you delete
 one, it checks each video afterward and re-adds one that disappeared (it lands at the end of the playlist). Each delete or re-add costs
 50 of the day's YouTube API quota, so a big clean-up can stop partway; it says so and names any video it couldn't put back.
+
+**Admin → Logs** opens on the last 15 minutes. Besides level and time range, a Category filter narrows to automations, maintenance, refresh
+and fetch, YouTube, integrations, images, or other (untagged records such as HTTP access lines). Categories group the `[tag]` that log lines
+carry, and a line can belong to more than one (a YouTube playlist automation is both).

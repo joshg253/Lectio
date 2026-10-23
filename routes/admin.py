@@ -46,6 +46,7 @@ from main import (
     _THUMB_H,
     _THUMB_W,
     DEBUG_MODE,
+    LOG_CATEGORY_NAMES,
     LOGGER,
     PASSWORD_HASH_SCHEME,
     THUMB_CACHE_DIR,
@@ -340,7 +341,7 @@ async def admin_vacuum_user(request: Request):
 
 
 @router.get("/admin/logs")
-def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: str = "", until: str = ""):
+def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: str = "", until: str = "", category: str = "all"):
     """Tail the instance log for the Admin → Logs tab. Admin-only.
 
     ``since``/``until`` are optional timestamps (``YYYY-MM-DDTHH:MM`` from the
@@ -353,16 +354,20 @@ def admin_logs(request: Request, lines: int = 5000, level: str = "all", since: s
     single-instance tool.) ``until`` is inclusive of its minute. ``lines`` caps
     the response (tail of the window) so a wide range can't dump the whole file;
     ``truncated`` flags when the cap dropped older matches so the UI can suggest
-    narrowing."""
+    narrowing. ``category`` (automations, maintenance, refresh, youtube, integrations, images, other; default
+    all) keeps only records whose ``[tag]`` falls in that group."""
     if not _is_web_admin(_current_web_user(request)):
         return Response(status_code=403)
+    category = category.strip().lower()
+    if category not in LOG_CATEGORY_NAMES | {"all", ""}:
+        return JSONResponse({"error": f"Unknown category: {category}"}, status_code=400)
     max_lines = max(1, min(int(lines), 20000))
     min_level = "" if level.lower() == "all" else level
     since_dt, _ = _parse_local_ts(since)
     until_dt, until_had_secs = _parse_local_ts(until)
     if until_dt is not None and not until_had_secs:
         until_dt = until_dt.replace(second=59)  # minute-precision picker → inclusive
-    log_lines, available, truncated = _read_log_tail(max_lines, min_level, since_dt, until_dt)
+    log_lines, available, truncated = _read_log_tail(max_lines, min_level, since_dt, until_dt, category)
     return JSONResponse({"available": available, "lines": log_lines, "count": len(log_lines), "truncated": truncated})
 
 

@@ -4,6 +4,8 @@ their record."""
 
 from __future__ import annotations
 
+import re
+
 import main
 
 SAMPLE = """\
@@ -150,3 +152,91 @@ def test_parse_local_ts_minute_vs_seconds():
     assert main._parse_local_ts("2026-07-18T03:30:45") == (datetime(2026, 7, 18, 3, 30, 45), True)
     assert main._parse_local_ts("") == (None, False)
     assert main._parse_local_ts("garbage") == (None, False)
+
+
+# ── Category filter (Logs tab dropdown) ──────────────────────────────────────
+
+CATEGORY_SAMPLE = """\
+2026-07-09 12:00:00,001 INFO httpx: GET / 200
+2026-07-09 12:00:01,002 INFO lectio: [maintenance] vacuum done
+2026-07-09 12:00:02,003 ERROR lectio: [automation] rule failed
+Traceback (most recent call last):
+ValueError: nope
+2026-07-09 12:00:03,004 INFO lectio: [yt-playlist-auto] added 3
+2026-07-09 12:00:04,005 INFO lectio: [deviantart] synced
+2026-07-09 12:00:05,006 INFO lectio: [mystery] unlisted tag
+"""
+
+
+def test_log_categories_mapping():
+    cat = main._log_categories
+    assert cat("2026-07-09 12:00:01,002 INFO lectio: [maintenance] x") == {"maintenance"}
+    assert cat("2026-07-09 12:00:01,002 INFO lectio: [guid-churn-cleanup] x") == {"maintenance"}
+    assert cat("2026-07-09 12:00:01,002 INFO lectio: [yt-playlist-auto] x") == {"automations", "youtube"}
+    assert cat("2026-07-09 12:00:01,002 INFO lectio: [yt-quota] x") == {"youtube"}
+    assert cat('2026-07-09 12:00:01,002 INFO httpx: HTTP Request: POST https://www.googleapis.com/youtube/v3/playlistItems "200"') == {
+        "youtube"
+    }
+    assert cat("2026-07-09 12:00:01,002 INFO httpx: GET / 200") == {"other"}
+    assert cat("2026-07-09 12:00:01,002 INFO lectio: [mystery] x") == {"other"}
+
+
+def test_youtube_category_includes_automation_adds_and_api_calls(tmp_path, monkeypatch):
+    text = CATEGORY_SAMPLE + (
+        '2026-07-09 12:00:06,007 INFO httpx: HTTP Request: POST https://www.googleapis.com/youtube/v3/playlistItems "200"\n'
+    )
+    _write_log(tmp_path, monkeypatch, text)
+    lines, _, _ = main._read_log_tail(100, "", category="youtube")
+    records = [ln for ln in lines if ln.startswith("2026")]
+    assert len(records) == 2
+    assert "[yt-playlist-auto] added 3" in records[0] and "googleapis.com/youtube" in records[1]
+
+
+def test_category_filter_keeps_matching_records_and_tracebacks(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch, CATEGORY_SAMPLE)
+    lines, _, _ = main._read_log_tail(100, "", category="automations")
+    assert [ln for ln in lines if ln.startswith("2026")] == [
+        "2026-07-09 12:00:02,003 ERROR lectio: [automation] rule failed",
+        "2026-07-09 12:00:03,004 INFO lectio: [yt-playlist-auto] added 3",
+    ]
+    assert "ValueError: nope" in lines  # traceback stays with its record
+
+
+def test_category_other_and_all(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch, CATEGORY_SAMPLE)
+    other, _, _ = main._read_log_tail(100, "", category="other")
+    assert len(other) == 2 and "httpx" in other[0] and "[mystery]" in other[1]
+    everything, _, _ = main._read_log_tail(100, "", category="all")
+    assert len(everything) == 8  # 6 records + 2 traceback lines
+
+
+def test_tags_added_after_review_are_mapped():
+    cat = main._log_categories
+    line = "2026-07-09 12:00:01,002 INFO lectio: [{}] x"
+    assert cat(line.format("admin-vacuum")) == {"maintenance"}
+    assert cat(line.format("quire-auto")) == {"automations", "integrations"}
+    assert cat(line.format("hide-unpremiered")) == {"youtube"}
+    assert cat(line.format("freshrss-import")) == {"integrations"}
+
+
+def test_a_bracketed_word_quoted_later_in_an_untagged_line_is_not_a_tag():
+    line = '2026-07-09 12:00:01,002 INFO lectio: 10.0.0.1:0 - "GET /?q=[reddit] HTTP/1.1" 200 OK'
+    assert main._log_categories(line) == {"other"}
+
+
+def test_category_combines_with_level_and_window(tmp_path, monkeypatch):
+    _write_log(tmp_path, monkeypatch, CATEGORY_SAMPLE)
+    lines, _, _ = main._read_log_tail(100, "ERROR", category="automations")
+    assert [ln for ln in lines if ln.startswith("2026")] == ["2026-07-09 12:00:02,003 ERROR lectio: [automation] rule failed"]
+    lines, _, _ = main._read_log_tail(100, "", datetime(2026, 7, 9, 12, 0, 3), category="automations")
+    assert [ln for ln in lines if ln.startswith("2026")] == ["2026-07-09 12:00:03,004 INFO lectio: [yt-playlist-auto] added 3"]
+
+
+def test_log_category_names_cover_the_dropdown():
+    from pathlib import Path
+
+    html = (Path(main.__file__).parent / "templates" / "administration.html").read_text()
+    select = html[html.index('id="adm-log-category"') :]
+    select = select[: select.index("</select>")]
+    options = set(re.findall(r'<option value="([a-z]+)"', select))
+    assert options == main.LOG_CATEGORY_NAMES | {"all"}
