@@ -464,3 +464,8 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 ### Mergeable Mark as Read rules: plain text to regex
 Two Mark as Read rules on Deals could be one if the plain-text rule became regex, but combining never behaves quite the same without word boundaries:
 `\b(?:Kanye\s+West|Micro\s?Center|Lowe['’]s|Chromebooks?|Post\s+Malone)\b` plus a plain list (`Taylor Swift, My Chemical Romance`). Offer the merge as a suggested regex with boundaries added, not a blind join.
+
+### YouTube playlist rule follow-ups
+- A playlist rule scoped to a non-YouTube feed or folder is accepted but can never add anything; warn in the editor when the scope has no YouTube feeds.
+- Dedup is per (rule, entry, video) plus a live playlist check, so a video that arrives as a new entry (a channel feed plus a playlist feed, or an old video re-added to a followed playlist) is re-added after the user removed it. Consider also deduping per (rule, video).
+- Saved posts whose feed was deleted get no pane "Add to playlist" button (the orphan detail builder has no `video_id`).

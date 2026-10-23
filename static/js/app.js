@@ -4730,10 +4730,14 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
 
     function enhanceYoutubeEmbeds(root) {
       if (!root) return;
+      // Only the post's own video from a YouTube feed gets the control; embeds of other videos (or in other feeds) do not.
+      const pane = root.matches?.('.pane-entry') ? root : root.closest?.('.pane-entry');
+      const ownVideoId = pane?.getAttribute('data-own-video-id') || '';
+      if (!ownVideoId) return;
       const iframes = root.querySelectorAll('iframe[src*="/embed/"]');
       iframes.forEach(iframe => {
         const videoId = _ytVideoIdFromIframe(iframe);
-        if (!videoId) return;
+        if (!videoId || videoId !== ownVideoId) return;
         // Avoid double-injecting if the pane is re-enhanced.
         if (iframe.dataset.ytEnhanced === '1') return;
         iframe.dataset.ytEnhanced = '1';

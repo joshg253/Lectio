@@ -1,4 +1,5 @@
-<section class="pane pane-entry">
+<section class="pane pane-entry"
+  {%- if selected_entry and selected_entry.video_id %} data-own-video-id="{{ selected_entry.video_id }}"{% endif %}>
   {% if selected_entry %}
   <div class="entry-pane-header">
     <div class="entry-pane-title-row">

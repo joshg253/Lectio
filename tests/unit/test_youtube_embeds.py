@@ -70,3 +70,24 @@ def test_recovers_nocookie_host_embed():
     )
     out = y.extract_youtube_embeds(_feed(body))
     assert out == {"e0": ["oDMjofFNLSk"]}
+
+
+def test_own_video_id_only_for_youtube_feeds():
+    own = y.own_video_id
+    link = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    assert own("https://www.youtube.com/feeds/videos.xml?channel_id=UCx", link) == "dQw4w9WgXcQ"
+    assert own("https://www.youtube.com/feeds/videos.xml?playlist_id=PLx", link) == "dQw4w9WgXcQ"
+    assert own("https://youtube.com/feeds/videos.xml?channel_id=UCx", link) == "dQw4w9WgXcQ"  # no www
+    assert own("https://www.youtube.com/feeds/videos.xml?channel_id=UCx", "https://www.youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    assert own("https://www.youtube.com/feeds/videos.xml?channel_id=UCx", "https://example.test/post") is None
+    assert own("https://blog.example.test/feed", link) is None
+
+
+def test_pane_embed_button_is_limited_to_the_posts_own_video():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    pane = (root / "templates" / "_entry_pane.html").read_text()
+    js = (root / "static" / "js" / "app.js").read_text()
+    assert "data-own-video-id" in pane
+    assert "videoId !== ownVideoId" in js

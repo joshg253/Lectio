@@ -1263,13 +1263,13 @@ def _apply_youtube_playlist_rules(
                         if _hidden_by_content_setting(str(entry.feed_url or ""), hide_unpremiered_feeds) and _is_youtube_unpremiered(entry):
                             _defer("unpremiered", feed_url)  # added once it airs, if that is within the lookback
                             continue
-                        link = str(entry.link or "")
-                        body = "".join((c.value or "") for c in (entry.content or []))
-                        body += str(entry.summary or "")
-                        vids = youtube_embeds.video_ids_in_text(link, body)
-                        if not vids:
-                            continue
                         fu = str(entry.feed_url or "")
+                        # Only the post's own video, and only from YouTube feeds: descriptions mention other videos.
+                        link = str(entry.link or "")
+                        own_vid = youtube_embeds.own_video_id(fu, link)
+                        if not own_vid:
+                            continue
+                        vids = [own_vid]
                         eid = str(entry.id)
                         entry_added_any = False
                         for vid in vids:
@@ -1319,6 +1319,7 @@ def _apply_youtube_playlist_rules(
                                     entry_added_any = True  # on the playlist is as good as added: mark-read still applies
                                     continue
                                 youtube_oauth_service.add_video_to_playlist(token, playlist_id, vid)
+                                LOGGER.info("[yt-playlist-auto] added %s from entry %s (%s)", vid, eid, fu)
                                 added_total += 1
                                 entry_added_any = True
                             except youtube_oauth_service.QuotaExceeded:

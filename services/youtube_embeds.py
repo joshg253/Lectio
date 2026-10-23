@@ -61,6 +61,20 @@ def video_ids_in_text(*texts: str) -> list[str]:
     return _video_ids("\n".join(t for t in texts if t))
 
 
+_YT_FEED_MARKER = "youtube.com/feeds/videos.xml"
+
+
+def own_video_id(feed_url: str, link: str) -> str | None:
+    """The video a YouTube-feed entry *is*, from its link, or None for any other feed.
+
+    The playlist features act on this and nothing else: description text and embeds routinely mention other
+    videos (credits, "watch next", sources), and non-YouTube feeds are not video posts at all."""
+    if _YT_FEED_MARKER not in str(feed_url or ""):
+        return None
+    ids = _video_ids(str(link or ""))
+    return ids[0] if ids else None
+
+
 def extract_youtube_embeds(raw: bytes | str) -> dict[str, list[str]]:
     """Map entry id (guid, falling back to link) -> ordered YouTube video ids.
 

@@ -18527,6 +18527,8 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
             "image_title_text": image_title_text,
             "duration_seconds": duration_seconds,
             "duration_display": duration_display,
+            # The post's own video (YouTube feeds only); the pane's embed "Add to playlist" button is limited to it.
+            "video_id": video_id,
             "feed_title": entry.feed_resolved_title or entry.feed_url,
             "post_timestamp": published_dt.isoformat() if published_dt else None,
             "received_timestamp": entry.added.isoformat() if entry.added else None,
@@ -24650,9 +24652,8 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
         if playlist_id:
             token = get_youtube_oauth_token()
             if token:
-                body = "".join((c.value or "") for c in (getattr(entry, "content", None) or []))
-                body += str(getattr(entry, "summary", "") or "")
-                for vid in youtube_embeds.video_ids_in_text(link, body):
+                own_vid = youtube_embeds.own_video_id(feed_url, link)
+                for vid in [own_vid] if own_vid else []:
                     try:
                         if youtube_oauth_service.video_in_playlist(token, playlist_id, vid):
                             continue  # already there (the API would add a second copy)

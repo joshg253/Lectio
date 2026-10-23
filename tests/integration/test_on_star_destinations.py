@@ -106,3 +106,42 @@ def test_playlist_add_skips_a_video_already_in_the_playlist(env, monkeypatch):
         main.set_setting(conn, main.SETTING_STAR_SEND_YT_PLAYLIST, "PL1")
     main._run_on_star_destinations(FEED, "e1")
     assert pl == []
+
+
+def _star_to_playlist(monkeypatch, feed_url, entry_id):
+    pl = []
+    monkeypatch.setattr(yt, "video_in_playlist", lambda *a: False)
+    monkeypatch.setattr(yt, "add_video_to_playlist", lambda tok, plid, vid: pl.append(vid))
+    with main.get_meta_connection() as conn:
+        main.set_setting(conn, main.SETTING_STAR_SEND_YT_PLAYLIST, "PL1")
+    main._run_on_star_destinations(feed_url, entry_id)
+    return pl
+
+
+def test_playlist_adds_only_the_posts_own_video_not_ones_in_the_description(env, monkeypatch):
+    main.get_reader().add_entry(
+        {
+            "feed_url": FEED,
+            "id": "e2",
+            "title": "Credits",
+            "link": "https://www.youtube.com/watch?v=zzzzzzzzzzz",
+            "summary": f"Source: https://www.youtube.com/watch?v={VID}",
+        }
+    )
+    assert _star_to_playlist(monkeypatch, FEED, "e2") == ["zzzzzzzzzzz"]
+
+
+def test_playlist_ignores_a_video_in_a_non_youtube_feed(env, monkeypatch):
+    other = "https://blog.example.test/feed"
+    reader = main.get_reader()
+    reader.add_feed(other, allow_invalid_url=True)
+    reader.add_entry(
+        {
+            "feed_url": other,
+            "id": "b1",
+            "title": "Post",
+            "link": "https://blog.example.test/p",
+            "summary": f"https://www.youtube.com/watch?v={VID}",
+        }
+    )
+    assert _star_to_playlist(monkeypatch, other, "b1") == []
