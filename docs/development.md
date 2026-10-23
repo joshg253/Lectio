@@ -23,3 +23,5 @@ Day-to-day commands (`make test`, `make rebuild`, the lint hook) are in the READ
 - **Backups** — `scripts/backup_databases.py` takes a consistent `VACUUM INTO` snapshot of every database; `scripts/ship_backups_to_b2.py`
   ships it to a Backblaze B2 bucket via `rclone move` and clears it locally on success. `deploy/systemd/` has the daily timer and install
   steps; see its README.
+
+Logs: set `LECTIO_LOG_DIR` for a rotating `lectio.log` (also shown in Admin → Logs); the console gets the same stream. Both mask URL query-string secrets such as `key=` and `access_token=` (`_RedactingFormatter`), because httpx logs every request URL. Lines written before that was added may still hold a key.
