@@ -1142,13 +1142,15 @@
       if (!listEl) listScrollMemo = null;  // outside single mode the list is visible and scrolls freely; a stale offset must not return
       singlePaneLevel = nextLevel;
       bodyEl.setAttribute('data-single-pane-level', String(singlePaneLevel));
+      let restoredOffset = false;
       if (listEl && prevLevel === 2 && nextLevel !== 2 && listScrollMemo
           && listScrollMemo.el === listEl && listScrollMemo.top > 0) {
         listEl.scrollTop = listScrollMemo.top;
+        restoredOffset = true;
       }
       // Fallback when there is no usable offset (the list was re-rendered, or the
       // remembered spot is gone): bring the article just read back into view.
-      if (listEl && prevLevel === 2 && nextLevel !== 2) {
+      if (listEl && prevLevel === 2 && nextLevel !== 2 && !restoredOffset) {
         const active = listEl.querySelector('.post-item.active');
         if (active && active.offsetParent !== null) {
           const top = active.offsetTop;
@@ -1206,6 +1208,7 @@
       } else {
         bodyEl.removeAttribute('data-single-pane-level');
         mediumPaneBackdrop?.setAttribute('hidden', '');
+        listScrollMemo = null;  // the list is visible and scrolls freely outside single mode; a stale offset must not return
       }
       // A rotated phone is "medium" mode but still ~390px tall, where the desktop
       // header stack is taller than the article itself. A narrow desktop window is
