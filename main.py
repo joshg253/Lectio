@@ -287,8 +287,13 @@ def _configure_reader_logging() -> None:
     logging.getLogger("reader.update").addFilter(_ReaderUpdateFetchErrorFilter())
 
 
-# Query-string secrets httpx logs with every request URL (the YouTube Data API takes its key as ``&key=``).
-_LOG_SECRET_RE = re.compile(r"([?&](?:key|api_key|access_token|refresh_token|client_secret|token)=)[^&\s\"']+", re.IGNORECASE)
+# Query-string secrets that reach the log in request URLs: httpx logs every outgoing URL (the YouTube Data API takes its key as
+# ``&key=``, signed image URLs carry a signature) and the access log records incoming ones (OAuth callbacks carry ``code``/``state``).
+_LOG_SECRET_RE = re.compile(
+    r"([?&](?:key|api_key|access_token|refresh_token|client_secret|token|code|state|password|jwt|sig|signature"
+    r"|x-amz-signature|x-amz-security-token)=)[^&\s\"']+",
+    re.IGNORECASE,
+)
 
 
 class _RedactingFormatter(logging.Formatter):
@@ -344,6 +349,8 @@ def _configure_console_logging() -> None:
     root = logging.getLogger()
     for existing in root.handlers:
         if isinstance(existing, logging.StreamHandler) and not isinstance(existing, logging.FileHandler):
+            if not isinstance(existing.formatter, _RedactingFormatter):
+                existing.setFormatter(_RedactingFormatter(existing.formatter._fmt if existing.formatter else None))
             return
     handler = logging.StreamHandler()
     handler.setFormatter(_RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
