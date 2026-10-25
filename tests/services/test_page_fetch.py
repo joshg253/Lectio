@@ -427,3 +427,28 @@ def test_busy_flaresolverr_slot_does_not_cool_the_host_down(monkeypatch):
     with pytest.raises(page_fetch.PageFetchError):
         fetcher.fetch("https://example.com/page")
     assert not state.is_blocked("u1", "example.com", best_available="flaresolverr", now=1.0)
+
+
+def test_known_host_error_status_with_a_whole_page_is_success_for_every_caller(monkeypatch):
+    """smbc-comics.com serves every comic page as HTTP 500 with the full page as the body."""
+    body = "<html><body>the comic</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text=body, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    fetcher = _fetcher()
+    with pytest.raises(page_fetch.PageFetchError):
+        fetcher.fetch("https://example.com/a")
+    # A plain fetch (no per-call option) succeeds, and leaves no cooldown behind for the next caller.
+    assert fetcher.fetch("https://www.smbc-comics.com/comic/x").status == 500
+    assert "the comic" in fetcher.fetch("https://www.smbc-comics.com/comic/y", refusal_statuses=frozenset({403, 503})).html
+
+
+def test_known_host_outage_page_is_still_a_failure(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="Internal Server Error", headers={"content-type": "text/plain"})
+
+    _patch_build_client(monkeypatch, handler)
+    with pytest.raises(page_fetch.PageFetchError):
+        _fetcher().fetch("https://www.smbc-comics.com/comic/x")

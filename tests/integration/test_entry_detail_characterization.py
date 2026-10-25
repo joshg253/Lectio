@@ -481,6 +481,37 @@ def test_thin_extraction_declines(env):
     assert main._source_article_body(entry) is None
 
 
+def test_spa_shell_extraction_declines_when_it_shares_nothing_with_the_feed_text(env):
+    """A client-rendered page (tinyview) serves only its framework; readability returned that and it replaced the post."""
+    shell = (
+        "<html><body><article>"
+        + "<p>"
+        + ("search menu login signup browse comics creators " * 10)
+        + "</p>"
+        + '<img src="https://ex.test/logo-x.png">'
+        + "</article></body></html>"
+    )
+    _prime_source("https://ex.test/p5", shell)
+    feed_text = "Unable to keep going despite valiant effort, so attention moves toward Patreon where community members already gather."
+    entry = type("E", (), {"link": "https://ex.test/p5", "content": [], "summary": feed_text})()
+    assert main._source_article_body(entry) is None
+
+
+def test_client_rendered_site_declines_the_source_article(env):
+    _prime_source("https://tinyview.com/x/2026/10/16/y", _ARTICLE_PAGE)
+    entry = type("E", (), {"link": "https://tinyview.com/x/2026/10/16/y", "content": [], "summary": None})()
+    assert main._source_article_body(entry) is None
+
+
+def test_extraction_that_contains_the_feed_text_is_kept(env):
+    words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima"
+    filler = "word " * 40
+    page = f'<html><body><article><p>{words} {filler}</p><img src="https://ex.test/one.png"><p>{filler}</p></article></body></html>'
+    _prime_source("https://ex.test/p6", page)
+    entry = type("E", (), {"link": "https://ex.test/p6", "content": [], "summary": words})()
+    assert main._source_article_body(entry) is not None
+
+
 def test_no_orphan_caption_when_the_lead_image_is_hidden(env):
     """With 'show image at top' off there is no image, so its alt text must not
     be rendered alone at the foot of the article."""

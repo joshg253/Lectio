@@ -55,6 +55,9 @@ class SiteContentPlugin(Protocol):
     # True to place that embed at the top of the body rather than the end.
     def embed_at_top(self, *, source_url: str) -> bool: ...
 
+    # Optional, so not declared here: ``declines_source_article(source_url) -> bool``, True when the served page is no better than
+    # the feed body and inject_source_images should use the gallery instead. Read through _flag; a plugin without it means False.
+
 
 @dataclass(frozen=True)
 class BasslessonsPlugin:
@@ -216,6 +219,43 @@ class PaizoBlogPlugin:
 
     def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
         return ("div.blog__article--component_wrapper",)
+
+    def embed_at_top(self, *, source_url: str) -> bool:
+        return False
+
+    def extra_embed_html(self, *, source_url: str, raw_html: str) -> str | None:
+        return None
+
+
+@dataclass(frozen=True)
+class TinyviewPlugin:
+    """tinyview.com: a client-rendered app, so the served page is the framework around the post.
+
+    Utility-class markup with no stable ids, and a loading overlay, logo, search box and "support creators" promo ahead of the
+    comic. Readability keeps all of it, so the source article is declined and the post is read through the source gallery
+    (its panels), which is how these posts rendered before the source-article path existed.
+    """
+
+    _HOST = "tinyview.com"
+
+    def handles(self, *, source_url: str) -> bool:
+        try:
+            host = (urlparse(source_url).netloc or "").lower().split(":", 1)[0].rstrip(".")
+        except ValueError:
+            return False
+        return host == self._HOST or host.endswith("." + self._HOST)
+
+    def prefers_full_page(self, *, source_url: str) -> bool:
+        return False
+
+    def strip_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def content_selectors(self, *, source_url: str) -> tuple[str, ...]:
+        return ()
+
+    def declines_source_article(self, *, source_url: str) -> bool:
+        return True
 
     def embed_at_top(self, *, source_url: str) -> bool:
         return False
@@ -408,6 +448,7 @@ DEFAULT_SITE_CONTENT_PLUGINS: tuple[SiteContentPlugin, ...] = (
     BasslessonsPlugin(),
     TexasBluesAlleyPlugin(),
     PaizoBlogPlugin(),
+    TinyviewPlugin(),
     DeveloperAndroidPlugin(),
     SoundPublishingPlugin(),
     HowToGeekPlugin(),
@@ -456,6 +497,11 @@ def _flag(source_url: str, name: str, plugins: tuple[SiteContentPlugin, ...]) ->
 
 def embed_at_top(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> bool:
     return _flag(source_url, "embed_at_top", plugins)
+
+
+def declines_source_article(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> bool:
+    """True when the site's served page is no better than the feed body, so ``inject_source_images`` should use the gallery."""
+    return _flag(source_url, "declines_source_article", plugins)
 
 
 def content_selectors(source_url: str, plugins: tuple[SiteContentPlugin, ...] = DEFAULT_SITE_CONTENT_PLUGINS) -> tuple[str, ...]:

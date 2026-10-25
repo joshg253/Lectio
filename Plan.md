@@ -21,6 +21,12 @@ Empty.
 
 **Do next** — small, concrete, decided.
 
+### Post actions don't pin on Surface/Firefox (2026-10-25)
+
+The action row pins on phone/Vivaldi (compact article layout, pane scrolls) but not on Surface/Firefox. On wide/medium the row sits in
+the header above the scrolling `.entry-body`, so it should never scroll; find what differs there (layout mode, `data-compact-article`
+at that viewport, Firefox sticky/overflow behavior). Needs a look in the Surface browser; not yet reproduced.
+
 ### Mark-read menu ignores the feed-tag chip and the Inbox scope (2026-10-20)
 
 The menu forms post `q`, `tag`, `star_only` and the Filter-this-view term, but not `feed_tag` (`selected_feed_tag`) or the Inbox
