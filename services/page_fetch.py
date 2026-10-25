@@ -138,15 +138,19 @@ class _Attempt:
 
 
 def _accepted_statuses(host: str) -> frozenset[int]:
-    bare = host.split(":", 1)[0].rstrip(".")
+    bare = host.rstrip(".")
     for known, statuses in HOST_ACCEPTED_STATUSES.items():
         if bare == known or bare.endswith("." + known):
             return statuses
     return frozenset()
 
 
+# A real page, not a one-line or templated error document that happens to close its <html>.
+_WHOLE_DOCUMENT_MIN_CHARS = 4096
+
+
 def _is_whole_document(html_text: str | None) -> bool:
-    return bool(html_text) and "</html" in html_text.lower()
+    return bool(html_text) and len(html_text) >= _WHOLE_DOCUMENT_MIN_CHARS and "</html" in html_text.lower()
 
 
 def _pick_better(old: _Attempt | None, new: _Attempt) -> _Attempt:
@@ -385,7 +389,7 @@ class PageFetcher:
 
         uid = self._user_id()
         host = urlparse(url).netloc.lower()
-        accept_statuses = _accepted_statuses(host)
+        accept_statuses = _accepted_statuses(urlparse(url).hostname or "")
         backends = self._backends()
         deepest_available = _deepest_available_tier(backends, max_tier)
         now = self._clock()
@@ -448,7 +452,9 @@ class PageFetcher:
                     )
                 if c:
                     challenge_seen = c
-            if attempt.status is not None and attempt.status not in refusal_statuses:
+            if attempt.status is not None and (
+                attempt.status not in refusal_statuses or (attempt.status in accept_statuses and _is_whole_document(attempt.html))
+            ):
                 # Stopped escalating (matches the pre-existing readability/
                 # lead-image behavior this generalizes): any non-refusal
                 # status, success or not, is the answer to report.
