@@ -274,6 +274,15 @@ def test_the_action_row_is_pinned_and_lifted_above_the_title():
     assert "order: -1;" in block
 
 
+def test_the_wide_window_override_keeps_the_row_sticky():
+    """On a window wider than single-pane the compact row becomes a wrapping flex
+    row; it set position: relative, which cancelled the pin (Surface/Firefox)."""
+    sel = 'body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row {'
+    block = CSS[CSS.index(sel) :].split("}", 1)[0]
+    assert "position: sticky;" in block
+    assert "position: relative;" not in block
+
+
 def test_the_header_box_is_dissolved_so_the_pin_can_span_the_pane():
     """A sticky element is confined to its parent's box, so inside the 150px
     header the row unpinned and scrolled away the moment the header did.
