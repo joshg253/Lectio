@@ -642,6 +642,10 @@ from the same cached page the gallery already fetched: on a paizo post that is 7
 images interleaved through 1,329 words, at the author's own break points, instead
 of 7 images in a pile.
 
+**It declines when the page is not the article.** A client-rendered site (tinyview) serves only its framework, which readability
+keeps whole; a `declines_source_article` plugin flag makes the feed use the gallery instead, and an extraction sharing under 30% of
+its words with the feed's own text is rejected for the same reason.
+
 **Render-time, never stored.** A feed entry's body is overwritten by the next
 refresh — the reason re-fetch refuses feed-provided entries at all — so
 substituting on render is the only version of this that survives.

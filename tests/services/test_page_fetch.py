@@ -427,3 +427,32 @@ def test_busy_flaresolverr_slot_does_not_cool_the_host_down(monkeypatch):
     with pytest.raises(page_fetch.PageFetchError):
         fetcher.fetch("https://example.com/page")
     assert not state.is_blocked("u1", "example.com", best_available="flaresolverr", now=1.0)
+
+
+def test_known_host_error_status_with_a_whole_page_is_success_for_every_caller(monkeypatch):
+    """smbc-comics.com serves every comic page as HTTP 500 with the full page as the body."""
+    body = "<html><body>the comic" + " " * 5000 + "</body></html>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text=body, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    fetcher = _fetcher()
+    with pytest.raises(page_fetch.PageFetchError):
+        fetcher.fetch("https://example.com/a")
+    # A plain fetch (no per-call option) succeeds, and leaves no cooldown behind for the next caller.
+    assert fetcher.fetch("https://www.smbc-comics.com/comic/x").status == 500
+    assert "the comic" in fetcher.fetch("https://www.smbc-comics.com/comic/y", refusal_statuses=frozenset({403, 503})).html
+    # The host rule wins over a caller that lists the status as a refusal, and over userinfo in the URL.
+    assert fetcher.fetch("https://www.smbc-comics.com/comic/z", refusal_statuses=frozenset({500})).status == 500
+    assert fetcher.fetch("https://u:p@www.smbc-comics.com/comic/w").status == 500
+
+
+@pytest.mark.parametrize("body", ["Internal Server Error", "<html><body>Internal Server Error</body></html>"])
+def test_known_host_outage_page_is_still_a_failure(monkeypatch, body):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text=body, headers={"content-type": "text/html"})
+
+    _patch_build_client(monkeypatch, handler)
+    with pytest.raises(page_fetch.PageFetchError):
+        _fetcher().fetch("https://www.smbc-comics.com/comic/x")

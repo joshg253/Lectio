@@ -1090,6 +1090,9 @@ imported by both `reader_api.py` (feeds) and `page_fetch.py` (pages).
   now, so a newly-configured proxy/FlareSolverr immediately lifts an old
   block with no invalidation hook. In-memory because losing it on restart
   costs one extra round trip, not a cron cycle — not worth a schema migration.
+- **Hosts that serve a good page under an error status** (`HOST_ACCEPTED_STATUSES`; smbc-comics.com answers every comic with
+  HTTP 500 plus the full page). Applied inside `fetch()` so every caller agrees and none can cool the host down; the body must be a
+  whole document, so a real outage page still fails.
 - **FlareSolverr gated on an actual `bot_challenge` marker**, not any
   refusal — same reasoning as the feed ladder's `_is_bot_challenge`. A plain
   403 (tamriel-rebuilt.org) stops at the proxy tier; a real Cloudflare page

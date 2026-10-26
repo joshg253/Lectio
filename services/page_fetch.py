@@ -49,6 +49,11 @@ _TIER_ORDER: tuple[FetchTier, ...] = ("honest", "browser", "proxy", "flaresolver
 # escalation — a 415/429 is as much a "try again differently" signal as a 403.
 DEFAULT_REFUSAL_STATUSES = frozenset({403, 415, 429, 503})
 
+# Hosts that serve a good page under an error status. smbc-comics.com answers every comic page with HTTP 500 and the full page as
+# the body; left as a failure it cooled the whole host down for every caller. Applied inside fetch() so no caller can forget it,
+# and only when the body is a whole document, so a genuine outage page ("Internal Server Error") still counts as a failure.
+HOST_ACCEPTED_STATUSES: dict[str, frozenset[int]] = {"smbc-comics.com": frozenset({500})}
+
 # Browser identity used ONLY after an honest fetch is refused, never
 # preemptively. Page-shaped Accept (vs the feed-shaped one in reader_api.py) —
 # some WAFs sniff Sec-Fetch-*/Accept-Language, not just the UA.
@@ -130,6 +135,22 @@ class _Attempt:
     @property
     def ok(self) -> bool:
         return self.error is None and self.status is not None and 200 <= self.status < 300
+
+
+def _accepted_statuses(host: str) -> frozenset[int]:
+    bare = host.rstrip(".")
+    for known, statuses in HOST_ACCEPTED_STATUSES.items():
+        if bare == known or bare.endswith("." + known):
+            return statuses
+    return frozenset()
+
+
+# A real page, not a one-line or templated error document that happens to close its <html>.
+_WHOLE_DOCUMENT_MIN_CHARS = 4096
+
+
+def _is_whole_document(html_text: str | None) -> bool:
+    return bool(html_text) and len(html_text) >= _WHOLE_DOCUMENT_MIN_CHARS and "</html" in html_text.lower()
 
 
 def _pick_better(old: _Attempt | None, new: _Attempt) -> _Attempt:
@@ -368,6 +389,7 @@ class PageFetcher:
 
         uid = self._user_id()
         host = urlparse(url).netloc.lower()
+        accept_statuses = _accepted_statuses(urlparse(url).hostname or "")
         backends = self._backends()
         deepest_available = _deepest_available_tier(backends, max_tier)
         now = self._clock()
@@ -430,11 +452,13 @@ class PageFetcher:
                     )
                 if c:
                     challenge_seen = c
-            if attempt.status is not None and attempt.status not in refusal_statuses:
+            if attempt.status is not None and (
+                attempt.status not in refusal_statuses or (attempt.status in accept_statuses and _is_whole_document(attempt.html))
+            ):
                 # Stopped escalating (matches the pre-existing readability/
                 # lead-image behavior this generalizes): any non-refusal
                 # status, success or not, is the answer to report.
-                if attempt.ok:
+                if attempt.ok or (attempt.status in accept_statuses and _is_whole_document(attempt.html)):
                     self._state.record_success(uid, host, tier)
                     if _TIER_RANK[tier] >= _TIER_RANK["proxy"]:
                         LOGGER.info("[page-fetch] %s served by %s", url, tier)

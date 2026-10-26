@@ -16410,6 +16410,10 @@ def _source_article_body(entry) -> str | None:
     # every restart empties it: the first open after a deploy got no images at
     # all, because the gallery fallback needs that same cache. Only the first
     # open of an entry pays the fetch; the cache serves the rest.
+    # Declining skips the synchronous fetch below too: the gallery then primes the page itself, so a first open after a restart may
+    # show the feed text before the panels.
+    if site_content_plugins.declines_source_article(entry.link):
+        return None
     cached = lead_image_service.fetch_source_html_now(entry.link)
     if not cached:
         return None
@@ -16442,7 +16446,24 @@ def _source_article_body(entry) -> str | None:
         return None
     if len(re.sub(r"<[^>]+>", " ", article_html).split()) < 50:
         return None
+    if not _reads_like_feed_text(article_html, entry):
+        return None
     return article_html
+
+
+def _reads_like_feed_text(article_html: str, entry) -> bool:
+    """False when the extraction shares almost no vocabulary with the feed's own text.
+
+    A client-rendered page (tinyview) has no article in its served HTML, so readability returns the site's framework — logo, search
+    bar, loading skeleton — which passes the word and image counts and replaced a real post. The feed's text is the reference: an
+    extraction of the right page contains most of its words, even when the feed only ships an excerpt. Skipped when the feed has too
+    little text to judge by."""
+    feed_text = entry_content.entry_body(entry)
+    feed_words = set(re.findall(r"[a-z]{4,}", html.unescape(re.sub(r"<[^>]+>", " ", feed_text)).lower()))
+    if len(feed_words) < 10:
+        return True
+    article_words = set(re.findall(r"[a-z]{4,}", html.unescape(re.sub(r"<[^>]+>", " ", article_html)).lower()))
+    return len(feed_words & article_words) / len(feed_words) >= 0.3
 
 
 def _inject_source_gallery(content_html, entry, lead_image_url):
