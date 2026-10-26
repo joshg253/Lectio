@@ -706,7 +706,7 @@ Three flex-based attempts didn't hold up under a real, heavily-tagged entry:
 No amount of flex sequencing can give one item both "always on the first line" and "always at the
 true visual edge" when a variable amount of content needs to flow between them. The fix takes
 alt-actions out of the flex flow entirely: `position: absolute`, pinned to the row's top-right
-corner (the row itself `position: relative`), with the row's own `padding-right` widened to
+corner (the row itself `position: sticky`, which still anchors it; `relative` here once overrode the pin), with the row's own `padding-right` widened to
 reserve room for it — deliberately on every wrapped line, not only the first, trading a small
 permanent empty gutter on later lines for never again depending on insertion order or a float's
 own quirks.

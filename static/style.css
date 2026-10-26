@@ -580,7 +580,7 @@ body[data-compact-article="1"] .entry-tags-row:has(.entry-tag-add-button[aria-ex
    1" AND "always renders at the true right edge" when a variable, possibly
    very long amount of content needs to flow between them. So alt-actions
    leaves the flex flow entirely: position: absolute, pinned top-right of the
-   row (which is position: relative for this). The row's own padding-right is
+   row (which is position: sticky, so it is also the containing block). The row's own padding-right is
    widened to leave room for it -- on every wrapped line, not only the first,
    which is the one deliberate compromise here (a small permanent gutter on
    line 2+ that nothing actually needs) in exchange for never again depending
@@ -593,7 +593,8 @@ body[data-compact-article="1"]:not([data-layout-mode="single"]) .entry-tags-row 
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  position: relative;
+  /* sticky, not relative: it still anchors .entry-pane-alt-actions, and keeps the row pinned. */
+  position: sticky;
   padding-right: 9rem;
 }
 
