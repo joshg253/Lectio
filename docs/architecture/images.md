@@ -1059,3 +1059,12 @@ pinned before its token can die unread.
 `_inject_webtoons_episode_panels` reads each slice's `width`/`height` off the page. If every non-banner slice is at most 1.3 tall-to-wide, the episode is discrete panels (Table Top: ~800x970) and renders in the 2-across `.source-gallery` grid; banners under 0.5 span both columns. Taller slices (up to 800x1280) are one strip cut into pieces, so they stay stacked to keep the reading order. Missing dimensions also stay stacked.
 
 When the episode ends in a run of exactly 800x1000 slices and has at least four singles per slice before it, those are four-panel composites repeating the singles (Table Top); the singles are dropped and the banner plus composites render stacked.
+
+## Inline webcomic panels tile too
+
+A webcomic feed whose body already carries every panel (six images in one paragraph, or one per paragraph) never reaches
+`inject_source_images`. `_tile_inline_webcomic_panels` folds a run of two or more discrete panels into the same `.source-gallery`
+grid, before the lead-image opener strip so panel 1 is not pulled out as a hero above it. A panel needs declared width and height,
+a width of 300-1200, at most 1.3 tall-to-wide (the Webtoons rule: taller slices are one strip cut up) and no float; anything else
+ends the run and is kept verbatim, as is a run of one. Ad images are stripped first. The separate lead is dropped only when it is
+one of the tiled panels.
