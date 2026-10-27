@@ -16497,11 +16497,10 @@ def _inject_source_gallery(content_html, entry, lead_image_url):
 _PANEL_PARA_RE = re.compile(r"<p\b[^>]*>\s*((?:<img\b[^>]*>\s*(?:<br\s*/?>\s*)*)+)</p>", re.IGNORECASE)
 _TILE_MIN_PANEL_WIDTH = 300
 _TILE_MAX_PANEL_WIDTH = 1200
-_TILE_MAX_ASPECT = 1.3
 
 
 def _img_int_attr(tag: str, name: str) -> int | None:
-    m = re.search(rf"""\s{name}\s*=\s*["']?(\d+)""", tag, re.IGNORECASE)
+    m = re.search(rf"""\s{name}\s*=\s*["']?(\d{{1,5}})(?!\d)""", tag, re.IGNORECASE)
     return int(m.group(1)) if m else None
 
 
@@ -16511,7 +16510,7 @@ def _is_tileable_panel(img: str) -> bool:
     Same rule as the Webtoons grid: taller slices are one strip cut into pieces and must stay stacked, and an image with no
     dimensions cannot be judged. A button, banner or note falls outside the size window."""
     w, h = _img_int_attr(img, "width"), _img_int_attr(img, "height")
-    if not w or not h or not _TILE_MIN_PANEL_WIDTH <= w <= _TILE_MAX_PANEL_WIDTH or h / w > _TILE_MAX_ASPECT:
+    if not w or not h or not _TILE_MIN_PANEL_WIDTH <= w <= _TILE_MAX_PANEL_WIDTH or h * 10 > w * 13:
         return False
     return not re.search(r"float\s*:", img, re.IGNORECASE)
 
@@ -18348,16 +18347,19 @@ def get_entry_detail(feed_url: str, entry_id: str) -> dict | None:
         # its own later count) so a strip never makes an already-rich post look thin.
         _body_img_count_before_strip = len(re.findall(r"<img\b", content_html or "", re.IGNORECASE))
         # Inline panels tile before the opener strip, which would otherwise pull panel 1 out as the hero above the grid.
+        _tile_after_strip = False
         if isinstance(content_html, str) and lead_image_service._is_feed_webcomic(str(entry.feed_url)):
-            content_html, _tiled = _tile_inline_webcomic_panels(_strip_ad_images(content_html))
-            # Only a lead that is one of the tiled panels is drawn by the grid; any other is a separate hero and stays.
-            if (
-                _tiled
-                and lead_image_url
-                and urlparse(lead_image_url).path in {urlparse(_img_src(i)).path for i in _IMG_TAG_RE.findall(content_html)}
-            ):
-                lead_image_url = None
+            if _show_lead_in_article:
+                content_html, _tiled = _tile_inline_webcomic_panels(_strip_ad_images(content_html) or "")
+                # Only a lead that is one of the tiled panels is drawn by the grid; any other is a separate hero and stays.
+                if _tiled and lead_image_url and lead_image_url in {_img_src(i) for i in _IMG_TAG_RE.findall(content_html)}:
+                    lead_image_url = None
+            else:
+                # A hidden lead still has to come out of the body, and that strip only finds an opener, so it goes first.
+                _tile_after_strip = True
         content_html, lead_image_url = _strip_lead_image_opener(content_html, lead_image_url, str(entry.feed_url), _show_lead_in_article)
+        if _tile_after_strip and isinstance(content_html, str):
+            content_html = _tile_inline_webcomic_panels(_strip_ad_images(content_html) or "")[0]
         # AFTER the strip, deliberately: injecting first would hand the new <img>
         # to _strip_lead_image_opener as the body's opener and it would be
         # removed again.

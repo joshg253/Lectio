@@ -477,3 +477,4 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
 
 - Inline webcomic panel tiling: the source-page caption scrape is skipped and an in-feed caption lands inside the first grid cell when
   the lead is dropped as a tiled panel (`lead_image_url` is None). Place the caption after the gallery and scrape with `_resolved_lead_for_cache`.
+- Inline webcomic panel tiling: panels wrapped in links (`<p><a><img></a></p>`) are not collected into the grid and stay stacked.

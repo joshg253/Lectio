@@ -71,3 +71,12 @@ def test_width_in_query_string_is_not_the_width_attribute():
 def test_floated_images_are_not_tiled():
     body = "".join(f'<p><img style="float:left" src="{i}.jpg" width="800" height="700"/></p>' for i in range(2))
     assert main._tile_inline_webcomic_panels(body) == (body, False)
+
+
+def test_absurd_dimensions_do_not_raise():
+    body = '<p><img src="a.jpg" width="800" height="' + "9" * 5000 + '"/></p>'
+    assert main._tile_inline_webcomic_panels(body) == (body, False)
+
+
+def test_empty_body_is_fine():
+    assert main._tile_inline_webcomic_panels("") == ("", False)
