@@ -3,15 +3,7 @@
 Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user isolation runs through a storage-layer tenancy resolver (see `docs/architecture/tenancy.md`).
 
 ## Core rules
-- Ask before building only when a wrong guess would be expensive to undo; otherwise proceed and state the assumption.
-- Be concise and stay on task: short, plain answers, no headers/bullets for a single fact, no restating file contents, at most one
-  sentence of "here's what I'm about to do", and no end-of-turn recap unless the change is multi-file or non-obvious.
-- For multi-file or behavior-changing work, present a short plan before editing.
-- When work surfaces adjacent bugs, cleanup opportunities, or ideas beyond the task: fix true
-  blockers (needed for the task to work correctly/safely) and small opportunistic fixes (same
-  code path, low-risk, independently understandable, ≤~15 min); everything else is a follow-up —
-  note it in `Plan.md` rather than folding it into the current change. At the end of the task,
-  report what was requested, what was additionally fixed, and what was deferred.
+- General working style, git, and model rules live in `~/.claude/CLAUDE.md` (the claude-config repo). Deferred follow-ups go in `Plan.md`.
 - Prefer existing `reader` capabilities over custom code; never duplicate behavior the library already provides.
 - Preserve the architecture split:
   - UI/API: routes, handlers, presentation state.
@@ -22,13 +14,8 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - Keep tenancy concerns behind the storage/resolver layer; do not leak tenancy-mode branching into UI/routes unless truly necessary.
 - Favor low-friction triage: bulk actions, keyboard-first flows, predictable refresh.
 - Prefer plugin/adapter-style extensions over hardwired branching when adding non-native behavior.
-- Use `uv` for scripts, tests, and tooling.
-- Line wrapping: commit messages get no line breaks (one long line per paragraph). Everything else wraps at 140 columns; `ruff format`
-  handles code (see `scripts/lint_changed.py`), comments/docstrings/prose are wrapped by hand. Only wrap new or edited paragraphs.
-
-- Never push anything (branches, tags, PRs) without the user's explicit say-so in that moment; earlier approval doesn't carry over.
-- Back-and-forth on one thing (bug report → fix → tweak) stays in the working tree: no commits, branches, or Issues until "push". Never
-  stack "fix the fix" commits; amend while still local, never once pushed.
+- Line wrapping: `ruff format` handles code (see `scripts/lint_changed.py`); comments/docstrings/prose are wrapped by hand at 140 columns.
+- Never push without the user's say-so in that moment. Back-and-forth on one thing stays in the working tree until "push".
 
 ## Issues and pull requests
 - Fix in the working tree, rebuild/deploy, and let the user test. "push" means "tested, go" and runs this sequence without more prompts:
@@ -47,19 +34,11 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - No private feed or domain names in the Issue, commit, or PR body.
 
 ## Model guidance
+General model and subagent rules are in the global file. Lectio specifics:
 - The main session is Sonnet at medium effort (pinned in `.claude/settings.json`). Use it directly for normal implementation, refactors,
   tests, docs, and routine debugging — don't ask the user to switch models for a single hard step in an otherwise normal task.
-- Switching the main session's model via `/model` resends the whole conversation history and invalidates the prompt cache — expensive on
-  a long thread. Reserve it for a durable shift in what the *rest of the session* needs; state the recommendation in one line and wait.
-- Subagents start cold, so delegating a small task costs more than doing it inline. Delegate only when it keeps bulk reading out of the
-  main context (broad searches, log trawls, bulk mechanical edits) or the sub-task needs more reasoning than the main thread has.
-- Always pass an explicit `model` to the Agent tool:
-  - `haiku` — search and mechanical, well-scoped work: simple edits, boilerplate, straightforward tests, formatting.
-  - `sonnet` — implementation-sized sub-tasks that don't need the main thread's full context.
-  - `opus` — anything gnarly: architecture, ambiguous requirements, deep debugging, design tradeoffs. Have it return a plan or diagnosis;
-    execute on the main thread or hand it to a Sonnet/Haiku subagent.
-  - Never `fable` unless the user asks for it.
-- Brief a subagent like a colleague with no memory of this conversation — its context is only the prompt you write.
+- Subagent `model` values: `haiku` for search and mechanical work, `sonnet` for implementation-sized sub-tasks, `opus` for gnarly work
+  (have it return a plan or diagnosis; execute on the main thread or hand it to a Sonnet/Haiku subagent).
 
 ## Docs
 - Update `README.md` for user-visible behavior changes or feature changes.
