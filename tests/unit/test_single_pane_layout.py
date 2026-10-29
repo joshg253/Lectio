@@ -751,3 +751,11 @@ def test_landing_on_a_list_url_is_stamped_as_a_scope_list():
     """A list the app opened onto had no history state, so Back from an article
     refetched it (chunk=1, top of list) instead of keeping the one on screen."""
     assert "lectioScopePane: true, lectioPaneLevel: window.isSingleMode" in APP_JS
+
+
+def test_entry_pane_loader_ignores_a_url_with_no_entry():
+    """Single-pane Back leaves the entry DOM in place, so a late callback (autofetch poll, tag handlers) re-rendering from
+    window.location.href hits the list URL: /entries/pane 422s and the fallback hard-reloads the list, dropping read items."""
+    body = APP_JS.split("async function loadEntryPaneWithoutFullRefresh(", 1)[1]
+    guard = body.index("!target.searchParams.has('feed_url') || !target.searchParams.has('entry_id')")
+    assert guard < body.index("++entryPaneRequestToken") < body.index("window.location.href = url")
