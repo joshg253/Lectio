@@ -337,6 +337,13 @@ synchronously inside the tap handler, before the `await fetch` — nothing they
 decide (`onScopeList`/`pushHistory`/`url`) depends on the fetch response, only
 `document.title` and `armDrawerBack()` still run after it, on the same entry.
 
+### Entry-pane reloads ignore a URL with no entry
+
+`loadEntryPaneWithoutFullRefresh` returns early when its URL lacks `feed_url`/`entry_id`. Single-pane Back leaves the entry DOM
+in place, so a late "re-render the open entry" callback (the autofetch poll, tag/filter handlers) passed its own still-open check
+and loaded `window.location.href`, by then the list: `/entries/pane` 422ed and the full-page fallback reloaded the list, dropping
+read items.
+
 ### Entry-pane loading indicator and fetch timeout
 
 A slow `/entries/pane` fetch (bluesky video/image lookups and stripped-embed

@@ -4807,7 +4807,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       loadEntryPaneWithoutFullRefresh(url || window.location.href, pushHistory === true);
 
     async function loadEntryPaneWithoutFullRefresh(url, pushHistory = true) {
-      const token = ++entryPaneRequestToken;
       let currentUrlHasEntry = false;
       let paneSwapped = false;
 
@@ -4817,6 +4816,17 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       } catch (_e) {
         currentUrlHasEntry = false;
       }
+
+      // A URL with no entry is a list, not something this pane can show. Callers that re-render "the open
+      // entry" from window.location.href (the autofetch poll, tag/filter handlers) can fire after Back has
+      // returned to the list; the endpoint 422s, and the failure fallback below then hard-loads that list URL,
+      // refetching it from scratch and dropping the read items. Single-pane Back leaves the entry DOM in place,
+      // so the callers' own "is it still open" DOM checks pass.
+      try {
+        const target = new URL(url, window.location.origin);
+        if (!target.searchParams.has('feed_url') || !target.searchParams.has('entry_id')) return;
+      } catch (_e) { return; }
+      const token = ++entryPaneRequestToken;
 
       // Push/replace HERE, synchronously inside the tap that called this
       // function — not after the `await fetch` below. See the matching
@@ -9024,6 +9034,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         }
         if (!status || !status.ok || status.pending) continue;
         if (status.success) {
+          // Back may have returned to the list while the pane DOM stayed behind; nothing to update then.
+          if (new URLSearchParams(window.location.search).get('entry_id') !== entryId) return;
           await loadEntryPaneWithoutFullRefresh(window.location.href, false);
           showToastMessage('Full article text found — updated.');
         }
