@@ -4648,7 +4648,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       if (!_hlsJsLoadPromise) {
         _hlsJsLoadPromise = new Promise((resolve, reject) => {
           const script = document.createElement('script');
-          script.src = '/static/vendor/hls.js-1.7.3/hls.min.js';
+          script.src = '/static/vendor/hls.js-1.7.4/hls.min.js';
           script.onload = () => resolve();
           script.onerror = () => reject(new Error('hls.js failed to load'));
           document.head.appendChild(script);
