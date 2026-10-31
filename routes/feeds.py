@@ -1246,6 +1246,10 @@ def set_feed_display_pref_route(
             return JSONResponse({"error": f"Can't be longer than the {cap}-day limit set above."}, status_code=400)
     with get_meta_connection() as conn:
         upsert_feed_display_pref(conn, feed_url, key, value)
+    # Hide Unpremiered is a render-time filter that unread badges also honor, so
+    # the cached counts are stale the moment it flips.
+    if key == "hide_unpremiered":
+        _bump_unread_counts_generation()
     # Turning Hide Shorts on clears the existing backlog immediately, not just
     # future refreshes.
     marked = 0

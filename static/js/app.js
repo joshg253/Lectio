@@ -8109,7 +8109,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         // Enabling clears the existing Shorts backlog server-side; reflect it.
         if (r && r.marked_read > 0) {
           try { await _refreshSidebarCounts(); } catch (e) { console.error('hide-shorts: sidebar refresh failed', e); }
-          try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('hide-shorts: view refresh failed', e); }
+          try { await loadScopePanesWithoutFullRefresh(window.location.href, false); } catch (e) { console.error('hide-shorts: view reload failed', e); }
         }
       }
       catch (e) { feedPropHideShorts.checked = !feedPropHideShorts.checked; }
@@ -8122,7 +8122,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await saveDisplayPref(feedUrl, 'hide_unpremiered', feedPropHideUnpremiered.checked ? 1 : 0);
         // A render-time filter, not mark-as-read — refresh so the current view
         // reflects it immediately instead of waiting for the next navigation.
-        try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('hide-unpremiered: view refresh failed', e); }
+        try { await _refreshSidebarCounts(); } catch (e) { console.error('hide-unpremiered: sidebar refresh failed', e); }
+        try { await loadScopePanesWithoutFullRefresh(window.location.href, false); } catch (e) { console.error('hide-unpremiered: view reload failed', e); }
       }
       catch (e) { feedPropHideUnpremiered.checked = !feedPropHideUnpremiered.checked; }
     });
@@ -13261,7 +13262,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
                   // dialog they ran this from). Same in-place refresh the
                   // hide-shorts backfill already uses instead.
                   try { await _refreshSidebarCounts(); } catch (e) { console.error('rule run-now: sidebar refresh failed', e); }
-                  try { await refreshCurrentFeedOrFolder(); } catch (e) { console.error('rule run-now: view refresh failed', e); }
+                  try { await loadScopePanesWithoutFullRefresh(window.location.href, false); } catch (e) { console.error('rule run-now: view reload failed', e); }
                   runBtn.disabled = false;
                   runBtn.style.opacity = '';
                 }

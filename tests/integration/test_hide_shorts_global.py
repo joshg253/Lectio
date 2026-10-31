@@ -80,3 +80,12 @@ def test_mark_existing_shorts_read_helper(env):
     assert n == 1
     assert _read("short") is True
     assert _read("normal") in (False, None)
+
+
+def test_hide_unpremiered_pref_change_bumps_unread_count_generation(env):
+    import state
+    from routes.feeds import set_feed_display_pref_route
+
+    before = state._unread_counts_generation
+    set_feed_display_pref_route(feed_url=FEED, key="hide_unpremiered", value=1)
+    assert state._unread_counts_generation > before

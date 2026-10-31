@@ -29,7 +29,9 @@ def test_run_now_does_not_hard_reload_the_page():
 def test_run_now_refreshes_sidebar_counts_and_current_view_in_place():
     block = _run_now_block()
     assert "_refreshSidebarCounts()" in block
-    assert "refreshCurrentFeedOrFolder()" in block
+    assert "loadScopePanesWithoutFullRefresh(window.location.href, false)" in block
+    for name in ("refreshCurrentFeedOrFolder", "submitRefreshFormAsync", "refreshFolderForm", "refreshFeedForm"):
+        assert name not in block, name
 
 
 def test_run_now_button_is_re_enabled_after_a_successful_run():
