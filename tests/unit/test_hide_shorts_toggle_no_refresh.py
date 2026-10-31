@@ -17,8 +17,16 @@ def _block(marker="feedPropHideShorts?.addEventListener('change'"):
     return APP_JS[idx:end]
 
 
+_REFRESH_PATHS = ("refreshCurrentFeedOrFolder", "submitRefreshFormAsync", "refreshFolderForm", "refreshFeedForm")
+
+
+def _assert_no_refresh(block):
+    for name in _REFRESH_PATHS:
+        assert name not in block, name
+
+
 def test_hide_shorts_toggle_does_not_refresh_feeds():
-    assert "refreshCurrentFeedOrFolder" not in _block()
+    _assert_no_refresh(_block())
 
 
 def test_hide_shorts_toggle_reloads_view_in_place():
@@ -27,5 +35,6 @@ def test_hide_shorts_toggle_reloads_view_in_place():
 
 def test_hide_unpremiered_toggle_does_not_refresh_feeds():
     block = _block("feedPropHideUnpremiered?.addEventListener('change'")
-    assert "refreshCurrentFeedOrFolder" not in block
+    _assert_no_refresh(block)
+    assert "_refreshSidebarCounts()" in block
     assert "loadScopePanesWithoutFullRefresh(window.location.href, false)" in block

@@ -8122,6 +8122,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await saveDisplayPref(feedUrl, 'hide_unpremiered', feedPropHideUnpremiered.checked ? 1 : 0);
         // A render-time filter, not mark-as-read — refresh so the current view
         // reflects it immediately instead of waiting for the next navigation.
+        try { await _refreshSidebarCounts(); } catch (e) { console.error('hide-unpremiered: sidebar refresh failed', e); }
         try { await loadScopePanesWithoutFullRefresh(window.location.href, false); } catch (e) { console.error('hide-unpremiered: view reload failed', e); }
       }
       catch (e) { feedPropHideUnpremiered.checked = !feedPropHideUnpremiered.checked; }
