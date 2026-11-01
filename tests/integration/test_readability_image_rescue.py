@@ -379,6 +379,17 @@ def test_lead_image_not_re_prepended_when_the_body_src_has_an_escaped_query():
     assert html.count("image.jpg") == 1
 
 
+def test_lead_image_still_prepended_when_only_a_dormant_lazy_attribute_matches_it():
+    prose = "".join(f"<p>Paragraph {i} of the news post with enough words to read as an article body, not a caption.</p>" for i in range(6))
+    page = (
+        '<html><head><meta property="og:image" content="https://example.test/cdn/hero.jpg"></head><body><div class="container"><article>'
+        '<h1>Headline</h1><figure><img src="https://example.test/cdn/other.jpg" data-src="/cdn/hero.jpg" alt="Other"></figure>'
+        f'<div class="news-content">{prose}</div></article></div></body></html>'
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert "https://example.test/cdn/hero.jpg" in html
+
+
 def test_lead_image_still_prepended_when_a_page_relative_src_resolves_elsewhere():
     page = _og_page("https://example.test/cdn/hero.jpg", "hero.jpg")
     _title, html = main.extract_readability_article(page, "https://example.test/news/post")

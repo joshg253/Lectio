@@ -13220,8 +13220,8 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         # two stay consistent.
         lead_key = _dedupe_img_src_key(lead)
         # readability hasn't absolutized the body's srcs yet (a featured image is often root-relative), while `lead` always is.
-        # Comparing the raw srcs made the same hero show twice.
-        body_srcs = [urljoin(source_url, html.unescape(src)) for src in re.findall(r'src="([^"]*)"', article_html)]
+        # Comparing the raw srcs made the same hero show twice. The lookbehind skips data-src / data-lazy-src, which aren't rendered.
+        body_srcs = [urljoin(source_url, html.unescape(src)) for src in re.findall(r'(?<![\w-])src="([^"]*)"', article_html)]
         # Substack (and likely other CDN-resize proxies) can serve og:image and
         # the post's own in-body header image as two DIFFERENT re-encoded asset
         # ids for the same source photo — raised 2026-08-31: og:image's id
