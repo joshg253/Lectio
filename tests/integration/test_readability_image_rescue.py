@@ -343,6 +343,49 @@ def test_lead_image_prepended_from_og_when_absent():
     assert "site-logo.png" not in logo_html
 
 
+def test_lead_image_not_re_prepended_when_the_body_has_it_as_a_relative_src():
+    """og:image is absolute but the body's own featured image is a root-relative src at the point of the check (Lambgoat), so the
+    hero showed twice in the Readability view."""
+    prose = "".join(f"<p>Paragraph {i} of the news post with enough words to read as an article body, not a caption.</p>" for i in range(6))
+    body = (
+        '<div class="container"><article><h1>Headline</h1>'
+        '<figure class="mt-1 mb-4"><img class="featured-image" src="/cdn/2026/hero-20261031.jpg" alt="Hero"></figure>'
+        f'<div class="news-content">{prose}</div></article></div>'
+    )
+    page = (
+        f'<html><head><meta property="og:image" content="https://example.test/cdn/2026/hero-20261031.jpg"></head><body>{body}</body></html>'
+    )
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.count("hero-20261031.jpg") == 1
+
+
+def _og_page(og: str, body_img: str) -> str:
+    prose = "".join(f"<p>Paragraph {i} of the news post with enough words to read as an article body, not a caption.</p>" for i in range(6))
+    return (
+        f'<html><head><meta property="og:image" content="{og}"></head><body><div class="container"><article><h1>Headline</h1>'
+        f'<figure><img src="{body_img}" alt="Hero"></figure><div class="news-content">{prose}</div></article></div></body></html>'
+    )
+
+
+def test_lead_image_not_re_prepended_for_a_relative_src_matching_by_dimension_signature():
+    page = _og_page("https://example.test/cdn/a_1200x630.jpg", "/cdn/b_1200x630.jpg")
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.count("_1200x630.jpg") == 1
+
+
+def test_lead_image_not_re_prepended_when_the_body_src_has_an_escaped_query():
+    page = _og_page("https://example.test/cdn/image.jpg?id=5&w=1200", "/cdn/image.jpg?id=5&amp;w=300")
+    _title, html = main.extract_readability_article(page, URL)
+    assert html.count("image.jpg") == 1
+
+
+def test_lead_image_still_prepended_when_a_page_relative_src_resolves_elsewhere():
+    page = _og_page("https://example.test/cdn/hero.jpg", "hero.jpg")
+    _title, html = main.extract_readability_article(page, "https://example.test/news/post")
+    assert "https://example.test/cdn/hero.jpg" in html
+    assert html.count("hero.jpg") == 2
+
+
 def test_lead_image_not_re_prepended_when_the_body_has_the_same_photo_under_a_different_id():
     """Raised 2026-08-31 (live Substack post): og:image and the post's own
     in-body header image can be two DIFFERENT re-encoded asset ids for the
