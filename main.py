@@ -13219,6 +13219,9 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         # query-aware identity check _dedupe_readability_images uses, so the
         # two stay consistent.
         lead_key = _dedupe_img_src_key(lead)
+        # readability hasn't absolutized the body's srcs yet (a featured image is often root-relative), while `lead` always is.
+        # Comparing the raw srcs made the same hero show twice. The lookbehind skips data-src / data-lazy-src, which aren't rendered.
+        body_srcs = [urljoin(source_url, html.unescape(src)) for src in re.findall(r'(?<![\w-])src="([^"]*)"', article_html)]
         # Substack (and likely other CDN-resize proxies) can serve og:image and
         # the post's own in-body header image as two DIFFERENT re-encoded asset
         # ids for the same source photo — raised 2026-08-31: og:image's id
@@ -13231,7 +13234,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
         lead_host = urlparse(lead).netloc
         already_present = (
             lead in article_html
-            or any(_dedupe_img_src_key(src) == lead_key for src in re.findall(r'src="([^"]*)"', article_html))
+            or any(_dedupe_img_src_key(src) == lead_key for src in body_srcs)
             or (
                 lead_dim_sig is not None
                 and any(
@@ -13244,7 +13247,7 @@ def extract_readability_article(raw_html: str, source_url: str) -> tuple[str, st
                     # og:image and the in-body copy, so this doesn't lose the
                     # fix it was added for.
                     urlparse(src).netloc == lead_host and _image_dimension_signature(src) == lead_dim_sig
-                    for src in re.findall(r'src="([^"]*)"', article_html)
+                    for src in body_srcs
                 )
             )
         )
