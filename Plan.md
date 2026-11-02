@@ -103,6 +103,30 @@ is a hidden field. In rough value order:
 5. A "Check feed" step after creating: titles that are URLs, empty bodies, identical thumbnails across entries.
 6. No edit UI for `content_selector` on an existing feed (a direct DB edit today); a "Page Feed" tab in Feed Properties.
 
+### Article edit history (2026-11-01)
+
+Inoreader-style "Edited" chip with revision picker and green/red word diff (title and body). reader overwrites content on update and its
+`after_entry_update_hooks` fire afterward, so old text must be captured by us:
+1. Per-user `entry_revisions` table (feed_url, entry_id, title, sanitized content, normalized-text hash, captured_at) plus the per-user startup
+   migration. Add it to the tenant-export lists in `main.py`.
+2. Extend the hook in `reader_api.py` (currently NEW-only): store the first-seen version on NEW, a new revision on MODIFIED only when the
+   normalized visible text differs (strip tags, whitespace, URL query strings, digit-only changes) so ad/view-count churn is ignored.
+3. Skip entries with a cleanup pin or full-content re-fetch; cap about 10 revisions per entry; prune with the entry.
+4. `GET /entries/revisions` returns revisions and a server-side `difflib` token diff (escaped). Pane and Read Mode show "Edited (n)" with a
+   Published/v2/v3 picker.
+5. Tests (churn filter, diff, migration); docs in `docs/architecture/reading.md` and a README bullet.
+
+Open: the "Published" original needs a stored copy at NEW time (roughly doubles body storage for new entries); revisions-only avoids that but
+loses the original. No retroactive history either way.
+
+### Refresh only the current view (2026-11-02)
+Seen in FreshRSS 1.30. A "Refresh this feed / folder now" action that refreshes only the feeds in the open view instead of everything.
+Reuse the existing refresh path and its per-domain backoff; check what already exists before adding a route.
+
+### OPML export/import keeps each feed's refresh interval (2026-11-02)
+Seen in FreshRSS 1.30. Write the per-feed refresh interval into the OPML export and read it back on import, so a round trip doesn't reset
+custom intervals. Check how the existing Takeout-style export/import and OPML code treat it first.
+
 ### Similar-feeds Combine refuses when every candidate is failing
 
 The similar-feeds utility's Compare → Combine (app.js, "None of these returned valid feed data — nothing to combine") blocks the merge
@@ -297,11 +321,14 @@ filed into a related feed by auto-filing.
 
 **Architecture**
 
-### Add OIDC login
+### Add OIDC login and passkeys
 
 No SSO/OIDC exists today (username/password only). Architecture-level addition — new login flow,
 session handling alongside the existing one, tenancy binding from an OIDC subject to a Lectio
 `user_id`, first-login provisioning. Wants a real plan before code.
+
+Passkeys (WebAuthn) belong in the same plan: another login method bound to a `user_id`, and optionally the only one when local
+passwords are disabled (as Miniflux 2.3.5 does). Miniflux also maps an OIDC group claim to the admin role.
 
 ### Multiuser
 
