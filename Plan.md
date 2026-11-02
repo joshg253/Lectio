@@ -80,6 +80,8 @@ tagged-key cache, a 1ms GIL switch interval, and no pinning of thumbnails over 1
 - Lazy-loaded embeds recovered from the raw page are appended at the end of the article, not placed where they were. A per-site
   plugin could re-insert each into its empty `.tve_responsive_video_container` (guitarchalk has ~30 per lesson).
 - Already-stored posts that lost embeds to the old `data-src` drop need a re-fetch to get them back.
+- Settings Save buttons post every field in their scope, so a Save clicked before the settings GET fills the form writes unchecked
+  boxes (and the server deletes falsy values). Gate `settSave` on a populated flag. Affects the Account keys, e.g. `proxy_body_images`.
 
 ## Tier 3 — sized, no open decision, ready to build
 

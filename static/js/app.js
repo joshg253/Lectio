@@ -15857,6 +15857,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             proxy_body_images: (document.getElementById('sett-proxy-body-images')?.checked ? '1' : '0'),
             mark_read_on_new_tab: (document.getElementById('sett-mark-read-on-new-tab')?.checked ? '1' : '0'),
             proxy_mode: document.getElementById('sett-proxy-mode')?.value || '',
+            hide_locked_comics_global: (document.getElementById('sett-hide-locked-comics')?.checked ? '1' : '0'),
           };
         } else if (scope === 'profile') {
           payload = { profile_name: g('sett-profile-name'), profile_email: g('sett-profile-email') };
@@ -15876,7 +15877,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             yt_hide_shorts_global: (document.getElementById('sett-yt-hide-shorts')?.checked ? '1' : '0'),
             yt_hide_unpremiered_global: (document.getElementById('sett-yt-hide-unpremiered')?.checked ? '1' : '0'),
             yt_hide_members_only_global: (document.getElementById('sett-yt-hide-members-only')?.checked ? '1' : '0'),
-            hide_locked_comics_global: (document.getElementById('sett-hide-locked-comics')?.checked ? '1' : '0'),
             instapaper_username: g('sett-ip-user'),
             instapaper_password: g('sett-ip-pass'),
             yt_oauth_client_id: g('sett-yt-oauth-client-id'),
