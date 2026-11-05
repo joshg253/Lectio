@@ -395,6 +395,9 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   `make rebuild`, or a digest pin bumped in the weekly sweep; both current 2026-09-30). The sibling containers (searxng, traefik, tailscale,
   browserless, redis, gluetun) run `:latest` from separate compose projects and were behind on 2026-09-30; pull and recreate by hand, which
   restarts the VPN, tailscale and traefik.
+- **Unused `sqlalchemy` dependency** — declared in `pyproject.toml` but no module imports it; confirm and drop it.
+- **Held lock bumps** — `soupsieve` 4.0.1 (new major, released 2026-11-04), `sqlalchemy` 2.1.8, `ty` 0.0.97 and `typing-inspection` 0.4.5 were
+  skipped as same-day releases; take them in the next sweep.
 
 ## Watch-lists
 
