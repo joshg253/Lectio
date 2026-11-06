@@ -21,7 +21,7 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - Fix in the working tree, rebuild/deploy, and let the user test. "push" means "tested, go" and runs this sequence without more prompts:
   1. Tests for the changed behavior added or updated; `make test lint types audit` green.
   2. Docs updated and listed at the end (README, ARCHITECTURE/`docs/architecture/`, Plan.md, `.env.example`).
-  3. Independent review via the `pr-review` skill; findings verified, valid ones fixed and re-tested. The reviewer
+  3. Independent review via the global `pr-review` skill (rules: "Review rules" below); findings verified, valid ones fixed and re-tested. The reviewer
      gets only the diff, the Issue text, and the relevant rules, not the conversation; the final report says which findings were
      declined and why.
   4. Issue written after the fact (reported, expected vs actual, cause, fix, how verified; no chat narrative), `fix/<slug>` or
@@ -32,6 +32,17 @@ Self-hosted feed reader, triage, and workflow app. Auth is always on; per-user i
 - One PR per concern, kept small. Ideas that aren't concrete work go in `Plan.md`, not the issue tracker.
 - Skip the Issue for tiny feed-specific fixes (PR only, no `Closes`). Docs-only changes go straight to `main` with no review, Issue, or PR.
 - No private feed or domain names in the Issue, commit, or PR body.
+
+## Review rules
+Given to the global `pr-review` skill as the project rules:
+- tenancy: every storage access goes through the tenancy resolver; no query without a user scope; raw threads use `_run_in_user_context`
+- per-user schema migrations are idempotent and run for existing tenants at startup
+- the feed client is polite (honest UA, conditional GET, no evading blocks) and never loops on a failure
+- fetched HTML reaches templates only through the sanitization allowlist
+- Read Mode mirrors the regular app; the offline action outbox stays consistent
+- no secrets, tokens or private feed/domain names in code, tests, fixtures, logs or docs
+- UI/API vs services vs storage split holds; runtime config is env-driven
+- American English; lines wrap at 140
 
 ## Model guidance
 General model and subagent rules are in the global file. Lectio specifics:
