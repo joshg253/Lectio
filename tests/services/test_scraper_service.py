@@ -296,7 +296,7 @@ def test_link_list_scrape_heals_relative_links_in_stored_bodies(monkeypatch):
 
 
 def test_link_list_accepts_complex_has_selector(monkeypatch):
-    # soupsieve 3 rejects a complex :has() unless NOSTRICT is passed; a user-typed selector like this
+    # soupsieve 3+ rejects a complex :has() unless NOSTRICT is passed; a user-typed selector like this
     # was accepted before the upgrade and must keep resolving rather than raising.
     monkeypatch.setattr(scraper_service, "_fetch_html", lambda url: _PAGE)
     conn = _make_conn()

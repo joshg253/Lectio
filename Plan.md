@@ -396,8 +396,9 @@ for the precedent) plus a paced walker. Worth a real plan before any code.
   browserless, redis, gluetun) run `:latest` from separate compose projects and were behind on 2026-09-30; pull and recreate by hand, which
   restarts the VPN, tailscale and traefik.
 - **Unused `sqlalchemy` dependency** — declared in `pyproject.toml` but no module imports it; confirm and drop it.
-- **Held lock bumps** — `soupsieve` 4.0.1 (new major, released 2026-11-04), `sqlalchemy` 2.1.8, `ty` 0.0.97 and `typing-inspection` 0.4.5 were
-  skipped as same-day releases; take them in the next sweep.
+- **ty 0.0.104 upgrade** — held at 0.0.95 in the 2026-11-16 sweep: 0.0.104 renames rules in ignore comments (`unresolved-attribute` →
+  `missing-attribute`, `unresolved-import` → `import-not-found`), flags ~20 unused ignores, and adds 12 `missing-union-attribute` errors
+  (`GReaderService | None`, `_LightEntry`). Fix those, then bump.
 
 ## Watch-lists
 
