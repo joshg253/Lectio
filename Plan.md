@@ -103,6 +103,11 @@ is a hidden field. In rough value order:
 5. A "Check feed" step after creating: titles that are URLs, empty bodies, identical thumbnails across entries.
 6. No edit UI for `content_selector` on an existing feed (a direct DB edit today); a "Page Feed" tab in Feed Properties.
 
+### Click an article image to open it in a full-app overlay (2026-11-16)
+
+Opt-in per feed and per folder (webcomics like dresdencodak are the case). Clicking a body image opens it over the whole app, above all
+panes; the X or Esc closes it. Per-feed beats per-folder, and the default stays off so an image inside a link keeps following the link.
+
 ### Article edit history (2026-11-01)
 
 Inoreader-style "Edited" chip with revision picker and green/red word diff (title and body). reader overwrites content on update and its
@@ -441,6 +446,18 @@ fall back to a body image. Not broken — just where a future "odd body image" r
 lxml hasn't declared free-threading support, forcing the GIL back on at import. Recheck when it
 does; nothing else blocks it. Rechecked 2026-10-15 on 3.15.0t: lxml and Pillow now ship `cp315t`
 wheels, but `import lxml.etree` still re-enables the GIL, so the blocker is unchanged.
+
+### Subinterpreters (`concurrent.interpreters`) are blocked by lxml and Pillow
+
+Checked 2026-11-16 on 3.15: `import lxml.etree` and `import PIL.Image` both fail inside a subinterpreter ("does not support
+loading in subinterpreters"). Recheck with the free-threading item above. The one measured GIL stall was a query fix, not CPU-bound
+Python, so there is no known workload that would benefit.
+
+### Cloudflare-challenged image hosts (washingtonstatestandard)
+
+Its images answer servers with a bot challenge (403, `cf-mitigated: challenge`), so `/api/img` (422) and `/thumb` (502) cannot fetch
+them, and the browser's own load is intermittently refused too (a proxied body image is hidden after the 422). An in-pane direct
+retry was tried and showed no effect on the live instance, so it was dropped; nothing more is possible without evading the block.
 
 ### Methodology: diagnosing refresh-contention/latency stalls
 
