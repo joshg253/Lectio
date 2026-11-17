@@ -493,23 +493,19 @@ so page counts reflect the typeset size.
 
 ### Bluesky's own recovered image must not be treated as author-placed content
 
-Bluesky RSS is text-only, so `get_entry_detail` (main.py) appends the post's
-images — recovered via `fetch_post_images` (services/bluesky.py) — as plain
-`<p><img></p>` tags onto `content_html` itself. That append then flows into
-`_strip_lead_image_opener`, the general dedup pass that decides whether a lead
-image already sitting in the body should stay separate at the top or be
-folded into its in-body occurrence (see images.md "Choosing a lead image").
-For every other feed, an image already present mid-body means the *author*
-put it there, so the separate lead gets dropped rather than shown twice. For
-Bluesky that inference is backwards: the image is mid-body only because
-Lectio itself just put it there a few lines earlier in the same function — the
-real feed body never had an `<img>` at all. Treating it as author-placed
-nulled `lead_image_url`, so the pane showed no hero even though the list
-thumbnail (computed from the same `fetch_post_images` call) resolved fine —
-reported live 2026-09-02, root-caused 2026-09-11, fixed by special-casing
-`bluesky.is_bsky_feed(feed_url)` in `_strip_lead_image_opener`'s mid-body
-branch to leave both the hero and the body copy in place instead of dropping
-the hero.
+Bluesky RSS is text-only, so `get_entry_detail` (main.py) appends the post's images — recovered via `fetch_post_images`
+(services/bluesky.py) — as plain `<p><img></p>` tags onto `content_html` itself. That append then flows into `_strip_lead_image_opener`, the
+general dedup pass that decides whether a lead image already sitting in the body should stay separate at the top or be folded into its
+in-body occurrence (see images.md "Choosing a lead image"). For every other feed, an image already present mid-body means the *author* put
+it there, so the separate lead gets dropped rather than shown twice. For Bluesky that inference is backwards: the image is mid-body only
+because Lectio itself just put it there a few lines earlier in the same function — the real feed body never had an `<img>` at all. Treating
+it as author-placed nulled `lead_image_url`, so the pane showed no hero even though the list thumbnail (computed from the same
+`fetch_post_images` call) resolved fine — reported live 2026-09-02, root-caused 2026-09-11, fixed by special-casing
+`bluesky.is_bsky_feed(feed_url)` in `_strip_lead_image_opener`'s mid-body branch to keep the hero instead of dropping it. That alone showed
+the picture twice, so the body copy is now hoisted into the hero: the cached hero is the CDN's `feed_thumbnail` variant while the appended
+body copy is `feed_fullsize` of the same blob, so the hero is first promoted to the body's fullsize URL, and the body copy is then stripped.
+The rest of a gallery stays in the body (the thumbnail-wrapper strip is skipped for Bluesky), and a video poster or link-card thumb keeps
+its own handling.
 
 **A second, distinct Bluesky embed shape returned no images at all.**
 `_images_from_embed` (services/bluesky.py) recognized `app.bsky.embed.images`
