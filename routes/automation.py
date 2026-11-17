@@ -48,7 +48,7 @@ from main import (
     url_guard,
     youtube_duration_service,
 )
-from services import dedup, page_topics
+from services import dedup, page_topics, rule_duration
 from services.automation_rules import _dedup_false_matches, _run_now_dedup, _run_now_pattern, _run_tag_filter
 from services.webhooks import WEBHOOK_VALID_FORMATS, build_webhook_payload, send_webhook
 
@@ -204,6 +204,7 @@ def _dry_run_pattern(
     right after a Run Now shows nothing, which says nothing about how well the rule works. Those matches are reported apart
     (``total_matches_read``, ``read: true`` rows, their own ``result_limit``) so the unread count stays exactly what Run Now does."""
 
+    duration_spec = rule_duration.parse_duration_term(keyword)
     if not keyword:
         if not match_all_if_empty:
             return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
@@ -212,7 +213,7 @@ def _dry_run_pattern(
             return True
     else:
         try:
-            match_fn = build_keyword_matcher(keyword, is_regex)
+            match_fn = (lambda _text: False) if duration_spec else build_keyword_matcher(keyword, is_regex)
         except re.error as e:
             # Same module object the matcher compiles with — `_re` is an alias
             # some of these functions import locally, and mixing the two names
@@ -291,7 +292,9 @@ def _dry_run_pattern(
                     body_text += (c.value or "") + " "
                 body_text += str(entry.summary or "")
 
-            if search_in == "title":
+            if duration_spec:
+                matched = rule_duration.entry_duration_matches(entry, duration_spec, youtube_duration_service)
+            elif search_in == "title":
                 matched = match_fn(title_text)
             elif search_in == "body":
                 matched = match_fn(body_text)

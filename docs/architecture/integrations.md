@@ -190,18 +190,39 @@ mode is never folded; a pattern says what it says. The browser highlighter (`fol
 
 The split deliberately does **not** imply a word boundary: measured across the
 live library, 4 plain rules match only *inside* words and would stop matching
-entirely. A term containing a literal comma needs regex mode.
+entirely. A term containing a literal comma needs a regex (`/a,b/`).
 
-**Rules that could be one rule** (`find_mergeable_rule_groups`,
-`merge_highlight_rule_group`, `GET /highlights/suggestions`,
-`POST /highlights/merge-group`). A keyword was one term until comma lists
-landed above, so multiple single-keyword rules sharing everything else
-accumulated from before that existed. The identity that makes rules
-mergeable is `(type, scope, scope_id, search_in, is_regex)` — two rules
-differing only in `keyword` collapse into one, joined as a comma list (plain)
-or `(a)|(b)` alternation (regex). Scoped to `highlight`, `mark_as_read` and `tag_filter` (`_MERGEABLE_RULE_TYPES`):
-`deduplicate`'s keyword is a match-method enum, and the optional-keyword action types (`youtube_playlist`, `instapaper`,
-`quire`, `save_article`) aren't confirmed to share the same OR-of-terms semantics when non-blank.
+**Regex is written `/like this/`.** There is no regex toggle: a keyword wrapped in slashes is a regex (`build_keyword_matcher`, the
+browser's `rulePatterns`), and `add_highlight_keyword` rewrites any incoming `is_regex` rule to that form
+(`rule_duration.wrap_regex_keyword`; takeout import does the same). Startup migrated old rows once: `ensure_meta_schema` rewrites
+`is_regex = 1` rows (not deduplicate/tag_filter/blank) and keeps each original in `highlight_keywords_pre_slash`; a row whose slash form
+already exists is skipped. The `is_regex` column and the matcher's `is_regex` argument remain only for such leftovers and old API clients.
+A plain keyword that is literally slash-wrapped (`/r/`) now reads as a regex; none existed when this shipped, and it is not migrated
+because a later `/x/` is indistinguishable from a regex typed on purpose. A `/regex/` or duration item inside a comma list would be
+matched as literal text, so the rule validator (`rule_duration.keyword_syntax_error`) refuses it.
+
+**Duration terms** (`=2-10`, `<2:00`, `>=1h`; `services/rule_duration.py`) are Mark as Read only. They match the video a YouTube-feed
+entry is (`youtube_embeds.own_video_id`) by its cached length; an unknown length or a non-video post never matches, and the Mark as Read
+runners prefetch durations first because automation runs before the scheduler's duration pass. The other dispatchers only look at entries
+from the last few minutes, so a not-yet-cached duration would be missed for good; the validator therefore rejects duration terms elsewhere
+(a playlist rule has its own min/max minutes).
+
+
+**Rules that could be one rule** (`find_mergeable_rule_groups`, `merge_highlight_rule_group`, `GET /highlights/suggestions`,
+`POST /highlights/merge-group`). A keyword was one term until comma lists landed above, so multiple single-keyword rules sharing everything
+else accumulated from before that existed. The identity that makes rules mergeable is `(type, scope, scope_id, search_in, name, is_regex)`
+(`is_regex` read through the slash form): two rules differing only in `keyword` collapse into one, joined as a comma list (plain) or a bare
+`a|b` alternation (regex; no wrapping groups, which would renumber backreferences).
+
+The name is identity: a named rule is a deliberate topic, so differently named rules are never offered together and a merge keeps the
+shared name. An unnamed rule joins the one named group it shares a term with (`_bucket_by_name`); with no or ambiguous overlap it stays
+unnamed. Left out of suggestions: regexes with backreferences, named groups or inline flags (a leading `(?i)` is dropped; matching is
+case-insensitive anyway), duration keywords, and disabled rules (drafts; merging would arm or disarm one). Every suggestion carries
+`merged_keyword`, shown on the card, and the merge request echoes it back: if the group changed since the card was shown, the merge returns
+409 instead of folding in something the card didn't show. A merge also refuses if its keyword already belongs to another rule in the same
+scope (the table key has no type, and the insert is `INSERT OR REPLACE`). Scoped to `highlight`, `mark_as_read` and `tag_filter`
+(`_MERGEABLE_RULE_TYPES`): `deduplicate`'s keyword is a match-method enum, and the optional-keyword action types (`youtube_playlist`,
+`instapaper`, `quire`, `save_article`) aren't confirmed to share the same OR-of-terms semantics when non-blank.
 
 `tag_filter` groups (enabled rules only — disabled ones are chip drafts) merge by spec union (`_union_tag_filter_specs`, deduped by
 tag; on a sign conflict `-` beats `++` beats `+`). A `+`/`++` tag only acts on its own rule's `-` tags, so the union equals the
@@ -241,27 +262,18 @@ settings.
 **The identity's `is_regex` term means a plain rule sitting next to a regex rule on
 the same scope was invisible to all of the above (raised 2026-08-31).**
 `find_regex_convertible_rule_groups` / `merge_regex_convertible_rule_group` /
-`POST /highlights/merge-group-regex-convert` cover exactly that boundary: group by
-`(type, scope, scope_id, search_in)` **without** `is_regex`, keep only groups that
-actually span both a regex and a plain rule (a same-`is_regex` group is the
-function above's job, not this one's), apply the same `_MERGE_IDENTITY_FIELDS`
-mismatch guard, and — on merge — `re.escape()` each plain keyword before joining as
-`(a)|(b)` alternation, same as the regex path. Confirmed live 2026-08-31 on
-`("Lowe's", plain)` next to `("AirPods|iPhone|MacBook|AppleTV", regex)`: `re.escape`
-leaves the apostrophe alone (not a regex metacharacter, and not escaped by Python's
-`re.escape` since 3.7 dropped over-escaping), so the merged pattern
-(`(Lowe's)|(AirPods|iPhone|MacBook|AppleTV)`) matches exactly what the plain rule
-already matched — Josh's own hesitation about hand-converting it to regex (unsure
-how to escape the apostrophe) turned out to be a non-issue, but the one-click
-conversion means nobody has to work that out by hand anyway. Same run turned up a
-second real case on a feedburner feed rule mixing plain `iPhone` with regex
-`Apple|iOS|iPadOS`, confirming this isn't a one-off shape.
+`POST /highlights/merge-group-regex-convert` cover exactly that boundary: group by `(type, scope, scope_id, search_in, name)` **without**
+`is_regex`, keep only groups that span both a regex and a plain rule (a same-kind group is the function above's job), apply the same
+settings guard, and on merge build one regex: plain terms with ASCII word-character edges join the rules' `\b(?:a|b|c)\b` groups (an
+existing group is unwrapped and combined), spaces become `\s+`, `'`/`"` match their curly pairs, and other terms and patterns follow as
+standalone alternatives (so terms like `café` keep substring semantics). That makes plain terms whole-word matches; the card warns
+(`adds_word_boundaries`). Raised 2026-08-31: `Lowe's` (plain) sat next to a regex rule with nothing offering to combine them.
 
 **A feed rule already covered by a folder rule** (`find_redundant_feed_rules`)
 is the secondary case: a feed-scoped rule whose keyword set is a full subset
 of a same-type folder rule's on a folder the feed belongs to does nothing —
-the folder rule already catches everything it would. Plain rules only (a
-regex's language isn't decidable as a subset this way). Flagged for removal
+the folder rule already catches everything it would. Plain comma lists only (a
+/regex/ or duration keyword is never flagged: a regex's language isn't decidable as a subset this way). Flagged for removal
 via the existing `/highlights/remove`, not a new endpoint — removing one rule
 was already a solved problem.
 

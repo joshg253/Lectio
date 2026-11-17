@@ -589,7 +589,10 @@
           <button type="button" class="hl-tab-btn" data-hl-tab="history" role="tab" aria-selected="false">History</button>
         </div>
         <div id="hl-tab-rules" class="hl-tab-panel">
-          <p class="highlights-hint">Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Enable <strong>.*</strong> for regex.</p>
+          <p class="highlights-hint">
+            Rules match article titles (or body) and trigger actions automatically. Matches are case-insensitive. Wrap a pattern in
+            slashes, <strong>/like this/</strong>, for regex.
+          </p>
           {# Filter the list to one rule type. Populated by hlRenderTypeFilter —
              only types that actually have rules get a chip, so the row stays
              short on a library that only uses three of them. #}

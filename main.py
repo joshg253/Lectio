@@ -58,6 +58,7 @@ from services import flaresolverr as flaresolverr_service
 from services import page_fetch
 from services import full_content_fetch, itad_waitlist
 from services import page_topics
+from services import rule_duration
 from services.errors import public_error
 from services.redirects import local_url
 from services import site_content_plugins
@@ -4630,6 +4631,28 @@ def ensure_meta_schema() -> None:
             conn.execute("ALTER TABLE highlight_keywords ADD COLUMN label TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Regex rules moved from the is_regex flag to /slash/ wrapping (the keyword box reads it). Rewrite old rows once; each original is
+        # kept in highlight_keywords_pre_slash first. Idempotent: rewritten rows no longer have is_regex = 1. A row whose new keyword would
+        # collide with an existing rule is skipped (and keeps working, the matcher still honors is_regex).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS highlight_keywords_pre_slash ("
+            " scope TEXT NOT NULL, scope_id TEXT NOT NULL, old_keyword TEXT NOT NULL, new_keyword TEXT NOT NULL, migrated_at TEXT NOT NULL)"
+        )
+        for row in conn.execute(
+            "SELECT rowid, scope, scope_id, keyword, type FROM highlight_keywords"
+            " WHERE is_regex = 1 AND keyword != '' AND type NOT IN ('deduplicate', 'tag_filter')"
+        ).fetchall():
+            new_keyword, _ = rule_duration.wrap_regex_keyword(row["type"], row["keyword"], True)
+            if conn.execute(
+                "SELECT 1 FROM highlight_keywords WHERE scope = ? AND scope_id = ? AND keyword = ?",
+                (row["scope"], row["scope_id"], new_keyword),
+            ).fetchone():
+                continue
+            conn.execute(
+                "INSERT INTO highlight_keywords_pre_slash VALUES (?, ?, ?, ?, ?)",
+                (row["scope"], row["scope_id"], row["keyword"], new_keyword, datetime.now().isoformat()),
+            )
+            conn.execute("UPDATE highlight_keywords SET keyword = ?, is_regex = 0 WHERE rowid = ?", (new_keyword, row["rowid"]))
         # Dedup guard for the youtube_playlist rule: playlistItems.insert is not
         # idempotent, so record each (rule, entry) we've added to avoid re-adding the
         # same video on a later refresh (the cutoff window alone can re-match).
@@ -5431,83 +5454,371 @@ def get_highlight_keywords(conn: sqlite3.Connection) -> list[dict]:
 # mergeable too, but by spec union (_union_tag_filter_specs), not a keyword join.
 _MERGEABLE_RULE_TYPES = frozenset({"highlight", "mark_as_read", "tag_filter"})
 
-# Fields (besides scope/scope_id/type/search_in/is_regex/keyword) that change
-# a rule's *behavior*, not just its keyword list. Two rules that differ here
-# are NOT silently collapsed into one — see find_mergeable_rule_groups.
-_MERGE_IDENTITY_FIELDS = ("color", "delivery", "email_to", "batch_time", "batch_count", "cc_me")
+
+# Reverse of _MATCH_FOLD: a plain term's straight quote/space matches its curly/non-breaking variants, so the regex that replaces
+# it must too, or merging would quietly narrow what the rule catches.
+# Plain terms fold curly quotes to straight ones; the regex that replaces a term keeps that for the common pairs only, as literal glyphs so
+# the result stays readable. Rarer variants (prime marks, non-breaking spaces) aren't carried over; the merge card shows the result.
+_QUOTE_CLASSES = {"'": "['\u2018\u2019]", '"': '["\u201c\u201d]'}
+_REGEX_SPECIALS = frozenset("\\.^$*+?{}[]|()")
+_UNJOINABLE_REGEX = re.compile(r"\\[1-9]|\\g<|\(\?P[<=]|\(\?<[A-Za-z]|\(\?[aiLmsux]+\)")
+
+
+def _plain_term_to_regex(term: str) -> str:
+    """Regex for a plain term, minimally escaped: runs of spaces are ``\\s+``, apostrophes and double quotes match their curly pairs."""
+    out = []
+    for ch in re.sub(r" {2,}", " ", term):
+        straight = _MATCH_FOLD.get(ord(ch), ch)
+        if straight == " ":
+            out.append(r"\s+")
+        elif straight in _QUOTE_CLASSES:
+            out.append(_QUOTE_CLASSES[straight])
+        elif ch in _REGEX_SPECIALS:
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _split_top_level_alternation(pattern: str) -> list[str]:
+    """Split on ``|`` outside groups, character classes and escapes; a single-element list means no top-level alternation."""
+    parts: list[str] = []
+    depth = 0
+    in_class = False
+    cur: list[str] = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < len(pattern):
+            cur.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            parts.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    parts.append("".join(cur))
+    return parts
+
+
+_BOUNDED_GROUP = re.compile(r"^\\b\(\?:(.*)\)\\b$", re.DOTALL)
+
+
+def _unwrap_bounded_group(pattern: str) -> list[str] | None:
+    """Alternatives of a pattern shaped exactly ``\\b(?:a|b|c)\\b``, or None for any other shape (including a ``(?:`` that closes early)."""
+    m = _BOUNDED_GROUP.match(pattern)
+    if not m:
+        return None
+    inner = m.group(1)
+    depth = 0
+    in_class = False
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = ch != "]"
+        elif ch == "[":
+            in_class = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return None
+        i += 1
+    return _split_top_level_alternation(inner) if depth == 0 else None
+
+
+_ASCII_WORD = re.compile(r"[A-Za-z0-9_]")
+
+
+def _is_word_edged(term: str) -> bool:
+    """Both edges are ASCII word characters: that is all JS's ``\\b`` (the browser highlighter) counts, and ``\\b`` is meaningless
+    between CJK characters."""
+    return bool(term) and bool(_ASCII_WORD.fullmatch(term[0])) and bool(_ASCII_WORD.fullmatch(term[-1]))
+
+
+def _joined_regex(rows: list[dict]) -> tuple[str, bool]:
+    """One regex for *rows*: whole-word terms (plain terms with word-character edges, and the alternatives of any ``\\b(?:...)\\b`` rule)
+    share a single ``\\b(?:a|b|c)\\b`` group; every other pattern follows as its own alternative. The flag says a plain term gained word
+    boundaries, i.e. now matches whole words only."""
+    bounded: dict[str, None] = {}
+    others: dict[str, None] = {}
+    gained_boundaries = False
+    for r in rows:
+        is_regex, pattern = _effective_rule_pattern(r["is_regex"], str(r["keyword"] or ""))
+        if is_regex:
+            alt = _regex_alternative(pattern)
+            if not alt:
+                continue
+            unwrapped = _unwrap_bounded_group(alt)
+            if unwrapped is not None:
+                bounded.update(dict.fromkeys(unwrapped))
+            else:
+                others[alt] = None
+            continue
+        for term in split_keyword_terms(pattern):
+            if _is_word_edged(term):
+                bounded[_plain_term_to_regex(term)] = None
+                gained_boundaries = True
+            else:
+                others[_plain_term_to_regex(term)] = None
+    parts = ([r"\b(?:" + "|".join(bounded) + r")\b"] if bounded else []) + list(others)
+    return "|".join(parts), gained_boundaries
+
+
+def _effective_rule_pattern(is_regex: object, keyword: str) -> tuple[bool, str]:
+    """A plain keyword wrapped in /slashes/ is a regex (see build_keyword_matcher)."""
+    kw = (keyword or "").strip()
+    if not is_regex and len(kw) >= 3 and kw[0] == "/" and kw[-1] == "/":
+        return True, kw[1:-1]
+    return bool(is_regex), kw
+
+
+def _regex_alternative(pattern: str) -> str | None:
+    """*pattern* ready to sit beside others in an alternation, or None if joining would change what it means.
+
+    Alternation binds loosest, so no wrapping group is needed (and wrapping would renumber backreferences). A leading (?i) is redundant
+    -- matching is case-insensitive already -- so it is dropped; other inline flags, backreferences and named groups can't be joined."""
+    pattern = pattern.removeprefix("(?i)")
+    if not pattern or _UNJOINABLE_REGEX.search(pattern):
+        return None
+    try:
+        re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        return None
+    return pattern
+
+
+def _rule_is_mergeable(rule_type: str, row: dict) -> bool:
+    keyword = str(row["keyword"] or "").strip()
+    if not keyword or rule_type not in _MERGEABLE_RULE_TYPES:
+        return False
+    if not row["enabled"]:
+        return False  # a disabled rule is a draft; merging it with an enabled one would silently arm it (or disarm the other)
+    if rule_type == "tag_filter":
+        return True
+    if rule_duration.parse_duration_term(keyword):
+        return False  # a duration term only works as the whole keyword, never inside a list or alternation
+    is_regex, pattern = _effective_rule_pattern(row["is_regex"], keyword)
+    return _regex_alternative(pattern) is not None if is_regex else True
+
+
+def _joined_keyword(rule_type: str, rows: list[dict], as_regex: bool) -> str:
+    """The keyword one merged rule would carry."""
+    keywords = [str(r["keyword"] or "").strip() for r in rows]
+    if rule_type == "tag_filter":
+        return _union_tag_filter_specs([k for k in dict.fromkeys(keywords) if k])
+    if not as_regex:
+        # Flatten to the individual-term level, so merging a rule that is already a comma list doesn't repeat a term.
+        flat: dict[str, str] = {}
+        for kw in keywords:
+            for part in split_keyword_terms(kw):
+                flat.setdefault(part.lower(), part)
+        return ", ".join(flat.values())
+    return f"/{_joined_regex(rows)[0]}/"  # stored form: regex rules are slash-wrapped
+
+
+def _rule_terms(row: dict) -> set[str]:
+    """Comparable terms of a rule: plain list items, or the alternatives of a regex (``\\b(?:a|b)\\b`` unwrapped), lowercased with
+    ``\\s+``/``\\s?`` read as a space."""
+    is_regex, pattern = _effective_rule_pattern(row["is_regex"], str(row["keyword"] or ""))
+    if is_regex:
+        parts = _unwrap_bounded_group(pattern) or _split_top_level_alternation(pattern)
+    else:
+        parts = [fold_for_match(t) for t in split_keyword_terms(pattern)]
+    return {re.sub(r"\\s[+?*]?", " ", re.sub(r"\\b", "", p)).lower().strip() for p in parts if p.strip()}
+
+
+def _bucket_by_name(rule_type: str, rows: list[dict]) -> dict[str, list[dict]]:
+    """Split *rows* by name. Differently named rules are separate topics and never merge; an unnamed rule joins the one named group it
+    shares a term with (when exactly one does); otherwise it stays unnamed. (tag_filter specs aren't term lists, so
+    unnamed ones never move.)"""
+    buckets: dict[str, list[dict]] = {}
+    for r in rows:
+        buckets.setdefault(r["label"], []).append(r)
+    unnamed = buckets.pop("", [])
+    if not buckets or rule_type == "tag_filter":
+        if unnamed:
+            buckets[""] = unnamed
+        return buckets
+    named_terms = {label: set().union(*(_rule_terms(r) for r in members)) for label, members in buckets.items()}
+    left: list[dict] = []
+    for r in unnamed:
+        terms = _rule_terms(r)
+        hits = [label for label, nt in named_terms.items() if terms & nt]
+        if len(hits) == 1:
+            buckets[hits[0]].append(r)
+        else:
+            left.append(r)
+    if left:
+        buckets[""] = left
+    return buckets
+
+
+def _settings_key(row: dict) -> tuple:
+    return (
+        row["color"],
+        row["delivery"],
+        row["email_to"],
+        row["batch_time"],
+        int(row["batch_count"] or 0),
+        bool(row["cc_me"]),
+    )
+
+
+_MERGE_CANDIDATES_SQL = (
+    "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
+    " email_to, batch_time, batch_count, cc_me, sort_order, COALESCE(label, '') AS label"
+    " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
+    # Disabled tag filters are chip-tuning drafts (see toggle_feed_tag_filter); merging one would arm it.
+    " OR (type = 'tag_filter' AND enabled = 1)"
+    " ORDER BY sort_order ASC, rowid ASC"
+)
 
 
 def find_mergeable_rule_groups(conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
-    """Groups of 2+ rules that share type/scope/scope_id/search_in/is_regex
-    AND every other behavior-affecting field but differ only in keyword --
-    collapsible into one rule with a joined keyword list. A keyword was one
-    term until comma lists landed, so these accumulated from a time when one
-    rule per term was the only way to add a second.
+    """Groups of 2+ rules that share type/scope/scope_id/search_in/name/is_regex AND every other behavior-affecting field but differ
+    only in keyword -- collapsible into one rule with a joined keyword. Each group carries ``merged_keyword``, exactly what the merge
+    would produce, so the UI can show it before anything changes.
 
-    Two rules can share type/scope/search_in/is_regex and still carry a
-    *different* color/delivery/email setting and mean different things, so
-    each identity key is further split into settings-consistent subgroups
-    (2026-08-31) -- a folder with 2 orange rules, 2 blue rules and 1 green
-    rule offers the orange pair and the blue pair as two independent
-    mergeable groups, rather than reporting the whole five as one
-    "these differ, edit to match" blob the way a single identity-wide check
-    used to. The lone green rule has no partner either way and is silently
-    excluded, same as a genuinely solo identity group always has been.
-    ``mismatched`` now means the narrower thing that name always implied: 2+
-    *leftover* singletons under the same identity that still disagree with
-    each other once every already-agreeing pair has been pulled out.
+    A rule's name is part of its identity: a named rule is a deliberate topic, so differently named rules are never offered together.
+    Rules sharing type/scope/name but differing in color/delivery/email are split into settings-consistent subgroups; ``mismatched``
+    holds the leftover singletons that still disagree with each other.
     """
-    rows = conn.execute(
-        "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, sort_order"
-        " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
-        # Disabled tag filters are chip-tuning drafts (see toggle_feed_tag_filter); merging one would arm it.
-        " OR (type = 'tag_filter' AND enabled = 1)"
-        " ORDER BY sort_order ASC, rowid ASC"
-    ).fetchall()
     by_identity: dict[tuple, list[dict]] = {}
-    for r in rows:
-        key = (r["type"], r["scope"], r["scope_id"], r["search_in"], bool(r["is_regex"]))
-        by_identity.setdefault(key, []).append(dict(r))
+    for r in conn.execute(_MERGE_CANDIDATES_SQL).fetchall():
+        row = dict(r)
+        if not _rule_is_mergeable(row["type"], row):
+            continue
+        is_regex = _effective_rule_pattern(row["is_regex"], row["keyword"])[0]
+        key = (row["type"], row["scope"], row["scope_id"], row["search_in"], is_regex)
+        by_identity.setdefault(key, []).append(row)
 
     groups = []
     mismatched = []
-    for key, group_rows in by_identity.items():
-        if len(group_rows) < 2:
-            continue
+    for key, identity_rows in by_identity.items():
         rule_type, scope, scope_id, search_in, is_regex = key
-        by_settings: dict[tuple, list[dict]] = {}
-        for r in group_rows:
-            by_settings.setdefault(tuple(r[f] for f in _MERGE_IDENTITY_FIELDS), []).append(r)
+        for label, group_rows in _bucket_by_name(rule_type, identity_rows).items():
+            if len(group_rows) < 2:
+                continue
+            by_settings: dict[tuple, list[dict]] = {}
+            for r in group_rows:
+                by_settings.setdefault(_settings_key(r), []).append(r)
 
-        leftover: list[dict] = []
-        for settings_rows in by_settings.values():
-            if len(settings_rows) >= 2:
-                group = {
-                    "type": rule_type,
-                    "scope": scope,
-                    "scope_id": scope_id,
-                    "search_in": search_in,
-                    "is_regex": is_regex,
-                    "rules": settings_rows,
-                }
-                if rule_type == "tag_filter":
-                    group["behavior_change"] = _tag_filter_merge_changes_behavior([r["keyword"] for r in settings_rows])
-                groups.append(group)
-            else:
-                leftover.extend(settings_rows)
-        if len(leftover) >= 2:
-            mismatched.append(
-                {
-                    "type": rule_type,
-                    "scope": scope,
-                    "scope_id": scope_id,
-                    "search_in": search_in,
-                    "is_regex": is_regex,
-                    "rules": leftover,
-                }
-            )
+            base = {"type": rule_type, "scope": scope, "scope_id": scope_id, "search_in": search_in, "is_regex": is_regex, "label": label}
+            leftover: list[dict] = []
+            for settings_rows in by_settings.values():
+                if len(settings_rows) >= 2:
+                    group = {**base, "rules": settings_rows, "merged_keyword": _joined_keyword(rule_type, settings_rows, is_regex)}
+                    if rule_type == "tag_filter":
+                        group["behavior_change"] = _tag_filter_merge_changes_behavior([r["keyword"] for r in settings_rows])
+                    groups.append(group)
+                else:
+                    leftover.extend(settings_rows)
+            if len(leftover) >= 2:
+                mismatched.append({**base, "rules": leftover})
     return groups, mismatched
+
+
+def _collapse_rules(
+    conn: sqlite3.Connection,
+    rows: list[dict],
+    merged_keyword: str,
+    is_regex: bool,
+    rule_type: str,
+    scope: str,
+    scope_id: str,
+    search_in: str,
+    label: str,
+) -> dict | None:
+    """Replace *rows* (full highlight_keywords rows incl. rowid) with one rule carrying *merged_keyword* and *label*, at the earliest
+    sort_order."""
+    template = rows[0]
+    min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
+    # (scope, scope_id, keyword) is the primary key and the insert below is INSERT OR REPLACE: refuse rather than overwrite another rule
+    # (of another type) that already has the merged keyword.
+    clash = conn.execute(
+        "SELECT rowid FROM highlight_keywords WHERE scope = ? AND scope_id = ? AND keyword = ?", (scope, scope_id, merged_keyword)
+    ).fetchone()
+    if clash and clash["rowid"] not in {r["rowid"] for r in rows}:
+        return None
+    conn.executemany("DELETE FROM highlight_keywords WHERE rowid = ?", [(r["rowid"],) for r in rows])
+    add_highlight_keyword(
+        conn,
+        scope,
+        scope_id,
+        merged_keyword,
+        template["color"],
+        False,  # merged_keyword is already stored-form: /slashes/ for regex
+        rule_type,
+        search_in,
+        template["delivery"],
+        template["email_to"],
+        template["batch_time"],
+        template["batch_count"],
+        bool(template["cc_me"]),
+        template["enabled"],
+        template["dedup_window_hours"],
+        template["exclude_scope_ids"],
+        template["dedup_fuzzy_pct"],
+        template["dedup_min_title_words"],
+        template["webhook_url"],
+        template["webhook_format"],
+        bool(template["webhook_batch"]),
+        template["yt_playlist_id"],
+        template["yt_playlist_title"],
+        bool(template["yt_include_shorts"]),
+        bool(template["yt_mark_read"]),
+        template["yt_min_minutes"],
+        template["yt_max_minutes"],
+        label=label,
+    )
+    conn.execute(
+        "UPDATE highlight_keywords SET sort_order = ? WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND keyword = ?",
+        (min_sort_order, rule_type, scope, scope_id, search_in, merged_keyword),
+    )
+    return {
+        "type": rule_type,
+        "scope": scope,
+        "scope_id": scope_id,
+        "search_in": search_in,
+        "is_regex": is_regex,
+        "keyword": merged_keyword,
+        "merged_count": len(rows),
+    }
+
+
+def _merge_candidate_rows(
+    conn: sqlite3.Connection, rule_type: str, scope: str, scope_id: str, search_in: str, label: str, is_regex: bool | None = None
+) -> list[dict]:
+    """Current mergeable rows of the *label* group for an identity, re-derived from the DB (same bucketing as the finders) so a stale
+    preview can't merge the wrong rows. ``is_regex`` limits the population to that effective kind, as find_mergeable_rule_groups does."""
+    # Same draft exclusion as find_mergeable_rule_groups: a disabled tag filter is never swept into a merge.
+    enabled_clause = " AND enabled = 1" if rule_type == "tag_filter" else ""
+    rows = conn.execute(
+        "SELECT rowid, *, COALESCE(label, '') AS label FROM highlight_keywords"
+        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?" + enabled_clause + " ORDER BY sort_order ASC, rowid ASC",
+        (rule_type, scope, scope_id, search_in),
+    ).fetchall()
+    candidates = [d for d in (dict(r) for r in rows) if _rule_is_mergeable(rule_type, d)]
+    if is_regex is not None:
+        candidates = [d for d in candidates if _effective_rule_pattern(d["is_regex"], d["keyword"])[0] == is_regex]
+    return _bucket_by_name(rule_type, candidates).get(label, [])
 
 
 def merge_highlight_rule_group(
@@ -5523,183 +5834,60 @@ def merge_highlight_rule_group(
     batch_time: str,
     batch_count: int,
     cc_me: bool,
+    label: str = "",
+    expected_keyword: str | None = None,
 ) -> dict | None:
-    """Collapse every rule sharing (type, scope, scope_id, search_in, is_regex)
-    AND the given color/delivery/email/batch/cc_me settings into one, joining
-    their keywords (comma list, or regex alternation when is_regex).
-    Re-derives the current matching rows from these criteria rather than
-    trusting a caller-supplied row list, so a stale preview can't merge the
-    wrong rows.
-
-    The settings are part of the match itself now (2026-08-31), not a
-    same-group precondition checked after the fact -- an identity key can
-    hold several settings-distinct subgroups (see find_mergeable_rule_groups),
-    and a merge must act on exactly the subgroup that was offered, not
-    whichever settings happen to be most common among rows sharing identity.
-
-    Refuses (returns None) when fewer than 2 rows match.
-    """
+    """Collapse every rule sharing (type, scope, scope_id, search_in, name, is_regex) AND the given color/delivery/email/batch/cc_me
+    settings into one, joining their keywords (comma list, or regex alternation when is_regex). Refuses (returns None) when fewer than
+    2 rows match."""
     if rule_type not in _MERGEABLE_RULE_TYPES:
         return None
-    # Same draft exclusion as find_mergeable_rule_groups: a disabled tag filter is never swept into a merge.
-    enabled_clause = " AND enabled = 1" if rule_type == "tag_filter" else ""
-    rows = conn.execute(
-        "SELECT rowid, * FROM highlight_keywords"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
-        " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?"
-        + enabled_clause
-        + " ORDER BY sort_order ASC, rowid ASC",
-        (
-            rule_type,
-            scope,
-            scope_id,
-            search_in,
-            1 if is_regex else 0,
-            color,
-            delivery,
-            email_to,
-            batch_time,
-            batch_count,
-            1 if cc_me else 0,
-        ),
-    ).fetchall()
+    want = (color, delivery, email_to, batch_time, int(batch_count or 0), bool(cc_me))
+    rows = [
+        r for r in _merge_candidate_rows(conn, rule_type, scope, scope_id, search_in, label, bool(is_regex)) if _settings_key(r) == want
+    ]
     if len(rows) < 2:
         return None
-    rows = [dict(r) for r in rows]
-
-    template = rows[0]
-    seen_kw: list[str] = []
-    for r in rows:
-        kw = str(r["keyword"] or "").strip()
-        if kw and kw not in seen_kw:
-            seen_kw.append(kw)
-    if rule_type == "tag_filter":
-        merged_keyword = _union_tag_filter_specs(seen_kw)
-    elif is_regex:
-        merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
-    else:
-        # Flatten to the individual-keyword level too, so merging a rule that
-        # is already itself a comma list doesn't produce a repeated term.
-        flat: list[str] = []
-        seen_lower: set[str] = set()
-        for kw in seen_kw:
-            for part in kw.split(","):
-                part = part.strip()
-                if part and part.lower() not in seen_lower:
-                    seen_lower.add(part.lower())
-                    flat.append(part)
-        merged_keyword = ", ".join(flat)
-
-    min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
-    conn.execute(
-        "DELETE FROM highlight_keywords"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ?"
-        " AND color = ? AND delivery = ? AND email_to = ? AND batch_time = ? AND batch_count = ? AND cc_me = ?" + enabled_clause,
-        (
-            rule_type,
-            scope,
-            scope_id,
-            search_in,
-            1 if is_regex else 0,
-            color,
-            delivery,
-            email_to,
-            batch_time,
-            batch_count,
-            1 if cc_me else 0,
-        ),
-    )
-    add_highlight_keyword(
-        conn,
-        scope,
-        scope_id,
-        merged_keyword,
-        template["color"],
-        is_regex,
-        rule_type,
-        search_in,
-        template["delivery"],
-        template["email_to"],
-        template["batch_time"],
-        template["batch_count"],
-        bool(template["cc_me"]),
-        template["enabled"],
-        template["dedup_window_hours"],
-        template["exclude_scope_ids"],
-        template["dedup_fuzzy_pct"],
-        template["dedup_min_title_words"],
-        template["webhook_url"],
-        template["webhook_format"],
-        bool(template["webhook_batch"]),
-        template["yt_playlist_id"],
-        template["yt_playlist_title"],
-        bool(template["yt_include_shorts"]),
-        bool(template["yt_mark_read"]),
-        template["yt_min_minutes"],
-        template["yt_max_minutes"],
-        label=str(template.get("label") or ""),
-    )
-    conn.execute(
-        "UPDATE highlight_keywords SET sort_order = ?"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = ? AND keyword = ?",
-        (min_sort_order, rule_type, scope, scope_id, search_in, 1 if is_regex else 0, merged_keyword),
-    )
-    return {
-        "type": rule_type,
-        "scope": scope,
-        "scope_id": scope_id,
-        "search_in": search_in,
-        "is_regex": is_regex,
-        "keyword": merged_keyword,
-        "merged_count": len(rows),
-    }
+    merged = _joined_keyword(rule_type, rows, bool(is_regex))
+    if expected_keyword is not None and merged != expected_keyword:
+        return None  # the group changed since the card was shown; the click must merge what the card previewed
+    return _collapse_rules(conn, rows, merged, bool(is_regex), rule_type, scope, scope_id, search_in, label)
 
 
 def find_regex_convertible_rule_groups(conn: sqlite3.Connection) -> list[dict]:
-    """Groups of 2+ rules sharing (type, scope, scope_id, search_in) that span
-    BOTH a regex and a plain-text rule -- a same-is_regex group is already
-    handled by find_mergeable_rule_groups, so this only surfaces the boundary
-    case that one can't see. A plain-text keyword is always representable as
-    an escaped regex (re.escape), so nothing here is actually blocked by
-    is_regex disagreeing -- only by shown deliberately as its own suggestion
-    tier since it changes a rule's is_regex, not just its keyword. Raised
-    2026-08-31: "Lowe's" (plain) sat next to a regex rule on the same folder
-    with nothing offering to combine them.
-
-    Same behavior-identity guard as find_mergeable_rule_groups -- a group
-    whose rules carry different color/delivery/email settings is excluded
-    entirely, not silently merged with one side's settings winning."""
-    rows = conn.execute(
-        "SELECT scope, scope_id, keyword, color, is_regex, enabled, type, search_in, delivery,"
-        " email_to, batch_time, batch_count, cc_me, sort_order"
-        " FROM highlight_keywords WHERE type IN ('highlight', 'mark_as_read')"
-        # Disabled tag filters are chip-tuning drafts (see toggle_feed_tag_filter); merging one would arm it.
-        " OR (type = 'tag_filter' AND enabled = 1)"
-        " ORDER BY sort_order ASC, rowid ASC"
-    ).fetchall()
+    """Groups of 2+ rules sharing (type, scope, scope_id, search_in, name) that span BOTH a regex and a plain-text rule -- the boundary
+    find_mergeable_rule_groups can't cross. Plain terms become equivalent regex alternatives, so nothing is blocked; it is its own tier
+    because it changes a rule's is_regex. Same identity guards as find_mergeable_rule_groups (name, color, delivery, email); each group
+    carries ``merged_keyword`` for the preview."""
     by_identity: dict[tuple, list[dict]] = {}
-    for r in rows:
-        key = (r["type"], r["scope"], r["scope_id"], r["search_in"])
-        by_identity.setdefault(key, []).append(dict(r))
+    for r in conn.execute(_MERGE_CANDIDATES_SQL).fetchall():
+        row = dict(r)
+        if not _rule_is_mergeable(row["type"], row) or row["type"] == "tag_filter":
+            continue
+        by_identity.setdefault((row["type"], row["scope"], row["scope_id"], row["search_in"]), []).append(row)
 
     groups = []
-    for key, group_rows in by_identity.items():
-        if len(group_rows) < 2:
-            continue
-        if len({bool(r["is_regex"]) for r in group_rows}) < 2:
-            continue  # all-regex or all-plain -- find_mergeable_rule_groups' territory
-        if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in group_rows}) > 1:
-            continue
+    for key, identity_rows in by_identity.items():
         rule_type, scope, scope_id, search_in = key
-        groups.append(
-            {
-                "type": rule_type,
-                "scope": scope,
-                "scope_id": scope_id,
-                "search_in": search_in,
-                "rules": group_rows,
-            }
-        )
+        for label, group_rows in _bucket_by_name(rule_type, identity_rows).items():
+            if len(group_rows) < 2:
+                continue
+            if len({_effective_rule_pattern(r["is_regex"], r["keyword"])[0] for r in group_rows}) < 2:
+                continue  # all-regex or all-plain -- find_mergeable_rule_groups' territory
+            if len({_settings_key(r) for r in group_rows}) > 1:
+                continue
+            groups.append(
+                {
+                    "type": rule_type,
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "search_in": search_in,
+                    "label": label,
+                    "rules": group_rows,
+                    "merged_keyword": _joined_keyword(rule_type, group_rows, True),
+                    "adds_word_boundaries": _joined_regex(group_rows)[1],
+                }
+            )
     return groups
 
 
@@ -5709,97 +5897,24 @@ def merge_regex_convertible_rule_group(
     scope: str,
     scope_id: str,
     search_in: str,
+    label: str = "",
+    expected_keyword: str | None = None,
 ) -> dict | None:
-    """Like merge_highlight_rule_group, but across the is_regex boundary: a
-    plain-text keyword is escaped (re.escape) before joining, so the result
-    matches exactly the same literal text the plain rule did -- see
-    find_regex_convertible_rule_groups. Re-derives the current matching rows
-    rather than trusting a caller-supplied list, same reasoning as the
-    regex-only merge. Refuses (returns None) when fewer than 2 rows match, the
-    group turns out to be single-is_regex after all (stale suggestion), or
-    they carry different color/delivery/email settings."""
-    if rule_type not in _MERGEABLE_RULE_TYPES:
+    """Merge a group across the is_regex boundary into one regex rule. Refuses (None) when fewer than 2 rows match, the group is
+    single-is_regex after all (stale suggestion), or the rules carry different color/delivery/email settings."""
+    if rule_type not in _MERGEABLE_RULE_TYPES or rule_type == "tag_filter":
         return None
-    rows = conn.execute(
-        "SELECT rowid, * FROM highlight_keywords"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?"
-        " ORDER BY sort_order ASC, rowid ASC",
-        (rule_type, scope, scope_id, search_in),
-    ).fetchall()
+    rows = _merge_candidate_rows(conn, rule_type, scope, scope_id, search_in, label)
     if len(rows) < 2:
         return None
-    rows = [dict(r) for r in rows]
-    if len({bool(r["is_regex"]) for r in rows}) < 2:
+    if len({_effective_rule_pattern(r["is_regex"], r["keyword"])[0] for r in rows}) < 2:
         return None
-    if len({tuple(r[f] for f in _MERGE_IDENTITY_FIELDS) for r in rows}) > 1:
+    if len({_settings_key(r) for r in rows}) > 1:
         return None
-
-    template = rows[0]
-    seen_kw: list[str] = []
-    for r in rows:
-        kw = str(r["keyword"] or "").strip()
-        if not kw:
-            continue
-        # A plain keyword's commas are OR-term separators (split_keyword_terms),
-        # not literal text -- re.escape(kw) on the whole string turned "Pixel
-        # Watch, Ryobi, Google Pixel" into one dead literal requiring all three
-        # names adjacent with commas, instead of three alternatives. Escape each
-        # term individually, then alternate them, before this whole row becomes
-        # one outer (...) group below.
-        pattern = kw if r["is_regex"] else "|".join(re.escape(term) for term in split_keyword_terms(kw))
-        if pattern not in seen_kw:
-            seen_kw.append(pattern)
-    merged_keyword = "|".join(f"({kw})" for kw in seen_kw)
-
-    min_sort_order = min(int(r["sort_order"] or 0) for r in rows)
-    conn.execute(
-        "DELETE FROM highlight_keywords WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ?",
-        (rule_type, scope, scope_id, search_in),
-    )
-    add_highlight_keyword(
-        conn,
-        scope,
-        scope_id,
-        merged_keyword,
-        template["color"],
-        True,
-        rule_type,
-        search_in,
-        template["delivery"],
-        template["email_to"],
-        template["batch_time"],
-        template["batch_count"],
-        bool(template["cc_me"]),
-        template["enabled"],
-        template["dedup_window_hours"],
-        template["exclude_scope_ids"],
-        template["dedup_fuzzy_pct"],
-        template["dedup_min_title_words"],
-        template["webhook_url"],
-        template["webhook_format"],
-        bool(template["webhook_batch"]),
-        template["yt_playlist_id"],
-        template["yt_playlist_title"],
-        bool(template["yt_include_shorts"]),
-        bool(template["yt_mark_read"]),
-        template["yt_min_minutes"],
-        template["yt_max_minutes"],
-        label=str(template.get("label") or ""),
-    )
-    conn.execute(
-        "UPDATE highlight_keywords SET sort_order = ?"
-        " WHERE type = ? AND scope = ? AND scope_id = ? AND search_in = ? AND is_regex = 1 AND keyword = ?",
-        (min_sort_order, rule_type, scope, scope_id, search_in, merged_keyword),
-    )
-    return {
-        "type": rule_type,
-        "scope": scope,
-        "scope_id": scope_id,
-        "search_in": search_in,
-        "is_regex": True,
-        "keyword": merged_keyword,
-        "merged_count": len(rows),
-    }
+    merged = _joined_keyword(rule_type, rows, True)
+    if expected_keyword is not None and merged != expected_keyword:
+        return None
+    return _collapse_rules(conn, rows, merged, True, rule_type, scope, scope_id, search_in, label)
 
 
 def _split_plain_keywords(raw: str) -> set[str]:
@@ -5854,6 +5969,11 @@ def _find_redundant_tag_filter_feed_rules(conn: sqlite3.Connection) -> list[dict
     return redundant
 
 
+def _is_plain_term_list(keyword: str) -> bool:
+    """A keyword that is a plain comma list: not a /regex/ and not a duration term."""
+    return not _effective_rule_pattern(False, keyword)[0] and not rule_duration.parse_duration_term(keyword)
+
+
 def _find_redundant_keyword_feed_rules(conn: sqlite3.Connection) -> list[dict]:
     """Feed-scoped rules already fully covered by a same-type, same-search_in
     folder rule on a folder the feed belongs to -- the folder rule already
@@ -5866,12 +5986,14 @@ def _find_redundant_keyword_feed_rules(conn: sqlite3.Connection) -> list[dict]:
         "SELECT scope_id AS feed_url, keyword, type, search_in FROM highlight_keywords"
         " WHERE scope = 'feed' AND is_regex = 0 AND type IN ('highlight', 'mark_as_read')"
     ).fetchall()
+    feed_rows = [r for r in feed_rows if _is_plain_term_list(r["keyword"])]
     if not feed_rows:
         return []
     folder_rows = conn.execute(
         "SELECT scope_id AS folder_id, keyword, type, search_in FROM highlight_keywords"
         " WHERE scope = 'folder' AND is_regex = 0 AND type IN ('highlight', 'mark_as_read')"
     ).fetchall()
+    folder_rows = [r for r in folder_rows if _is_plain_term_list(r["keyword"])]
     if not folder_rows:
         return []
     folder_keywords: dict[tuple, set[str]] = {}
@@ -6019,6 +6141,7 @@ def add_highlight_keyword(
         rule_type = "highlight"
     if search_in not in _HIGHLIGHT_VALID_SEARCH_IN:
         search_in = "title"
+    keyword, is_regex = rule_duration.wrap_regex_keyword(rule_type, keyword, is_regex)
     if delivery not in _HIGHLIGHT_VALID_DELIVERY:
         delivery = "immediately"
     if webhook_format not in WEBHOOK_VALID_FORMATS:
@@ -7289,6 +7412,9 @@ def build_keyword_matcher(keyword: str, is_regex: bool):
     Shared by the dry-run, Run Now and live-refresh paths, which each built their
     own copy of this and could drift apart.
     """
+    kw = keyword.strip()
+    if not is_regex and len(kw) >= 3 and kw[0] == "/" and kw[-1] == "/":
+        keyword, is_regex = kw[1:-1], True  # /slashes/ mean regex without the toggle
     if is_regex:
         pattern = re.compile(keyword, re.IGNORECASE)
         return lambda text: bool(pattern.search(text)) if text else False

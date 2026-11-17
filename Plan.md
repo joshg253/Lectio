@@ -511,9 +511,10 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 - `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
 - Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.
 
-### Mergeable Mark as Read rules: plain text to regex
-Two Mark as Read rules on Deals could be one if the plain-text rule became regex, but combining never behaves quite the same without word boundaries:
-`\b(?:Kanye\s+West|Micro\s?Center|Lowe['’]s|Chromebooks?|Post\s+Malone)\b` plus a plain list (`Taylor Swift, My Chemical Romance`). Offer the merge as a suggested regex with boundaries added, not a blind join.
+### Rule merging: one suggestion tier
+Regex rules are `/slash/`-wrapped now, so the separate "convert & merge" tier (`find_regex_convertible_rule_groups`) could fold into
+`find_mergeable_rule_groups`: one identity without the regex distinction, one card, and no overlapping plain-only and mixed suggestions
+for the same rules.
 
 ### YouTube playlist rule follow-ups
 - A playlist rule scoped to a non-YouTube feed or folder is accepted but can never add anything; warn in the editor when the scope has no YouTube feeds.
