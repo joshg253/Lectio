@@ -228,3 +228,45 @@ def test_digest_item_shows_its_lead_image_as_a_thumbnail():
         [{"title": "One", "link": "https://a.test/1", "lead_image_url": LEAD}, {"title": "Two", "lead_image_url": "javascript:x"}]
     )
     assert out.count('class="item-thumb"') == 1 and f'src="{LEAD}"' in out
+
+
+def test_subject_collapses_newlines_in_the_title(monkeypatch):
+    calls = []
+
+    class FakeEmails:
+        @staticmethod
+        def send(payload):
+            calls.append(payload)
+
+    import resend as _resend
+
+    monkeypatch.setattr(_resend, "Emails", FakeEmails)
+
+    send_article_email(
+        api_key="re_test",
+        from_addr="from@example.com",
+        to_addr="to@example.com",
+        title="Line one\r\n  line two\n\tthree",
+        feed_title="F",
+        link="https://example.com/x",
+        excerpt="e",
+    )
+
+    assert calls[0]["subject"] == "Line one line two three"
+
+
+def test_subject_falls_back_when_title_is_only_whitespace(monkeypatch):
+    calls = []
+
+    class FakeEmails:
+        @staticmethod
+        def send(payload):
+            calls.append(payload)
+
+    import resend as _resend
+
+    monkeypatch.setattr(_resend, "Emails", FakeEmails)
+
+    send_article_email("k", "a@example.com", "b@example.com", " \n ", "F", "https://example.com/x", "e")
+
+    assert calls[0]["subject"] == "(untitled)"
