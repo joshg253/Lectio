@@ -317,7 +317,7 @@ def test_merge_joins_regex_keywords_as_alternation(env):
         conn.commit()
         rows = conn.execute("SELECT keyword FROM highlight_keywords WHERE scope = 'global'").fetchall()
     assert len(rows) == 1
-    assert rows[0]["keyword"] == "(foo.*bar)|(baz+)"
+    assert rows[0]["keyword"] == "/foo.*bar|baz+/"
 
 
 def test_merge_dedupes_overlapping_individual_keywords(env):
@@ -663,7 +663,7 @@ def test_a_plain_and_a_regex_rule_on_the_same_scope_are_flagged(env):
     with main.get_meta_connection() as conn:
         groups = main.find_regex_convertible_rule_groups(conn)
     assert len(groups) == 1
-    assert {r["keyword"] for r in groups[0]["rules"]} == {"Lowe's", "AirPods|iPhone"}
+    assert {r["keyword"] for r in groups[0]["rules"]} == {"Lowe's", "/AirPods|iPhone/"}
 
 
 def test_all_regex_or_all_plain_groups_are_excluded(env):
@@ -697,17 +697,15 @@ def test_merge_regex_convert_escapes_the_plain_keyword(env):
         rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
     assert result is not None
     assert len(rows) == 1
-    assert rows[0]["is_regex"] == 1
-    # re.escape leaves the apostrophe alone (not a regex metacharacter, and
-    # not escaped by Python's re.escape since 3.7) -- Josh's own reason for
-    # not hand-writing this rule as regex was hesitating over exactly that
-    # escaping, which turns out to be a non-issue here.
-    assert rows[0]["keyword"] == "(Lowe's)|(AirPods|iPhone)"
+    assert rows[0]["is_regex"] == 0  # regex lives in the /slashes/ now
+    # The apostrophe also matches its curly variants, as the plain matcher does; no wrapping groups.
+    assert rows[0]["keyword"] == "/\\b(?:Lowe['\u2018\u2019]s)\\b|AirPods|iPhone/"
     import re as _re
 
-    assert _re.search(rows[0]["keyword"], "Lowe's has a sale")
-    assert _re.search(rows[0]["keyword"], "New AirPods dropped")
-    assert not _re.search(rows[0]["keyword"], "Something else entirely")
+    assert _re.search(rows[0]["keyword"][1:-1], "Lowe's has a sale")
+    assert _re.search(rows[0]["keyword"][1:-1], "Lowe\u2019s has a sale")
+    assert _re.search(rows[0]["keyword"][1:-1], "New AirPods dropped")
+    assert not _re.search(rows[0]["keyword"][1:-1], "Something else entirely")
 
 
 def test_merge_regex_convert_splits_a_plain_comma_list(env):
@@ -728,14 +726,14 @@ def test_merge_regex_convert_splits_a_plain_comma_list(env):
     # The bug produced "(Pixel\ Watch,\ Ryobi,\ Google\ Pixel)|(\bDell\b)" --
     # one dead literal requiring all three names adjacent with commas. Each
     # term must be its own alternative instead.
-    assert keyword == r"(Pixel\ Watch|Ryobi|Google\ Pixel)|(\bDell\b)"
+    assert keyword == r"/\b(?:Pixel\s+Watch|Ryobi|Google\s+Pixel)\b|\bDell\b/"
     import re as _re
 
-    assert _re.search(keyword, "New Pixel Watch announced")
-    assert _re.search(keyword, "Ryobi tools on sale")
-    assert _re.search(keyword, "Google Pixel 10 review")
-    assert _re.search(keyword, "Dell XPS refresh")
-    assert not _re.search(keyword, "Something else entirely")
+    assert _re.search(keyword[1:-1], "New Pixel Watch announced")
+    assert _re.search(keyword[1:-1], "Ryobi tools on sale")
+    assert _re.search(keyword[1:-1], "Google Pixel 10 review")
+    assert _re.search(keyword[1:-1], "Dell XPS refresh")
+    assert not _re.search(keyword[1:-1], "Something else entirely")
 
 
 def test_merge_regex_convert_refuses_when_settings_mismatch(env):
@@ -793,4 +791,220 @@ def test_merge_group_regex_convert_route_applies_and_persists(env):
     assert r.json()["ok"] is True
     with main.get_meta_connection() as conn:
         rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
-    assert len(rows) == 1 and rows[0]["is_regex"] == 1
+    assert len(rows) == 1 and rows[0]["is_regex"] == 0
+    assert rows[0]["keyword"].startswith("/") and rows[0]["keyword"].endswith("/")
+
+
+# --- names, joinability, previews (rule-merging rework) ------------------------------------------------------------------------------
+
+
+def _merge_args(label="", is_regex=False):
+    return ("highlight", "global", "", "title", is_regex, "yellow", "immediately", "", "", 0, False, label)
+
+
+def test_differently_named_rules_are_never_offered_together(env):
+    _add_rule("global", "", "apple", is_regex=False)
+    _add_rule("global", "", "iphone", is_regex=False)
+    with main.get_meta_connection() as conn:
+        conn.execute("UPDATE highlight_keywords SET label = 'Apple stuff' WHERE keyword = 'apple'")
+        conn.execute("UPDATE highlight_keywords SET label = 'Music' WHERE keyword = 'iphone'")
+        conn.commit()
+        groups, mismatched = main.find_mergeable_rule_groups(conn)
+        assert groups == [] and mismatched == []
+        assert main.merge_highlight_rule_group(conn, *_merge_args(label="Apple stuff")) is None
+
+
+def test_same_named_rules_merge_and_keep_the_name(env):
+    _add_rule("global", "", "apple", is_regex=False)
+    _add_rule("global", "", "iphone", is_regex=False)
+    _add_rule("global", "", "unrelated", is_regex=False)
+    with main.get_meta_connection() as conn:
+        conn.execute("UPDATE highlight_keywords SET label = 'Apple stuff' WHERE keyword IN ('apple', 'iphone')")
+        conn.commit()
+        groups, _ = main.find_mergeable_rule_groups(conn)
+        assert [g["label"] for g in groups] == ["Apple stuff"]
+        assert groups[0]["merged_keyword"] == "apple, iphone"
+        main.merge_highlight_rule_group(conn, *_merge_args(label="Apple stuff"))
+        conn.commit()
+        rows = conn.execute("SELECT keyword, label FROM highlight_keywords ORDER BY keyword").fetchall()
+    assert [(r["keyword"], r["label"]) for r in rows] == [("apple, iphone", "Apple stuff"), ("unrelated", "")]
+
+
+def test_regex_with_backreference_or_named_group_or_flags_is_left_out(env):
+    _add_rule("global", "", r"(\w)\1", is_regex=True)
+    _add_rule("global", "", r"(?P<x>a)b", is_regex=True)
+    _add_rule("global", "", r"(?s)a.b", is_regex=True)
+    _add_rule("global", "", "fine", is_regex=True)
+    _add_rule("global", "", "also fine", is_regex=True)
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    assert len(groups) == 1
+    assert groups[0]["merged_keyword"] == "/fine|also fine/"
+
+
+def test_leading_inline_ignorecase_is_dropped_when_joining(env):
+    _add_rule("global", "", "(?i)foo", is_regex=True)
+    _add_rule("global", "", "bar", is_regex=True)
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    assert groups[0]["merged_keyword"] == "/foo|bar/"
+
+
+def test_duration_rules_never_merge(env):
+    _add_rule("global", "", "=2-10", is_regex=False, type="mark_as_read")
+    _add_rule("global", "", "<1:00", is_regex=False, type="mark_as_read")
+    _add_rule("global", "", "spoiler", is_regex=False, type="mark_as_read")
+    with main.get_meta_connection() as conn:
+        groups, mismatched = main.find_mergeable_rule_groups(conn)
+        convertible = main.find_regex_convertible_rule_groups(conn)
+    assert groups == [] and mismatched == [] and convertible == []
+
+
+def test_slash_wrapped_plain_rule_counts_as_regex(env):
+    _add_rule("global", "", "/^live (at|from)/", is_regex=False)
+    _add_rule("global", "", "interview", is_regex=False)
+    with main.get_meta_connection() as conn:
+        assert main.find_mergeable_rule_groups(conn)[0] == []
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+        assert group["merged_keyword"] == "/\\b(?:interview)\\b|^live (at|from)/"
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title")
+    assert result is not None and result["is_regex"] is True
+
+
+def test_converted_plain_terms_match_whole_words_and_curly_quotes(env):
+    import re as _re
+
+    _add_rule("global", "", "Pixel Watch, Lowe's, Mac", is_regex=False)
+    _add_rule("global", "", r"\bDell\b", is_regex=True)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+    assert group["adds_word_boundaries"] is True
+    pattern = _re.compile(group["merged_keyword"][1:-1], _re.IGNORECASE)
+    for title in ["pixel watch 3", "Pixel  Watch deal", "Lowe\u2019s sale", "LOWE'S", "Mac deals", "Dell XPS"]:
+        assert pattern.search(title), title
+    # Whole words only now: the plain rule matched inside these.
+    for title in ["Pixelwatch", "Macintosh", "Pineapple Macbook"]:
+        assert not pattern.search(title), title
+
+
+def test_bounded_regex_groups_and_plain_terms_share_one_group(env):
+    _add_rule("global", "", r"\b(?:Ryobi|Dell|Pixel\s+Watch)\b", is_regex=True)
+    _add_rule("global", "", "iPad, Apple Watch", is_regex=False)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+    assert group["merged_keyword"] == r"/\b(?:Ryobi|Dell|Pixel\s+Watch|iPad|Apple\s+Watch)\b/"
+
+
+def test_two_bounded_regex_rules_combine_into_one_group(env):
+    _add_rule("global", "", r"\b(?:a|b)\b", is_regex=True)
+    _add_rule("global", "", r"\b(?:c(?:d|e)|f)\b", is_regex=True)
+    with main.get_meta_connection() as conn:
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    assert groups[0]["merged_keyword"] == r"/\b(?:a|b|c(?:d|e)|f)\b/"
+
+
+def test_group_that_only_looks_bounded_is_not_unwrapped(env):
+    _add_rule("global", "", r"\b(?:a)\b|\b(?:b)\b", is_regex=True)
+    _add_rule("global", "", "x", is_regex=False)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+    assert group["merged_keyword"] == r"/\b(?:x)\b|\b(?:a)\b|\b(?:b)\b/"
+
+
+def test_converted_keyword_with_parens_stays_readable(env):
+    _add_rule("global", "", "REVIEW$", is_regex=True)
+    _add_rule("global", "", "(Pat's Game Corner)", is_regex=False)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+    assert group["merged_keyword"] == "/REVIEW$|\\(Pat['\u2018\u2019]s\\s+Game\\s+Corner\\)/"
+
+
+def test_regex_convert_preview_matches_the_merged_result(env):
+    _add_rule("global", "", "Lowe's", is_regex=False)
+    _add_rule("global", "", "AirPods|iPhone", is_regex=True)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+        main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title")
+        conn.commit()
+        (row,) = conn.execute("SELECT keyword FROM highlight_keywords").fetchall()
+    assert row["keyword"] == group["merged_keyword"]
+
+
+def test_unnamed_rule_sharing_a_term_is_folded_into_the_named_one(env):
+    _add_rule("global", "", r"\b(?:Ryobi|Dell|Pixel\s+Watch|Google\s+Pixel)\b", is_regex=True)
+    _add_rule("global", "", r"^(?!.*\bandroid\b).*\b(?:iOS|iPhone)\b", is_regex=True)
+    _add_rule("global", "", "Google Pixel, Pixel Buds, Pixel Watch", is_regex=False)
+    with main.get_meta_connection() as conn:
+        conn.execute("UPDATE highlight_keywords SET label = 'Brands' WHERE keyword LIKE '%Ryobi%'")
+        conn.execute("UPDATE highlight_keywords SET label = 'Phones' WHERE keyword LIKE '%iPhone%'")
+        conn.commit()
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+        assert group["label"] == "Brands"
+        assert group["merged_keyword"] == r"/\b(?:Ryobi|Dell|Pixel\s+Watch|Google\s+Pixel|Pixel\s+Buds)\b/"
+        result = main.merge_regex_convertible_rule_group(conn, "highlight", "global", "", "title", "Brands")
+        conn.commit()
+        rows = conn.execute("SELECT keyword, label FROM highlight_keywords ORDER BY label").fetchall()
+    assert result is not None
+    assert [r["label"] for r in rows] == ["Brands", "Phones"]  # the unnamed plain rule is gone, absorbed
+
+
+def test_unnamed_rule_matching_two_named_groups_stays_put(env):
+    _add_rule("global", "", "apple, iphone", is_regex=False)
+    _add_rule("global", "", "iphone, ipad", is_regex=False)
+    _add_rule("global", "", "iphone case, cable", is_regex=False)
+    _add_rule("global", "", "iphone", is_regex=False)
+    with main.get_meta_connection() as conn:
+        conn.execute("UPDATE highlight_keywords SET label = 'A' WHERE keyword = 'apple, iphone'")
+        conn.execute("UPDATE highlight_keywords SET label = 'B' WHERE keyword = 'iphone, ipad'")
+        conn.commit()
+        groups, _ = main.find_mergeable_rule_groups(conn)
+    # 'iphone' hits both A and B -> ambiguous, stays unnamed; the two unnamed rules merge together instead.
+    assert [(g["label"], g["merged_keyword"]) for g in groups] == [("", "iphone case, cable, iphone")]
+
+
+def test_disabled_rules_are_never_offered_for_merging(env):
+    _add_rule("global", "", "apple", is_regex=False)
+    _add_rule("global", "", "iphone", is_regex=False, enabled=0)
+    with main.get_meta_connection() as conn:
+        assert main.find_mergeable_rule_groups(conn) == ([], [])
+        assert main.merge_highlight_rule_group(conn, *_merge_args()) is None
+
+
+def test_merge_refuses_when_the_group_changed_since_the_card(env):
+    _add_rule("global", "", "apple", is_regex=False)
+    _add_rule("global", "", "iphone", is_regex=False)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_mergeable_rule_groups(conn)[0]
+    _add_rule("global", "", "ipad", is_regex=False)  # appears after the card was shown
+    with main.get_meta_connection() as conn:
+        args = _merge_args()
+        assert main.merge_highlight_rule_group(conn, *args, group["merged_keyword"]) is None
+        assert main.merge_highlight_rule_group(conn, *args, "apple, iphone, ipad") is not None
+
+
+def test_merge_never_overwrites_another_rule_with_the_same_keyword(env):
+    _add_rule("global", "", "a", is_regex=False, type="mark_as_read")
+    _add_rule("global", "", "b", is_regex=False, type="mark_as_read")
+    _add_rule("global", "", "a, b", is_regex=False, type="highlight")  # same scope + keyword as the merge result, other type
+    with main.get_meta_connection() as conn:
+        args = ("mark_as_read", "global", "", "title", False, "yellow", "immediately", "", "", 0, False)
+        assert main.merge_highlight_rule_group(conn, *args) is None
+        assert conn.execute("SELECT COUNT(*) FROM highlight_keywords").fetchone()[0] == 3
+
+
+def test_non_ascii_terms_are_not_given_word_boundaries(env):
+    _add_rule("global", "", r"/\b(?:foo)\b/", is_regex=False)
+    _add_rule("global", "", "café, Tokyo", is_regex=False)
+    with main.get_meta_connection() as conn:
+        (group,) = main.find_regex_convertible_rule_groups(conn)
+    # JS's \b is ASCII-only, so "café" stays a standalone alternative instead of sitting inside \b(?:...)\b
+    assert group["merged_keyword"] == r"/\b(?:foo|Tokyo)\b|café/"
+
+
+def test_redundancy_check_ignores_slash_regex_rules(env):
+    fid = _make_folder("F")
+    _add_feed_to_folder(FEED, fid)
+    _add_rule("folder", str(fid), "/cat/, dog", is_regex=False, type="mark_as_read")
+    _add_rule("feed", FEED, "/cat/", is_regex=False, type="mark_as_read")
+    with main.get_meta_connection() as conn:
+        assert main.find_redundant_feed_rules(conn) == []

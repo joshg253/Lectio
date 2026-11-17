@@ -74,6 +74,11 @@ turns on page-tag capture, so matching posts are filtered as they arrive rather 
 plain fetches (Cloudflare-fronted ones) through the same fetch ladder as opening a post. Tagging a teaser-only post fetches the full page
 even when the excerpt plus its "Read X on Y" footer looks long enough.
 
+**Rule keyword box.** Wrap a keyword in slashes (`/^live (at|from)/`) for a regex; there is no regex toggle, and rules that used it were
+rewritten to the slash form. In a Mark as Read rule, a keyword starting with `=`, `<` or `>` is a YouTube duration (`=2-10` minutes,
+`<2:00`, `>=1h`), the same syntax as "Filter this view"; it never matches a non-video post or a video whose length isn't known yet. A
+`/regex/` or duration term can't be one item of a comma list (the rule is refused), so give each its own rule.
+
 **IsThereAnyDeal waitlist posts** render one compact line per offer (price, discount, store, voucher) instead of a column of short lines.
 
 **Clean up YouTube playlists** (Settings → Utilities → YouTube, needs the YouTube connection). Pick playlists, nothing pre-selected, and

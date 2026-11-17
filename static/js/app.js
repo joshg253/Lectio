@@ -13068,7 +13068,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
             const patternText = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
-              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
+              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts')
+              // a legacy is_regex row (one the startup migration skipped) shows in its slash form
+              : (rule.is_regex && rule.keyword ? `/${rule.keyword}/` : rule.keyword);
             // A named rule shows its label instead of the raw pattern -- the
             // whole point for a MAR rule whose keyword has grown into a long
             // regex -- with the pattern still one hover away as a tooltip.
@@ -13079,13 +13081,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               badge.textContent = patternText;
             }
             row.appendChild(badge);
-
-            if (rule.is_regex) {
-              const rb = document.createElement('span');
-              rb.className = 'hl-rule-regex-badge';
-              rb.textContent = '.*';
-              row.appendChild(rb);
-            }
 
             const searchIn = rule.search_in || 'title';
             if (searchIn !== 'title') {
@@ -13442,6 +13437,15 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       // rules re-render so it can't go stale, but nothing here ever applies
       // without an explicit click (decided 2026-08-24, matches the dupe
       // scans' nothing-pre-checked convention).
+      // "Result: ..." line on a merge card: exactly the keyword (and name) the merged rule will carry.
+      function hlMergePreview(group) {
+        const el = document.createElement('div');
+        el.className = 'hl-suggestion-label';
+        el.textContent = 'Result' + (group.label ? ` (named "${group.label}")` : '') + ': ' + (group.merged_keyword || '')
+          + (group.adds_word_boundaries ? '  ⚠ plain terms now match whole words only (Chromebook no longer matches Chromebooks).' : '');
+        return el;
+      }
+
       async function hlLoadSuggestions() {
         const section = document.getElementById('hl-suggestions');
         const listEl = document.getElementById('hl-suggestions-list');
@@ -13519,6 +13523,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             chips.appendChild(chip);
           });
           card.appendChild(chips);
+          card.appendChild(hlMergePreview(group));
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'settings-secondary-btn';
@@ -13536,6 +13541,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
                   color: group.rules[0].color || '', delivery: group.rules[0].delivery || '',
                   email_to: group.rules[0].email_to || '', batch_time: group.rules[0].batch_time || '',
                   batch_count: group.rules[0].batch_count || '0', cc_me: group.rules[0].cc_me ? '1' : '0',
+                  label: group.label || '', expected_keyword: group.merged_keyword || '',
                 }).toString(),
               });
               const result = await resp.json();
@@ -13569,10 +13575,13 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             const chip = document.createElement('span');
             chip.className = 'hl-suggestion-chip';
             if (COLOR_HEX[r.color]) chip.style.borderLeftColor = COLOR_HEX[r.color];
-            chip.textContent = r.is_regex ? r.keyword : `${r.keyword} (plain)`;
+            const kw = String(r.keyword || '').trim();
+            const isRegex = r.is_regex || (kw.length >= 3 && kw.startsWith('/') && kw.endsWith('/'));
+            chip.textContent = isRegex ? r.keyword : `${r.keyword} (plain)`;
             chips.appendChild(chip);
           });
           card.appendChild(chips);
+          card.appendChild(hlMergePreview(group));
           const btn = document.createElement('button');
           btn.type = 'button';
           btn.className = 'settings-secondary-btn';
@@ -13586,7 +13595,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
                 credentials: 'same-origin',
                 body: new URLSearchParams({
                   type: group.type, scope: group.scope, scope_id: group.scope_id || '',
-                  search_in: group.search_in,
+                  search_in: group.search_in, label: group.label || '', expected_keyword: group.merged_keyword || '',
                 }).toString(),
               });
               const result = await resp.json();
@@ -13999,7 +14008,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         patInput.maxLength = 1000;
         patInput.autocomplete = 'off';
         patInput.rows = 2;
-        patInput.value = prefill.keyword || '';
+        // A legacy is_regex rule (one the startup migration skipped) is edited in its slash form, so saving it keeps it a regex.
+        patInput.value = prefill.is_regex && prefill.keyword ? `/${prefill.keyword}/` : (prefill.keyword || '');
         draft.appendChild(patInput);
 
         // Name (optional) — purely cosmetic, shown instead of the raw pattern
@@ -14014,22 +14024,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         labelInput.autocomplete = 'off';
         labelInput.value = prefill.label || '';
         draft.appendChild(labelInput);
-
-        // Regex toggle
-        const regexBtn = document.createElement('button');
-        regexBtn.type = 'button';
-        const regexOn = !!prefill.is_regex;
-        regexBtn.className = 'hl-regex-toggle' + (regexOn ? ' active' : '');
-        regexBtn.setAttribute('aria-pressed', String(regexOn));
-        regexBtn.title = 'Enable regex matching';
-        regexBtn.textContent = '.*';
-        regexBtn.addEventListener('click', () => {
-          const on = regexBtn.getAttribute('aria-pressed') !== 'true';
-          regexBtn.setAttribute('aria-pressed', String(on));
-          regexBtn.classList.toggle('active', on);
-          syncTypeControls();   // the placeholder advertises comma lists only in plain mode
-        });
-        draft.appendChild(regexBtn);
 
         // Search in
         const searchInSel = document.createElement('select');
@@ -14830,7 +14824,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const dedupNeedsWindow = isDedup && !['slug', 'safe'].includes(matchMethodSel.value);
           const isGlobalDedup = isDedup && !selectedFolderIds.size;
           patInput.style.display = isDedup ? 'none' : '';
-          regexBtn.style.display = (isDedup || isTagFilter) ? 'none' : '';
           searchInSel.style.display = (isDedup || isTagFilter) ? 'none' : '';
           colorSel.style.display = t === 'highlight' ? '' : 'none';
           deliverySel.style.display = isEmail ? '' : 'none';
@@ -14851,8 +14844,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           patInput.placeholder = isYtPlaylist ? 'optional keyword filter (blank = all videos)'
             : (t === 'instapaper' ? 'optional keyword filter (blank = save all)'
             : (isTagFilter ? 'comma-separated feed tags: -drops, +good (rescues from drops), ++required'
-            : (regexBtn.getAttribute('aria-pressed') === 'true' ? 'regular expression'
-            : 'keyword, or a comma list: apple, iphone, macbook')));
+            : 'keyword | a, b | /regex/ | =2-10 (minutes)'));
           // The feed picker shows for every type, including deduplicate — dedup can
           // run across an explicit set of selected feeds (>=2). Selection is decoupled
           // (selectedFeedUrls), so a type change keeps the chosen feed(s) automatically.
@@ -14974,7 +14966,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const webhookUrl = webhookUrlInput.value.trim();
           if (ruleType === 'webhook' && !webhookUrl) { webhookUrlInput.focus(); return; }
           if (ruleType === 'youtube_playlist' && !ytPlSel.value) { ytPlSel.focus(); return; }
-          const isRegex = regexBtn.getAttribute('aria-pressed') === 'true' ? 1 : 0;
+          const isRegex = 0;  // regex is written /like this/ now; the server normalizes any legacy flag
           const color    = colorSel.value || 'yellow';
           const searchIn = searchInSel.value || 'title';
           const delivery = deliverySel.value || 'immediately';
@@ -16350,7 +16342,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       // covers the rule. A regex rule is its own pattern. Invalid regexes yield none.
       function rulePatterns(rule) {
         let source = rule.keyword;
-        if (!rule.is_regex) {
+        const wrapped = String(rule.keyword || '').trim();
+        // /slashes/ mean regex (as main.py's build_keyword_matcher reads it); is_regex is the legacy flag.
+        if (!rule.is_regex && wrapped.length >= 3 && wrapped.startsWith('/') && wrapped.endsWith('/')) {
+          source = wrapped.slice(1, -1);
+        } else if (!rule.is_regex) {
           const terms = String(rule.keyword || '').split(',').map(t => t.trim()).filter(Boolean);
           terms.sort((a, b) => b.length - a.length);
           source = terms.map(t => foldTermForRegex(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('|');

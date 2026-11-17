@@ -93,7 +93,7 @@ from main import (
     youtube_hide_unpremiered_global,
     youtube_quota_cap,
 )
-from services import dedup, html_sanitize, youtube_embeds
+from services import dedup, html_sanitize, rule_duration, youtube_embeds
 from services import youtube_oauth as youtube_oauth_service
 from services.email import send_article_email
 from services.webhooks import build_webhook_batch_payload, build_webhook_payload, send_webhook
@@ -135,9 +135,13 @@ def _get_entry_excerpt(entry: object) -> str:
     return html_sanitize.plain_text_excerpt(raw)
 
 
-def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
+def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str, allow_duration: bool = False) -> bool:
     if not keyword:
         return False
+    # Duration terms belong to Mark as Read rules; any other type reads a duration-shaped keyword as plain text, as it always did.
+    duration_spec = rule_duration.parse_duration_term(keyword) if allow_duration else None
+    if duration_spec:
+        return rule_duration.entry_duration_matches(entry, duration_spec, youtube_duration_service)
     try:
         match_fn = build_keyword_matcher(keyword, is_regex)
     except re.error:
@@ -232,8 +236,9 @@ def _run_now_pattern(
     if not keyword:
         return {"count": 0}
 
+    duration_spec = rule_duration.parse_duration_term(keyword)
     try:
-        match_fn = build_keyword_matcher(keyword, is_regex)
+        match_fn = (lambda _text: False) if duration_spec else build_keyword_matcher(keyword, is_regex)
     except re.error as e:
         return {"error": f"Invalid regex: {e.msg}"}
 
@@ -268,7 +273,9 @@ def _run_now_pattern(
                     body_text += (c.value or "") + " "
                 body_text += str(entry.summary or "")
 
-            if search_in == "title":
+            if duration_spec:
+                matched = rule_duration.entry_duration_matches(entry, duration_spec, youtube_duration_service)
+            elif search_in == "title":
                 matched = match_fn(title_text)
             elif search_in == "body":
                 matched = match_fn(body_text)
@@ -1516,6 +1523,16 @@ def _run_tag_filter_rules_for_feed(feed_url: str) -> None:
                 _log_auto_run(conn, now, "tag_filter", scope, scope_id, keyword, result)
 
 
+def _prefetch_durations_for_rule(feed_url: str, keyword: str) -> None:
+    """Automation runs before the scheduler's duration pass, so a duration rule would see brand-new videos with no cached length until the
+    next refresh. Fetch them first (a no-op for cached ids and non-YouTube feeds)."""
+    if rule_duration.parse_duration_term(keyword):
+        try:
+            youtube_duration_service.fetch_and_store_durations_for_feed(feed_url)
+        except Exception:
+            LOGGER.exception("[automation] duration prefetch failed for %s", feed_url)  # never skip the other rules over it
+
+
 def _run_mark_as_read_rules_for_feed(feed_url: str) -> None:
     """Run only the enabled mark_as_read rules covering *feed_url*, right after that feed stored new entries (the end-of-pass dispatch
     can be 20+ minutes later on a paced batch). Idempotent: it only touches unread entries, so the later pass finds nothing new."""
@@ -1532,6 +1549,7 @@ def _run_mark_as_read_rules_for_feed(feed_url: str) -> None:
         scope, scope_id, keyword = str(rule.get("scope", "")), str(rule.get("scope_id") or ""), str(rule.get("keyword", ""))
         if not feed_in_rule_scope(scope, scope_id, feed_url, rule_scope_folder_feed_set(scope, scope_id, folder_feed_map)):
             continue
+        _prefetch_durations_for_rule(feed_url, keyword)
         with get_meta_connection() as conn:
             result = _run_now_pattern(conn, "feed", feed_url, keyword, bool(rule.get("is_regex")), str(rule.get("search_in") or "title"))
             if "error" not in result and result.get("count", 0) > 0:
@@ -1607,6 +1625,7 @@ def _run_automation_after_refresh(refreshed_feed_urls: set[str]) -> None:
                         if not in_scope:
                             continue
 
+                        _prefetch_durations_for_rule(feed_url, keyword)
                         with get_meta_connection() as conn:
                             result = _run_now_pattern(conn, "feed", feed_url, keyword, is_regex, search_in)
                             if "error" not in result and result.get("count", 0) > 0:

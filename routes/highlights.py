@@ -46,7 +46,7 @@ from main import (
     url_guard,
     youtube_oauth_connected,
 )
-from services import page_topics
+from services import page_topics, rule_duration
 from services.webhooks import WEBHOOK_VALID_FORMATS
 
 router = APIRouter()
@@ -93,6 +93,8 @@ def merge_highlight_group_route(
     batch_time: str = Form(""),
     batch_count: int = Form(0),
     cc_me: int = Form(0),
+    label: str = Form(""),
+    expected_keyword: str = Form(""),
 ):
     with get_meta_connection() as conn:
         result = merge_highlight_rule_group(
@@ -108,6 +110,8 @@ def merge_highlight_group_route(
             batch_time,
             batch_count,
             bool(cc_me),
+            label,
+            expected_keyword or None,
         )
     if result is None:
         return JSONResponse(
@@ -123,13 +127,15 @@ def merge_highlight_group_regex_convert_route(
     scope: str = Form(...),
     scope_id: str = Form(""),
     search_in: str = Form("title"),
+    label: str = Form(""),
+    expected_keyword: str = Form(""),
 ):
     """Merge a group spanning the is_regex boundary — see
     find_regex_convertible_rule_groups / merge_regex_convertible_rule_group.
     No is_regex form field: unlike /highlights/merge-group, the group by
     definition isn't one is_regex value."""
     with get_meta_connection() as conn:
-        result = merge_regex_convertible_rule_group(conn, type, scope, scope_id, search_in)
+        result = merge_regex_convertible_rule_group(conn, type, scope, scope_id, search_in, label, expected_keyword or None)
     if result is None:
         return JSONResponse(
             {"ok": False, "error": "Nothing to merge — the group changed since this was suggested."},
@@ -147,6 +153,8 @@ def _validate_highlight_rule(
     already stripped."""
     if scope not in _HIGHLIGHT_VALID_SCOPES:
         return "invalid scope"
+    if syntax_error := rule_duration.keyword_syntax_error(rule_type, keyword):
+        return syntax_error
     if rule_type == "deduplicate":
         if keyword not in _DEDUP_VALID_MATCH_METHODS:
             return "invalid match method for deduplicate rule"
@@ -228,7 +236,8 @@ def _highlight_rule_response(
 ) -> JSONResponse:
     """Shared by /highlights/add and /highlights/edit — the saved rule, in the
     shape the client's rule list expects. *keyword* and *webhook_url* are
-    expected already stripped."""
+    expected already stripped. A legacy ``is_regex`` rule is reported in its stored /slash/ form."""
+    keyword, is_regex = rule_duration.wrap_regex_keyword(type, keyword, bool(is_regex))
     return JSONResponse(
         {
             "ok": True,

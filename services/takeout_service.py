@@ -29,6 +29,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from services import rule_duration
+
 LOGGER = logging.getLogger(__name__)
 
 TAKEOUT_VERSION = 1
@@ -247,10 +249,19 @@ def import_takeout_zip(
     return summary
 
 
+def _slash_form(rule: dict) -> tuple[str, int]:
+    """(keyword, is_regex) for an imported rule, regex rules in the /slash/ form (older exports carry the is_regex flag)."""
+    keyword, is_regex = rule_duration.wrap_regex_keyword(
+        rule.get("type", "highlight"), rule.get("keyword", ""), bool(int(rule.get("is_regex", 0)))
+    )
+    return keyword, int(is_regex)
+
+
 def _import_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
     inserted = 0
     for r in rules:
         try:
+            keyword, is_regex = _slash_form(r)
             conn.execute(
                 "INSERT OR IGNORE INTO highlight_keywords"
                 " (scope, scope_id, keyword, type, color, is_regex, enabled,"
@@ -260,10 +271,10 @@ def _import_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
                 (
                     r.get("scope", "global"),
                     r.get("scope_id", ""),
-                    r.get("keyword", ""),
+                    keyword,
                     r.get("type", "highlight"),
                     r.get("color", "yellow"),
-                    int(r.get("is_regex", 0)),
+                    is_regex,
                     int(r.get("enabled", 1)),
                     r.get("search_in", "title"),
                     r.get("delivery", "immediately"),
