@@ -95,7 +95,7 @@ def test_bsky_gallery_keeps_the_other_images_in_the_body(monkeypatch):
     )
     assert lead == LEAD
     assert LEAD not in content
-    assert other in content
+    assert f'<img src="{other}"' in content
 
 
 def test_artwork_hoists_image_to_top(monkeypatch):
