@@ -27,7 +27,7 @@ from bs4 import BeautifulSoup, Tag
 
 from services import assert_safe_feed_id, publish_date, url_guard
 
-# soupsieve 3 rejects a complex or nested :has() unless NOSTRICT is passed. Selectors the user types (link-list, content, page-watch,
+# soupsieve 3+ rejects a complex or nested :has() unless NOSTRICT is passed. Selectors the user types (link-list, content, page-watch,
 # readability) were accepted before, so pass this to keep them working; getattr so an older soupsieve without the flag still imports.
 USER_SELECTOR_FLAGS = getattr(soupsieve, "NOSTRICT", 0)
 
