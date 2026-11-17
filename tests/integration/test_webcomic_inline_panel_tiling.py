@@ -87,6 +87,8 @@ def test_banner_panel_spans_both_columns():
     tall = '<img src="https://example.com/t.jpg" width="800" height="1000" />'
     out, tiled = main._tile_inline_webcomic_panels(f"<p>{banner} {tall} {tall}</p>")
     assert tiled
+    assert out.startswith('<div class="source-gallery"><figure class="source-gallery-wide">')
+    assert out.endswith("</figure></div>")
     assert out.count('<figure class="source-gallery-wide">') == 1
     assert out.index("source-gallery-wide") < out.index("t.jpg")
     assert out.count("<figure>") == 2
