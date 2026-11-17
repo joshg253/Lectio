@@ -248,7 +248,8 @@ def send_article_email(
     import resend
 
     resend.api_key = api_key
-    subject = title or "(untitled)"
+    # Header values cannot hold line breaks (Tumblr titles often do); collapse any whitespace run to one space.
+    subject = " ".join((title or "").split()) or "(untitled)"
     payload: dict = {
         "from": from_addr,
         "to": [to_addr],
