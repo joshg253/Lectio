@@ -16511,11 +16511,17 @@ def _is_tileable_panel(img: str) -> bool:
     """A discrete panel: declared width and height, panel-sized, at most 1.3 tall-to-wide, and not floated.
 
     Same rule as the Webtoons grid: taller slices are one strip cut into pieces and must stay stacked, and an image with no
-    dimensions cannot be judged. A button, banner or note falls outside the size window."""
+    dimensions cannot be judged. A button or note falls outside the size window; a title banner inside it tiles full width."""
     w, h = _img_int_attr(img, "width"), _img_int_attr(img, "height")
     if not w or not h or not _TILE_MIN_PANEL_WIDTH <= w <= _TILE_MAX_PANEL_WIDTH or h * 10 > w * 13:
         return False
     return not re.search(r"float\s*:", img, re.IGNORECASE)
+
+
+def _banner_class(img: str) -> str:
+    """` class="source-gallery-wide"` when the img's declared height/width is under the banner ratio, else an empty string."""
+    w, h = _img_int_attr(img, "width"), _img_int_attr(img, "height")
+    return ' class="source-gallery-wide"' if w and h and h / w < _WEBTOONS_BANNER_MAX_RATIO else ""
 
 
 def _tile_inline_webcomic_panels(content_html: str) -> tuple[str, bool]:
@@ -16533,7 +16539,8 @@ def _tile_inline_webcomic_panels(content_html: str) -> tuple[str, bool]:
         nonlocal tiled
         imgs = [img for _, group in run for img in group]
         if len(imgs) >= 2:
-            figs = "".join(f"<figure>{img}</figure>" for img in imgs)
+            # A banner (like a title strip) spans both columns instead of sitting half-width beside a tall panel.
+            figs = "".join(f"<figure{_banner_class(img)}>{img}</figure>" for img in imgs)
             out.append(f'<div class="source-gallery">{figs}</div>')
             tiled = True
         else:

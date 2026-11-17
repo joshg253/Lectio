@@ -1063,8 +1063,8 @@ When the episode ends in a run of exactly 800x1000 slices and has at least four 
 ## Inline webcomic panels tile too
 
 A webcomic feed whose body already carries every panel (six images in one paragraph, or one per paragraph) never reaches
-`inject_source_images`. `_tile_inline_webcomic_panels` folds a run of two or more discrete panels into the same `.source-gallery`
-grid, before the lead-image opener strip so panel 1 is not pulled out as a hero above it. A panel needs declared width and height,
-a width of 300-1200, at most 1.3 tall-to-wide (the Webtoons rule: taller slices are one strip cut up) and no float; anything else
-ends the run and is kept verbatim, as is a run of one. Ad images are stripped first. The separate lead is dropped only when it is
-one of the tiled panels.
+`inject_source_images`. `_tile_inline_webcomic_panels` folds a run of two or more discrete panels into the same `.source-gallery` grid,
+before the lead-image opener strip so panel 1 is not pulled out as a hero above it. A panel needs declared width and height, a width of
+300-1200, at most 1.3 tall-to-wide (the Webtoons rule: taller slices are one strip cut up) and no float; anything else ends the run and is
+kept verbatim, as is a run of one. A panel under 0.5 tall-to-wide (a title banner) spans both columns. Ad images are stripped first. The
+separate lead is dropped only when it is one of the tiled panels.
