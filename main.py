@@ -5461,7 +5461,7 @@ _MERGEABLE_RULE_TYPES = frozenset({"highlight", "mark_as_read", "tag_filter"})
 # the result stays readable. Rarer variants (prime marks, non-breaking spaces) aren't carried over; the merge card shows the result.
 _QUOTE_CLASSES = {"'": "['\u2018\u2019]", '"': '["\u201c\u201d]'}
 _REGEX_SPECIALS = frozenset("\\.^$*+?{}[]|()")
-_UNJOINABLE_REGEX = re.compile(r"\\[1-9]|\\g<|\(\?P[<=]|\(\?<[A-Za-z]|\(\?[aiLmsux]+\)")
+_UNJOINABLE_REGEX = re.compile(r"\\[1-9]|\\g<|\(\?P[<=]|\(\?<[A-Za-z]|\(\?[aiLmsux]+\)|\(\?\(")
 
 
 def _plain_term_to_regex(term: str) -> str:

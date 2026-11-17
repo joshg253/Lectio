@@ -77,7 +77,8 @@ short version:
   `tag:!games`, `tag:gam*`; `tagged:` matches tags you applied. Press Enter to pull in matches from further down the view as you scroll;
   it pairs with Select All for quick bulk triage.
 - **Automation.** Highlight, mark-as-read, tag-filter, deduplicate, and send-to-destination rules (Instapaper, Pinterest, Reddit, Quire,
-  email, YouTube playlists, webhooks) at any scope, with dry-run and run history. An optional auto-read age keeps a quiet site's first
+  email, YouTube playlists, webhooks) at any scope, with dry-run and run history. Keywords can be a plain list, a `/regex/`, or (Mark as
+  Read) a video length like `=2-10`; merging overlapping rules is suggested with a preview. An optional auto-read age keeps a quiet site's first
   update from flooding the unread list. See [Features details](docs/wiki/Features-details.md).
 - **Feed management that expects the real web.** Resilient auto-discovery,
   Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an

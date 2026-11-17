@@ -135,10 +135,11 @@ def _get_entry_excerpt(entry: object) -> str:
     return html_sanitize.plain_text_excerpt(raw)
 
 
-def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str) -> bool:
+def _entry_matches_rule(entry: object, keyword: str, is_regex: bool, search_in: str, allow_duration: bool = False) -> bool:
     if not keyword:
         return False
-    duration_spec = rule_duration.parse_duration_term(keyword)
+    # Duration terms belong to Mark as Read rules; any other type reads a duration-shaped keyword as plain text, as it always did.
+    duration_spec = rule_duration.parse_duration_term(keyword) if allow_duration else None
     if duration_spec:
         return rule_duration.entry_duration_matches(entry, duration_spec, youtube_duration_service)
     try:

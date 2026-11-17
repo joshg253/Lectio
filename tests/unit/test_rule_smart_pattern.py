@@ -86,15 +86,15 @@ def _yt(vid):
 
 
 def test_entry_matches_rule_by_duration(durations):
-    assert main._entry_matches_rule(_yt("aaaaaaaaaaa"), "=2-10", False, "title") is True
-    assert main._entry_matches_rule(_yt("bbbbbbbbbbb"), "=2-10", False, "title") is False
-    assert main._entry_matches_rule(_yt("ccccccccccc"), "=2-10", False, "title") is False
-    assert main._entry_matches_rule(_yt("ccccccccccc"), ">20:00", False, "title") is True
+    assert main._entry_matches_rule(_yt("aaaaaaaaaaa"), "=2-10", False, "title", allow_duration=True) is True
+    assert main._entry_matches_rule(_yt("bbbbbbbbbbb"), "=2-10", False, "title", allow_duration=True) is False
+    assert main._entry_matches_rule(_yt("ccccccccccc"), "=2-10", False, "title", allow_duration=True) is False
+    assert main._entry_matches_rule(_yt("ccccccccccc"), ">20:00", False, "title", allow_duration=True) is True
 
 
 def test_unknown_duration_and_non_video_never_match(durations):
-    assert main._entry_matches_rule(_yt("ddddddddddd"), "=2-10", False, "title") is False
-    assert main._entry_matches_rule(_Entry("https://example.test/post"), "=2-10", False, "title") is False
+    assert main._entry_matches_rule(_yt("ddddddddddd"), "=2-10", False, "title", allow_duration=True) is False
+    assert main._entry_matches_rule(_Entry("https://example.test/post"), "=2-10", False, "title", allow_duration=True) is False
 
 
 def test_run_now_and_dry_run_use_duration(isolated_reader, durations):
@@ -114,7 +114,7 @@ def test_run_now_and_dry_run_use_duration(isolated_reader, durations):
             }
         )
     with main.get_meta_connection() as conn:
-        preview = automation_routes._dry_run_pattern(conn, "feed", feed, "=2-10", False, "title", unread_only=True)
+        preview = automation_routes._dry_run_pattern(conn, "feed", feed, "=2-10", False, "title", unread_only=True, allow_duration=True)
         assert [m["title"] for m in preview["matches"]] == ["video aaaaaaaaaaa"]
         result = main._run_now_pattern(conn, "feed", feed, "=2-10", False, "title")
     assert result["count"] == 1
@@ -124,7 +124,7 @@ def test_run_now_and_dry_run_use_duration(isolated_reader, durations):
 
 def test_a_youtube_link_in_a_non_youtube_feed_never_matches_a_duration(durations):
     entry = _Entry("https://www.youtube.com/watch?v=aaaaaaaaaaa", feed_url="https://example.test/feed")
-    assert main._entry_matches_rule(entry, "=2-10", False, "title") is False
+    assert main._entry_matches_rule(entry, "=2-10", False, "title", allow_duration=True) is False
 
 
 @pytest.mark.parametrize(
@@ -149,8 +149,38 @@ def test_keyword_syntax_ok(rule_type, keyword):
 
 
 def test_failed_duration_prefetch_does_not_raise(monkeypatch):
-    def boom(_feed):
+    calls = []
+
+    def boom(feed):
+        calls.append(feed)
         raise RuntimeError("quota")
 
     monkeypatch.setattr(automation_rules.youtube_duration_service, "fetch_and_store_durations_for_feed", boom)
     automation_rules._prefetch_durations_for_rule(_YT_FEED, "=2-10")  # must not raise
+    assert calls == [_YT_FEED]  # and it did try
+
+
+def test_prefetch_only_happens_for_duration_keywords(monkeypatch):
+    calls = []
+    monkeypatch.setattr(automation_rules.youtube_duration_service, "fetch_and_store_durations_for_feed", calls.append)
+    automation_rules._prefetch_durations_for_rule(_YT_FEED, "apple")
+    assert calls == []
+
+
+def test_other_rule_types_read_a_duration_shaped_keyword_as_plain_text(durations):
+    entry = _Entry("https://www.youtube.com/watch?v=aaaaaaaaaaa", title="chapter =2-10 recap")
+    assert main._entry_matches_rule(entry, "=2-10", False, "title") is True  # literal text hit, not a 5-minute duration match
+    assert main._entry_matches_rule(_yt("aaaaaaaaaaa"), "=2-10", False, "title") is False  # no duration read, no title text
+
+
+def test_reversed_duration_range_is_refused():
+    assert "backwards" in (rule_duration.keyword_syntax_error("mark_as_read", "=10-2") or "")
+    assert rule_duration.keyword_syntax_error("mark_as_read", "=2-10") is None
+
+
+def test_legacy_regex_flag_never_swallows_a_duration_term():
+    assert rule_duration.wrap_regex_keyword("mark_as_read", "=2-10", True) == ("=2-10", True)
+
+
+def test_conditional_regexes_are_not_joined(isolated_reader):
+    assert main._rule_is_mergeable("mark_as_read", {"keyword": r"/(a)?(?(1)b|c)/", "is_regex": 0, "enabled": 1}) is False

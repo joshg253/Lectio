@@ -179,6 +179,7 @@ def _dry_run_pattern(
     min_secs: int = 0,
     max_secs: int = 0,
     unread_only: bool = False,
+    allow_duration: bool = False,
 ) -> dict:
     """Preview which entries a pattern-based rule would affect (read + unread, newest first
     -- unless ``unread_only``, see below).
@@ -204,7 +205,8 @@ def _dry_run_pattern(
     right after a Run Now shows nothing, which says nothing about how well the rule works. Those matches are reported apart
     (``total_matches_read``, ``read: true`` rows, their own ``result_limit``) so the unread count stays exactly what Run Now does."""
 
-    duration_spec = rule_duration.parse_duration_term(keyword)
+    # Only Mark as Read rules read a duration term (see services.automation_rules._entry_matches_rule).
+    duration_spec = rule_duration.parse_duration_term(keyword) if allow_duration else None
     if not keyword:
         if not match_all_if_empty:
             return {"matches": [], "total_scanned": 0, "total_matches": 0, "truncated": False}
@@ -380,6 +382,7 @@ def rules_dry_run_route(
                 min_secs=(max(0, yt_min_minutes) * 60 if _is_yt else 0),
                 max_secs=(max(0, yt_max_minutes) * 60 if _is_yt else 0),
                 unread_only=(type == "mark_as_read"),
+                allow_duration=(type == "mark_as_read"),
             )
         else:
             return JSONResponse({"error": "unknown rule type"}, status_code=400)

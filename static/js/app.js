@@ -13068,7 +13068,9 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               ? `hl-rule-badge highlight-mark-${rule.color}`
               : 'hl-rule-badge';
             const patternText = (!rule.keyword && (ruleType === 'youtube_playlist' || ruleType === 'instapaper' || ruleType === 'quire' || ruleType === 'save_article'))
-              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts') : rule.keyword;
+              ? (ruleType === 'youtube_playlist' ? 'all videos' : 'all posts')
+              // a legacy is_regex row (one the startup migration skipped) shows in its slash form
+              : (rule.is_regex && rule.keyword ? `/${rule.keyword}/` : rule.keyword);
             // A named rule shows its label instead of the raw pattern -- the
             // whole point for a MAR rule whose keyword has grown into a long
             // regex -- with the pattern still one hover away as a tooltip.

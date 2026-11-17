@@ -260,8 +260,8 @@ def _slash_form(rule: dict) -> tuple[str, int]:
 def _import_rules(conn: sqlite3.Connection, rules: list[dict]) -> int:
     inserted = 0
     for r in rules:
-        keyword, is_regex = _slash_form(r)
         try:
+            keyword, is_regex = _slash_form(r)
             conn.execute(
                 "INSERT OR IGNORE INTO highlight_keywords"
                 " (scope, scope_id, keyword, type, color, is_regex, enabled,"

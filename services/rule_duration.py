@@ -23,9 +23,12 @@ def keyword_syntax_error(rule_type: str, keyword: str) -> str | None:
     keyword = (keyword or "").strip()
     if not keyword or rule_type in ("deduplicate", "tag_filter"):
         return None
-    if parse_duration_term(keyword):
+    spec = parse_duration_term(keyword)
+    if spec:
         if rule_type != "mark_as_read":
             return "duration terms (=2-10) work in Mark as Read rules only; a playlist rule has its own min/max minutes"
+        if spec["op"] == "range" and spec["min"] > spec["max"]:
+            return "the duration range is backwards (write the shorter length first, e.g. =2-10)"
         return None
     if "," in keyword:
         items = [t.strip() for t in keyword.split(",") if t.strip()]
@@ -40,7 +43,7 @@ def wrap_regex_keyword(rule_type: str, keyword: str, is_regex: bool) -> tuple[st
     """Normalize a legacy ``is_regex`` rule to the slash form: ``(keyword, True)`` -> ``("/keyword/", False)``. Types whose keyword isn't
     a search pattern (deduplicate, tag_filter) and blank keywords are left alone."""
     keyword = (keyword or "").strip()
-    if is_regex and keyword and rule_type not in ("deduplicate", "tag_filter"):
+    if is_regex and keyword and rule_type not in ("deduplicate", "tag_filter") and not parse_duration_term(keyword):
         return f"/{keyword}/", False
     return keyword, bool(is_regex)
 
@@ -69,11 +72,11 @@ def parse_duration_term(keyword: str) -> dict | None:
         return None
     op, value = m[1], m[2].strip()
     if op == "=":
-        # First hyphen only: none of the duration shapes use "-" internally.
-        rng = re.match(r"^(.+?)-(.+)$", value)
-        if not rng:
+        # First hyphen only: none of the duration shapes use "-" internally. (partition, not a regex: this runs on user input.)
+        first, hyphen, second = value.partition("-")
+        if not hyphen or not first.strip() or not second.strip():
             return None
-        lo, hi = _to_seconds(rng[1].strip()), _to_seconds(rng[2].strip())
+        lo, hi = _to_seconds(first.strip()), _to_seconds(second.strip())
         if lo is None or hi is None:
             return None
         return {"op": "range", "min": lo, "max": hi}

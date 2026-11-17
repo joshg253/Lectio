@@ -791,7 +791,8 @@ def test_merge_group_regex_convert_route_applies_and_persists(env):
     assert r.json()["ok"] is True
     with main.get_meta_connection() as conn:
         rows = conn.execute("SELECT keyword, is_regex FROM highlight_keywords WHERE scope = 'global'").fetchall()
-    assert len(rows) == 1 and rows[0]["keyword"].startswith("/")
+    assert len(rows) == 1 and rows[0]["is_regex"] == 0
+    assert rows[0]["keyword"].startswith("/") and rows[0]["keyword"].endswith("/")
 
 
 # --- names, joinability, previews (rule-merging rework) ------------------------------------------------------------------------------

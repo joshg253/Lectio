@@ -511,6 +511,10 @@ ship the same `.valnet-gallery` markup; verify one article per site before addin
 - `tag:~game`: a fuzzy operator that connects related words (game, games, gaming). Maybe never.
 - Regex in the filter text (`/pattern/`): needs a timeout-capable engine on the server (user-supplied patterns run in the request); see CodeQL #199 note.
 
+### Duration rules: prefetch coverage
+`_prefetch_durations_for_rule` fetches durations for a feed's latest 50 entries before Mark as Read runs; Run Now and the preview don't prefetch, so an
+older unread video with no cached length is skipped until the scheduler's duration pass reaches it. Prefetch every candidate in scope there.
+
 ### Rule merging: one suggestion tier
 Regex rules are `/slash/`-wrapped now, so the separate "convert & merge" tier (`find_regex_convertible_rule_groups`) could fold into
 `find_mergeable_rule_groups`: one identity without the regex distinction, one card, and no overlapping plain-only and mixed suggestions

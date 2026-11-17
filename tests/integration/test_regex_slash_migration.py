@@ -86,3 +86,16 @@ def test_takeout_import_wraps_old_exports(env):
         )
         conn.commit()
         assert _rows(conn) == [("/^How to/", 0, "mark_as_read")]
+
+
+def test_takeout_import_skips_a_malformed_rule_and_keeps_the_rest(env):
+    with main.get_meta_connection() as conn:
+        takeout_service._import_rules(
+            conn,
+            [
+                {"scope": "global", "scope_id": "", "keyword": "bad", "type": "mark_as_read", "is_regex": "yes"},
+                {"scope": "global", "scope_id": "", "keyword": "good", "type": "mark_as_read", "is_regex": 0},
+            ],
+        )
+        conn.commit()
+        assert _rows(conn) == [("good", 0, "mark_as_read")]
