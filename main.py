@@ -17380,6 +17380,13 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
     if not (lead_image_url and isinstance(content_html, str)):
         return content_html, lead_image_url
 
+    if bluesky.is_bsky_feed(feed_url):
+        # The cached hero is the CDN's feed_thumbnail variant; the recovered body copy is feed_fullsize of the same blob. Promote the
+        # hero to the body's URL so it is both full resolution and recognized as the same picture below.
+        _bsky_full = re.sub(r"/feed_(?:thumbnail|fullsize)/", "/feed_fullsize/", lead_image_url)
+        if _bsky_full != lead_image_url and _bsky_full in content_html:
+            lead_image_url = _bsky_full
+
     if not show_lead_in_article:
         # "Don't show the lead image in the article" has to include the case
         # where the FEED put it there. This setting used to suppress only
@@ -17500,14 +17507,18 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
             # Bluesky RSS carries no <img> in its real body — the only way this URL
             # can already be in content_html is get_entry_detail's own bsky-recovery
             # append (fetch_post_images), not the author placing it in the flow. That
-            # append IS the post's real content, so leave it in the body and keep the
-            # separate lead too, rather than treating it as author-placed duplication.
+            # append IS the post's real content, so keep the hero (don't treat it as author-placed duplication) and hoist
+            # the body copy into it so the picture shows once.
             # Except a video's poster: the <video> already shows that frame, so a hero of it is the clip twice.
             if any(lead_image_url in t for t in re.findall(r"<video\b[^>]*>", html.unescape(content_html), re.IGNORECASE)):
                 lead_image_url = None
             # Likewise a link card's thumb: the card in the body already shows it.
             elif "data-bsky-card" in content_html:
                 lead_image_url = None
+            else:
+                _bs4_stripped = _bs4_strip_opener(content_html, lead_image_url)
+                if _bs4_stripped is not None:
+                    content_html = _bs4_stripped
         else:
             # Lead URL is buried mid-article (author placed it there) — show it in
             # its natural position, not as a separate top lead.
@@ -17525,7 +17536,13 @@ def _strip_lead_image_opener(content_html, lead_image_url, feed_url: str, show_l
 
     # Source-scraped lead + body that's essentially just a thumbnail wrapper (minimal
     # text) → strip the inline imgs so a small thumb doesn't sit below the full lead.
-    if show_lead_in_article and lead_image_url and isinstance(content_html, str) and lead_image_url not in content_html:
+    if (
+        show_lead_in_article
+        and lead_image_url
+        and isinstance(content_html, str)
+        and lead_image_url not in content_html
+        and not bluesky.is_bsky_feed(feed_url)  # remaining body images are the post's other photos, not a thumbnail wrapper
+    ):
         _remaining_imgs = len(re.findall(r"<img\b", content_html, re.IGNORECASE))
         if _remaining_imgs <= 1:
             # Tumblr guard: a remaining image with a different media prefix is a

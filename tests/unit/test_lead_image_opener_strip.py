@@ -73,19 +73,29 @@ def test_lead_buried_midarticle_drops_separate_lead(monkeypatch):
     assert LEAD in content  # left in its natural position
 
 
-def test_bsky_recovered_image_keeps_both_hero_and_body_copy(monkeypatch):
-    # Bluesky RSS ships no <img> in its real body — get_entry_detail's own
-    # recovery append is the only way this URL can be mid-content. Unlike an
-    # author placing an image in the flow, that's Lectio's own injection of
-    # the post's real content, so it must not null out the separate lead the
-    # way test_lead_buried_midarticle_drops_separate_lead does for a real feed.
+def test_bsky_recovered_image_is_hoisted_to_the_hero_not_shown_twice(monkeypatch):
+    # Bluesky RSS ships no <img> in its real body; get_entry_detail's own recovery append is the only way the lead can be mid-content.
+    # That must not null the hero (the earlier bug: no lead shown) but must not leave a second copy either: hoist it, like artwork.
     monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
     content, lead = _strip(
         f'<p>post text</p><p><img src="{LEAD}"></p>',
         feed="https://bsky.app/profile/did:plc:abc/rss",
     )
     assert lead == LEAD
-    assert LEAD in content
+    assert LEAD not in content
+    assert "post text" in content
+
+
+def test_bsky_gallery_keeps_the_other_images_in_the_body(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    other = "https://cdn.test/second.jpg"
+    content, lead = _strip(
+        f'<p>text</p><p><img src="{LEAD}"></p><p><img src="{other}"></p>',
+        feed="https://bsky.app/profile/did:plc:abc/rss",
+    )
+    assert lead == LEAD
+    assert LEAD not in content
+    assert other in content
 
 
 def test_artwork_hoists_image_to_top(monkeypatch):
@@ -216,3 +226,32 @@ def test_youtube_facade_becomes_a_bare_watch_link_before_extraction():
     out = main._replace_youtube_facades(facade)
     assert "youtube-facade" not in out and "Watch On" not in out
     assert 'href="https://www.youtube.com/watch?v=hIsHUwJZa_o"' in out
+
+
+def test_bsky_hero_thumbnail_and_body_fullsize_are_the_same_picture(monkeypatch):
+    # The cached hero is the CDN's feed_thumbnail variant, the recovered body copy is feed_fullsize of the same blob.
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    base = "https://cdn.bsky.app/img/{}/plain/did:plc:abc/bafkreiblob"
+    thumb, full = base.format("feed_thumbnail"), base.format("feed_fullsize")
+    content, lead = _strip(f'<p>post text</p><p><img src="{full}"></p>', lead=thumb, feed="https://bsky.app/profile/did:plc:abc/rss")
+    assert lead == full  # promoted to full resolution
+    assert "bafkreiblob" not in content
+
+
+def test_bsky_hero_is_not_promoted_when_the_body_has_a_different_picture(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    base = "https://cdn.bsky.app/img/{}/plain/did:plc:abc/{}"
+    thumb, other = base.format("feed_thumbnail", "bafkreione"), base.format("feed_fullsize", "bafkreitwo")
+    content, lead = _strip(f'<p>text</p><p><img src="{other}"></p>', lead=thumb, feed="https://bsky.app/profile/did:plc:abc/rss")
+    assert lead == thumb
+    assert other in content
+
+
+def test_bsky_link_card_thumb_drops_the_hero(monkeypatch):
+    monkeypatch.setattr(main.lead_image_service, "get_feed_strategy", lambda u: ("auto", 0.0, False))
+    content, lead = _strip(
+        f'<p>text</p><p><a href="https://x.test"><img src="{LEAD}" data-bsky-card="1"></a></p>',
+        feed="https://bsky.app/profile/did:plc:abc/rss",
+    )
+    assert lead is None
+    assert LEAD in content
