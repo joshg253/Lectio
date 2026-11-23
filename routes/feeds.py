@@ -331,6 +331,7 @@ from main import (
     get_problematic_feeds_cached,
     get_push_active_feed_urls,
     get_reader,
+    get_redlisten_api_key,
     get_root_folder_id,
     get_setting,
     get_unread_counts_by_feed,
@@ -349,6 +350,7 @@ from main import (
     normalize_star_only,
     normalize_tag_value,
     purge_orphaned_feed,
+    reddit_service,
     restar_curated_entries,
     saved_articles_service,
     scan_feed_attachment_extensions,
@@ -696,6 +698,19 @@ def api_folder_feeds(folder_id: str = Query("")):
 def discover_feed_route(url: str = Query(...)):
     from services.feed_discovery import probe_url as _probe_url
 
+    # Reddit has no feeds to discover (its RSS is dead and probing it only draws 403s), so answer without any network call.
+    reddit_url = reddit_service.reddit_feed_url_from_input(url)
+    if reddit_url:
+        sub = reddit_service.subreddit_from_feed_url(reddit_url)
+        label = f"r/{sub}" if sub else f"u/{reddit_service.redditor_from_feed_url(reddit_url)}"
+        filtered = "?" in url or "/search" in url
+        note = f"Reddit feed for {label}."
+        if filtered:
+            note += " Search and filter parameters are not supported, so this follows every post."
+        return JSONResponse(
+            {"status": "feed", "direct": True, "feeds": [{"url": reddit_url, "title": label}], "message": note, "filtered": filtered}
+        )
+
     # Schemeless paste, assumed https — otherwise the SSRF guard rejects it
     # with a misleading "private target" message instead of actually probing it.
     url = assume_https_if_schemeless(url.strip())
@@ -757,6 +772,32 @@ def create_feed(
             LOGGER.warning("[devto] add failed for %s: %s", url, exc)
             msg = public_error(exc, "dev.to add")
         return RedirectResponse(url=local_url(f"/?folder_id={folder_id}&message={quote_plus(msg)}"), status_code=303)
+
+    # Reddit killed its RSS feeds: a subreddit/user is stored under a stable identity URL and filled through Redlisten, never discovered.
+    reddit_url = reddit_service.reddit_feed_url_from_input(url)
+    if reddit_url:
+        try:
+            # Subreddit names are case-insensitive: reuse an existing spelling instead of subscribing twice.
+            with get_reader() as reader:
+                reddit_url = next((str(f.url) for f in reader.get_feeds() if str(f.url).lower() == reddit_url.lower()), reddit_url)
+            stored_url = add_feed_to_folder(reddit_url, folder_id)
+            if get_redlisten_api_key():
+                message = "Reddit feed added."
+                threading.Thread(
+                    target=_run_in_user_context,
+                    args=(tenancy.current_user_id(), feed_refresh_service.update_feeds, [stored_url]),
+                    daemon=True,
+                ).start()
+            else:
+                message = "Reddit feed added, but it stays empty until you add a Redlisten API key (Settings → Integrations → Reddit)."
+        except Exception as exc:  # noqa: BLE001
+            return RedirectResponse(
+                url=local_url(f"/?folder_id={folder_id}&message={quote_plus(public_error(exc, 'Feed add'))}"), status_code=303
+            )
+        return RedirectResponse(
+            url=local_url(f"/?folder_id={folder_id}&list_feed_url={quote_plus(stored_url)}&read_filter=all&message={quote_plus(message)}"),
+            status_code=303,
+        )
 
     # DeviantArt: when connected, "adding" an artist just Watches them on DeviantArt
     # — their posts arrive via the single combined Watch feed, so we don't create a

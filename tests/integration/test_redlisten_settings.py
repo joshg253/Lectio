@@ -1,0 +1,86 @@
+"""The Redlisten key: stored per user, never echoed back (masked only), and the shared instance key is admin-only."""
+
+from __future__ import annotations
+
+import pytest
+from _tenancy_helpers import configure_test_tenancy
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import main
+import routes.settings
+from services import tenancy
+
+KEY = "rl_live_abcdefghijklmnopqrstuvwxyz0123456789"
+
+
+@pytest.fixture
+def configured(tmp_path):
+    saved = tenancy._layout
+    main.close_thread_db_pools()
+    configure_test_tenancy(tmp_path)
+    main.ensure_meta_schema()
+    with main._app_settings_cache_lock:
+        main._app_settings_cache.clear()
+    try:
+        yield
+    finally:
+        with main._app_settings_cache_lock:
+            main._app_settings_cache.clear()
+        main.close_thread_db_pools()
+        tenancy._layout = saved
+
+
+def _client(monkeypatch, *, admin: bool) -> TestClient:
+    monkeypatch.setattr(routes.settings, "_current_web_user", lambda _request: "u-test")
+    monkeypatch.setattr(routes.settings, "_is_web_admin", lambda _uid: admin)
+    app = FastAPI()
+    app.get("/settings/all")(routes.settings.get_all_settings)
+    app.post("/settings/all")(routes.settings.save_all_settings)
+    return TestClient(app)
+
+
+def test_user_key_is_saved_and_only_a_masked_form_is_returned(configured, monkeypatch):
+    client = _client(monkeypatch, admin=False)
+    assert client.post("/settings/all", json={"redlisten_api_key": KEY}).status_code == 200
+    body = client.get("/settings/all").json()
+    assert body["redlisten_api_key_set"] is True
+    assert body["redlisten_active"] is True
+    assert body["redlisten_api_key_masked"] != KEY
+    assert KEY not in client.get("/settings/all").text
+    assert main.get_redlisten_api_key() == KEY
+
+
+def test_blank_save_keeps_the_stored_key_and_explicit_clear_is_not_a_mask_echo(configured, monkeypatch):
+    client = _client(monkeypatch, admin=False)
+    client.post("/settings/all", json={"redlisten_api_key": KEY})
+    # the UI resends an empty secret field untouched; that must not wipe the key
+    client.post("/settings/all", json={"redlisten_api_key": ""})
+    assert main.get_redlisten_api_key() == KEY
+
+
+def test_shared_key_is_dropped_for_non_admins(configured, monkeypatch):
+    client = _client(monkeypatch, admin=False)
+    client.post("/settings/all", json={"shared_redlisten_api_key": KEY})
+    with main.get_meta_connection() as conn:
+        assert main.get_setting(conn, main.SETTING_SHARED_REDLISTEN_API_KEY) in (None, "")
+
+
+def test_shared_key_is_saved_for_admins(configured, monkeypatch):
+    client = _client(monkeypatch, admin=True)
+    client.post("/settings/all", json={"shared_redlisten_api_key": KEY})
+    with main.get_meta_connection() as conn:
+        assert main.get_setting(conn, main.SETTING_SHARED_REDLISTEN_API_KEY) == KEY
+
+
+def test_feed_health_for_reddit_feeds(configured, monkeypatch):
+    url = "https://www.reddit.com/r/Python/.rss"
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
+    monkeypatch.setattr(main, "reddit_connected", lambda: False)
+    assert main._external_feed_health(url)[0] == "paused"  # no key
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "env-key")
+    assert main._external_feed_health(url) == ("ok", "Synced through Redlisten.")
+    assert main._external_feed_health("https://www.reddit.com/r/foo/top/.rss")[0] == "paused"  # unsupported shape
+    with main.get_meta_connection() as conn:
+        main.redlisten_service._set(conn, "redlisten_last_error", "invalid Redlisten API key")
+    assert main._external_feed_health(url)[0] == "error"

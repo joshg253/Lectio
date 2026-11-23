@@ -89,8 +89,14 @@ class FeedRefreshService:
         on_proxy_unreachable: Callable[[str], None] | None = None,
         progress_hook: Callable[[str], None] | None = None,
         on_new_entries: Callable[[str], None] | None = None,
+        is_externally_synced: Callable[[str], bool] | None = None,
+        sync_externally: Callable[[list[str]], None] | None = None,
     ) -> None:
         self._get_meta_connection = get_meta_connection
+        # Feeds another service keeps filled (Reddit via Redlisten): never fetched directly here, and any stale failure is cleared.
+        self._is_externally_synced = is_externally_synced
+        # Fills those feeds on any refresh except the scheduler's (external_sync=False), which runs its own paced sweep for them.
+        self._sync_externally = sync_externally
         # Called with a feed_url right after its refresh stored new entries (only for calls with ``inline_followups``), so per-feed
         # automation (tag-filter and mark-as-read rules) acts while a long paced batch is still running instead of waiting for the
         # end-of-pass dispatch.
@@ -419,12 +425,40 @@ class FeedRefreshService:
         with self._in_flight_lock:
             self._in_flight.difference_update((user_id, u) for u in feed_urls)
 
+    def _clear_failures(self, feed_urls: list[str]) -> None:
+        placeholders = ",".join("?" for _ in feed_urls)
+        with self._get_meta_connection() as conn:
+            conn.execute(
+                "UPDATE feed_failure_state SET consecutive_failures = 0, next_retry_at = NULL, last_error = NULL "
+                f"WHERE consecutive_failures > 0 AND feed_url IN ({placeholders})",
+                feed_urls,
+            )
+
+    def is_externally_synced(self, feed_url: str) -> bool:
+        return bool(self._is_externally_synced and self._is_externally_synced(feed_url))
+
     def update_feeds(
-        self, feed_urls: Iterable[str], *, enhance: bool = True, bypass_backoff: bool = False, inline_followups: bool = False
+        self,
+        feed_urls: Iterable[str],
+        *,
+        enhance: bool = True,
+        bypass_backoff: bool = False,
+        inline_followups: bool = False,
+        external_sync: bool = True,
     ) -> list[str]:
         """Update *feed_urls*, skipping any feed another pass (scheduler, manual refresh) is already updating: two passes inserting
         the same new entries collide on the entries primary key and fail both feeds. Returns the skipped feeds (usually empty)."""
         requested = list(dict.fromkeys(feed_urls))
+        if self._is_externally_synced is not None:
+            synced = [u for u in requested if self._is_externally_synced(u)]
+            if synced:
+                self._clear_failures(synced)
+                if self._sync_externally is not None and external_sync:
+                    try:
+                        self._sync_externally(synced)
+                    except Exception:  # noqa: BLE001 — a failed external sync must not break the rest of the refresh
+                        self._logger.warning("[refresh] external sync failed", exc_info=True)
+                requested = [u for u in requested if u not in set(synced)]
         claimed = self._claim_feeds(requested)
         try:
             self._update_feeds(claimed, enhance=enhance, bypass_backoff=bypass_backoff, inline_followups=inline_followups)

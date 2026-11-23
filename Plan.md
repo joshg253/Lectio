@@ -535,3 +535,17 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
 - Inline webcomic panel tiling: panels wrapped in links (`<p><a><img></a></p>`) are not collected into the grid and stay stacked.
 
 - `refreshCurrentFeedOrFolder` writes `lectio-single-pane-restore-level` to sessionStorage, but nothing reads that key; remove the write.
+
+- Redlisten:
+  - Show plan and usage (`/v1/me`, `x-quota-*` headers) in Settings; a "Test key" button on save (`redlisten.check_key` exists, unused).
+  - Users sharing one key (admin shared or env) each run their own sweep and back-off, so N users cost N times the requests. Keep pacing and
+    back-off state instance-wide, keyed by a hash of the key.
+  - Derive the sweep spacing from the number of batches and a monthly budget, so more than 10 subreddits stays inside the free quota
+    (deals feeds are time-sensitive, so this was left out; hourly is the floor for now).
+  - A `before=`/`after=` cursor would avoid re-fetching 50 unchanged results per sweep.
+- Reddit feed filters (e.g. a flair like "US"): apply locally to the batched `/r/a+b/new` results (no extra requests) rather than as a per-feed
+  Redlisten search, which costs a request per feed per sweep and cannot batch. Check that the listing carries `link_flair_text` first. Add Feed
+  currently drops search and filter parameters and warns.
+- Remove the Reddit OAuth integration (`services/reddit.py` OAuth/submit code, `routes/integrations_reddit.py`, client ID/secret settings,
+  Submit to Reddit button, on-star subreddit send, Reddit admin section). Keep the Reddit subtab in Settings → Integrations for the Redlisten
+  key. `redlisten.py` reuses `reddit.post_to_entry`, `feed_target`, `is_reddit_feed_url` and the URL helpers, so move those over first.

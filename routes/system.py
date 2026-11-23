@@ -50,6 +50,7 @@ from main import (
     SETTING_SHARED_PINTEREST_OAUTH_CLIENT_SECRET,
     SETTING_SHARED_REDDIT_CLIENT_ID,
     SETTING_SHARED_REDDIT_CLIENT_SECRET,
+    SETTING_SHARED_REDLISTEN_API_KEY,
     SETTING_SHARED_YT_OAUTH_CLIENT_ID,
     SETTING_SHARED_YT_OAUTH_CLIENT_SECRET,
     STATIC_ASSET_VERSION,
@@ -464,6 +465,8 @@ def administration_page(request: Request, msg: str | None = None, error: str | N
             "shared_reddit_client_id": get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_ID, ""),
             "shared_reddit_client_secret_set": bool(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET)),
             "shared_reddit_client_secret_masked": _masked(get_runtime_setting(SETTING_SHARED_REDDIT_CLIENT_SECRET, "")),
+            "shared_redlisten_api_key_set": bool(get_runtime_setting(SETTING_SHARED_REDLISTEN_API_KEY)),
+            "shared_redlisten_api_key_masked": _masked(get_runtime_setting(SETTING_SHARED_REDLISTEN_API_KEY, "")),
             # Instance tuning
             "fetch_history_max_age_days": get_fetch_history_max_age_days(),
             "auto_read_days_instance": instance_auto_read_days(),

@@ -15720,6 +15720,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         // Reddit integration: creds + connection status.
         v('sett-reddit-client-id', d.reddit_client_id);
         secretField('sett-reddit-client-secret', d.reddit_client_secret_set, d.reddit_client_secret_masked);
+        secretField('sett-redlisten-api-key', d.redlisten_api_key_set, d.redlisten_api_key_masked);
+        {
+          const st = document.getElementById('sett-redlisten-status');
+          if (st) st.textContent = d.redlisten_active ? 'Redlisten is active: Reddit feeds refresh through it.' : '';
+        }
         {
           const rdConfigured = !!d.reddit_configured;
           const rdConnected = !!d.reddit_connected;
@@ -15890,6 +15895,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             star_send_reddit_subreddit: (document.getElementById('sett-star-reddit-sub')?.value || '').trim(),
             reddit_client_id: g('sett-reddit-client-id'),
             reddit_client_secret: g('sett-reddit-client-secret'),
+            redlisten_api_key: g('sett-redlisten-api-key'),
           };
         }
         try {
@@ -20053,7 +20059,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             // folder and click Add Feed. (Previously this auto-submitted on
             // validation using whatever folder was selected — usually the
             // default root — ignoring the user's folder choice and button click.)
-            setMsg('Direct feed URL.', 'ok');
+            setMsg(d.message || 'Direct feed URL.', d.filtered ? 'warn' : 'ok');
             submitBtn.textContent = 'Add Feed'; submitBtn.disabled = false;
           } else {
             if (d.feeds.length > 1) setMsg(d.feeds.length + ' feeds found — pick one:');

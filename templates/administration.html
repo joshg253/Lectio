@@ -184,6 +184,15 @@
           </label>
         </div>
 
+        <h3>Redlisten</h3>
+        <p class="account-hint">Shared <a href="https://redlisten.com/docs" target="_blank" rel="noopener">Redlisten</a> API key for fetching Reddit feeds. A user's own key takes precedence; the <code>REDLISTEN_API_KEY</code> env var is the last fallback. All users on one key share its monthly quota.</p>
+        <div class="tuning-grid keys-grid">
+          <label class="fld">API key
+            <input type="password" id="adm-redlisten-api-key" autocomplete="new-password"
+                   placeholder="{{ shared_redlisten_api_key_masked if shared_redlisten_api_key_set else 'rl_live_...' }}" />
+          </label>
+        </div>
+
         <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
         </div>
@@ -396,6 +405,8 @@
         if (rdId !== undefined) payload.shared_reddit_client_id = rdId;
         const rdSecret = $('adm-reddit-client-secret')?.value.trim();
         if (rdSecret) payload.shared_reddit_client_secret = rdSecret;
+        const rlKey = $('adm-redlisten-api-key')?.value.trim();
+        if (rlKey) payload.shared_redlisten_api_key = rlKey;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }
         catch { toast('Failed to save.'); }
       }

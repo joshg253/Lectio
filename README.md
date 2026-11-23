@@ -81,7 +81,7 @@ short version:
   Read) a video length like `=2-10`; merging overlapping rules is suggested with a preview. An optional auto-read age keeps a quiet site's first
   update from flooding the unread list. See [Features details](docs/wiki/Features-details.md).
 - **Feed management that expects the real web.** Resilient auto-discovery,
-  Page Feeds for feedless sites, dev.to and DeviantArt adapters (adding an
+  Page Feeds for feedless sites, dev.to and DeviantArt adapters, Reddit feeds through a Redlisten API key (adding an
   artist Watches them; on a Watch-feed byline, the name filters to that
   artist and the ✕ Unwatches), conditional GET, per-feed and per-domain backoff, GUID-churn suppression, feed compare,
   duplicate scanning, unsubscribe that keeps your curation, and an optional
