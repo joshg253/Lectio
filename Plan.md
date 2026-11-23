@@ -537,7 +537,8 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
 - `refreshCurrentFeedOrFolder` writes `lectio-single-pane-restore-level` to sessionStorage, but nothing reads that key; remove the write.
 
 - Redlisten:
-  - Show plan and usage (`/v1/me`, `x-quota-*` headers) in Settings; a "Test key" button on save (`redlisten.check_key` exists, unused).
+  - A profile feed whose check keeps failing is retried every sweep (about 730 requests a month, not 30), and the projection still counts 30.
+    Back it off, or hint when the last error names a profile.
   - Users sharing one key (admin shared or env) each run their own sweep and back-off, so N users cost N times the requests. Keep pacing and
     back-off state instance-wide, keyed by a hash of the key.
   - Derive the sweep spacing from the number of batches and a monthly budget, so more than 10 subreddits stays inside the free quota

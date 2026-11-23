@@ -1309,4 +1309,8 @@ Properties never queues one. Pacing state is per user, so users sharing one key 
 and shown in Feed Properties. Entries the user deleted (`deleted_entries`) are skipped before insert, and feeds that gain entries run
 `FeedRefreshService.after_external_sync` (tombstone purge, overrides, rules), since the normal refresh path no longer reaches them. A
 changed key resets the back-off and spacing; a failed profile check is retried next sweep, not tomorrow; Reddit feeds skip WebSub hub
-discovery. A full page of all-new posts is logged as a possible gap (no pagination yet).
+discovery. A full page of all-new posts is logged as a possible gap (no pagination yet). Usage comes free from the `x-quota-*`/`x-items-*`
+headers on every sweep response and is stored in a per-user `redlisten_usage` row (stale after the UTC month rolls); `/v1/me` (plan, limits)
+costs a request, so only the Settings "Check plan and usage" button calls it (`POST /settings/redlisten/check`). `get_stats` adds the
+subscription counts and the projected monthly requests (`730 * ceil(subs / 10) + 30 * profiles`) with hints, and `/settings/all` returns it
+as `redlisten_stats`.

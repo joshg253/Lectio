@@ -100,4 +100,6 @@ Settings → Integrations → Reddit (or Administration for everyone, or `REDLIS
 Feed as `r/name`, `u/name` or a reddit.com link; search, top and single-thread links are not supported and the dialog says so. Without a key
 the feed stays empty and Feed Properties says why. New posts arrive about hourly (profile feeds daily); Refresh checks right away. The free
 plan allows 1,000 requests a month: up to 10 subreddits share one request, more than that costs a second request per check and goes over the
-limit. A quota or rate-limit reply pauses checks and the log warns at 80%.
+limit. A quota or rate-limit reply pauses checks and the log warns at 80%. Settings → Integrations → Reddit shows the plan, requests used
+this month (updated after each check), how many subreddits and profiles you follow, the projected monthly requests and hints; the "Check
+plan and usage" button asks Redlisten directly and costs one request.

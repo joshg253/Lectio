@@ -37,6 +37,7 @@ def _client(monkeypatch, *, admin: bool) -> TestClient:
     app = FastAPI()
     app.get("/settings/all")(routes.settings.get_all_settings)
     app.post("/settings/all")(routes.settings.save_all_settings)
+    app.post("/settings/redlisten/check")(routes.settings.check_redlisten_key)
     return TestClient(app)
 
 
@@ -84,3 +85,39 @@ def test_feed_health_for_reddit_feeds(configured, monkeypatch):
     with main.get_meta_connection() as conn:
         main.redlisten_service._set(conn, "redlisten_last_error", "invalid Redlisten API key")
     assert main._external_feed_health(url)[0] == "error"
+
+
+def test_stats_only_with_a_key_and_check_needs_one(configured, monkeypatch):
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
+    client = _client(monkeypatch, admin=False)
+    assert client.get("/settings/all").json()["redlisten_stats"] is None
+    assert client.post("/settings/redlisten/check").status_code == 400
+    client.post("/settings/all", json={"redlisten_api_key": KEY})
+    assert "projected_requests" in client.get("/settings/all").json()["redlisten_stats"]
+
+
+def test_check_reports_a_rejected_key(configured, monkeypatch):
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
+    client = _client(monkeypatch, admin=False)
+    client.post("/settings/all", json={"redlisten_api_key": KEY})
+
+    def boom(_conn, _key):
+        raise routes.settings.redlisten_service.RedlistenError("invalid Redlisten API key")
+
+    monkeypatch.setattr(routes.settings.redlisten_service, "check_key", boom)
+    resp = client.post("/settings/redlisten/check")
+    assert resp.status_code == 502 and "invalid" in resp.json()["error"]
+
+
+def test_check_returns_stats_and_never_the_key(configured, monkeypatch):
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
+    client = _client(monkeypatch, admin=False)
+    client.post("/settings/all", json={"redlisten_api_key": KEY})
+    body = {"plan": "free", "limits": {"monthly_quota": 1000, "feed_items_quota": 50000}, "usage": {"requests": 3, "items": 9}}
+    resp_mock = routes.settings.redlisten_service.httpx
+    fake = type("R", (), {"status_code": 200, "headers": {}, "text": "", "json": lambda self: body})()
+    cm = type("C", (), {"__enter__": lambda s: s, "__exit__": lambda s, *a: False, "get": lambda s, *a, **k: fake})()
+    monkeypatch.setattr(resp_mock, "Client", lambda *a, **k: cm)
+    resp = client.post("/settings/redlisten/check")
+    assert resp.status_code == 200 and KEY not in resp.text
+    assert resp.json()["stats"]["plan"] == "free" and resp.json()["stats"]["requests_used"] == 3

@@ -2763,6 +2763,44 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       });
     }
 
+    // --- Redlisten plan / usage panel (Settings → Integrations → Reddit) -------
+    function renderRedlistenStats(stats) {
+      const box = document.getElementById('sett-redlisten-stats');
+      const hints = document.getElementById('sett-redlisten-hints');
+      const btn = document.getElementById('sett-redlisten-check');
+      const note = document.getElementById('sett-redlisten-check-note');
+      if (!box || !hints) return;
+      for (const el of [btn, note]) if (el) el.hidden = !stats;
+      if (!stats) { box.hidden = true; hints.hidden = true; return; }
+      const n = (x) => (x == null ? '?' : Number(x).toLocaleString());
+      const parts = [];
+      if (stats.plan) parts.push(`Plan: ${stats.plan}`);
+      const rl = stats.requests_limit || null;
+      parts.push(stats.requests_used == null
+        ? `Requests this month: unknown until the next sweep${rl ? ` (limit ${n(rl)})` : ''}`
+        : `Requests this month: ${n(stats.requests_used)}${rl ? ` of ${n(rl)} (${n(Math.max(rl - stats.requests_used, 0))} left)` : ''}`);
+      if (stats.items_used != null) parts.push(`Results: ${n(stats.items_used)}${stats.items_limit ? ` of ${n(stats.items_limit)}` : ''}`);
+      if (stats.subreddits != null) {
+        parts.push(`Following ${stats.subreddits} subreddit${stats.subreddits === 1 ? '' : 's'} and ${stats.profiles} profile${stats.profiles === 1 ? '' : 's'}`
+          + `, about ${n(stats.projected_requests)} requests a month`);
+      }
+      if (stats.blocked_until) parts.push(`Paused until ${new Date(stats.blocked_until * 1000).toLocaleString()}`);
+      box.textContent = parts.join(' · ');
+      box.hidden = false;
+      hints.replaceChildren(...(stats.hints || []).map((t) => { const li = document.createElement('li'); li.textContent = t; return li; }));
+      hints.hidden = !(stats.hints || []).length;
+    }
+    document.getElementById('sett-redlisten-check')?.addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        const r = await fetch('/settings/redlisten/check', { method: 'POST', credentials: 'same-origin' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) { showToastMessage(j.error || 'Redlisten check failed.'); return; }
+        renderRedlistenStats(j.stats);
+      } finally { btn.disabled = false; }
+    });
+
     // --- Reddit "Submit to subreddit" modal ----------------------------------
     async function openRedditSubmitModal(btn) {
       hideShareMenu();
@@ -15724,6 +15762,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         {
           const st = document.getElementById('sett-redlisten-status');
           if (st) st.textContent = d.redlisten_active ? 'Redlisten is active: Reddit feeds refresh through it.' : '';
+          renderRedlistenStats(d.redlisten_stats);
         }
         {
           const rdConfigured = !!d.reddit_configured;
