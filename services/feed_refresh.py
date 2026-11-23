@@ -264,6 +264,8 @@ class FeedRefreshService:
         labels = dict(self.FAILURE_CATEGORIES)
         result: list[dict[str, object]] = []
         for row in rows:
+            if self.is_externally_synced(str(row["feed_url"])):
+                continue  # another service fills these (a stale failure from before, or on a paused feed, is not a failure to show)
             last_error = str(row["last_error"] or "")
             category = self.categorize_failure(last_error)
             result.append(

@@ -1396,3 +1396,16 @@ def test_externally_synced_feeds_sync_on_any_refresh_but_the_schedulers(tmp_path
     assert synced == []
     service.update_feeds([url], inline_followups=True)  # e.g. a folder refresh
     assert synced == [[url]]
+
+
+def test_externally_synced_feeds_never_appear_in_the_failing_list(tmp_path: Path):
+    db = tmp_path / "m.sqlite"
+    service = _build_service(db, _NewCountReader({}, []), [], [])
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
+    conn = _make_conn(db)
+    for url in ("https://www.reddit.com/r/x/.rss", "https://example.com/feed"):
+        conn.execute("INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error) VALUES (?, 2, 'HTTP 404')", (url,))
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (1, ?)", (url,))
+    conn.commit()
+
+    assert [r["feed_url"] for r in service.get_problematic_feeds(_make_conn(db))] == ["https://example.com/feed"]
