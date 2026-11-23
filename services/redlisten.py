@@ -242,6 +242,11 @@ def _add_entries(reader, entries: list[dict], dead: set[tuple[str, str]]) -> int
     return added
 
 
+def forget_if_key_changed(meta_conn, api_key: str) -> None:
+    """Drop the previous key's stored usage and pacing as soon as a different key is seen (Settings calls this on every load)."""
+    _reset_pacing_if_key_changed(meta_conn, api_key)
+
+
 def _reset_pacing_if_key_changed(meta_conn, api_key: str) -> None:
     """A different key starts with a clean slate: the old key's back-off and spacing say nothing about the new one."""
     # Only to tell keys apart, never to store or check a password; a slow hash keeps the key unrecoverable from the stored value anyway.
