@@ -77,7 +77,6 @@ def test_shared_key_is_saved_for_admins(configured, monkeypatch):
 def test_feed_health_for_reddit_feeds(configured, monkeypatch):
     url = "https://www.reddit.com/r/Python/.rss"
     monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
-    monkeypatch.setattr(main, "reddit_connected", lambda: False)
     assert main._external_feed_health(url)[0] == "paused"  # no key
     monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "env-key")
     assert main._external_feed_health(url) == ("ok", "Synced through Redlisten.")

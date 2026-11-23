@@ -76,7 +76,7 @@ function out of main.py would still have broken that `setattr` (it requires the 
 left in place rather than touching an unrelated test for a route this stage didn't move.
 `normalize_resume_read_filter`/`unsubscribed_feed_urls_among` stayed too, confirmed shared with `_home_inner`.
 `get_meta_structure_snapshot`, `is_instapaper_configured`, `is_quire_configured`, `pinterest_oauth_connected`,
-`reddit_connected`, and `templates` are pre-existing widely-shared main.py infrastructure -- none of it moved.
+and `templates` are pre-existing widely-shared main.py infrastructure -- none of it moved.
 No `services.automation_rules` ordering constraint. One test file retargeted for the "handler registered
 directly as `main.<name>` on a bare test `FastAPI()` app" gotcha: `tests/integration/test_hide_locked_comics.py`
 (-> `routes.entries.entry_pane`). No `scripts/*.py` callers. See `routes/__init__.py`'s docstring for the fuller
@@ -210,7 +210,6 @@ from main import (
     pinterest_oauth_connected,
     probe_frameability,
     quire_project_oid,
-    reddit_connected,
     saved_articles_service,
     search_terms_from_query,
     send_article_email,
@@ -2856,7 +2855,6 @@ def entry_pane(
             "instapaper_configured": is_instapaper_configured(),
             "pinterest_connected": pinterest_oauth_connected(),
             "quire_configured": is_quire_configured(),
-            "reddit_connected": reddit_connected(),
         },
         headers={"Cache-Control": "no-store"},
     )

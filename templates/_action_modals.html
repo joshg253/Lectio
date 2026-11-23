@@ -253,28 +253,6 @@
     </div>
   </div>
 
-  <div id="reddit-submit-modal" class="action-modal" hidden>
-    <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="reddit-submit-modal-title">
-      <div class="modal-header-row">
-        <h3 id="reddit-submit-modal-title" class="action-modal-title">Submit to Reddit</h3>
-        <button type="button" class="modal-close" aria-label="Close" onclick="document.getElementById('reddit-submit-modal').setAttribute('hidden','')"><span class="material-symbols-rounded" aria-hidden="true">close</span></button>
-      </div>
-      <div class="action-modal-form">
-        <label class="action-modal-label" for="reddit-submit-sub">Subreddit</label>
-        <input type="text" id="reddit-submit-sub" class="action-modal-input" placeholder="r/subreddit" maxlength="100" autocomplete="off" />
-        <label class="action-modal-label" for="reddit-submit-title">Title</label>
-        <input type="text" id="reddit-submit-title" class="action-modal-input" placeholder="Post title" maxlength="300" autocomplete="off" />
-        <label class="action-modal-label" for="reddit-submit-url">URL</label>
-        <input type="url" id="reddit-submit-url" class="action-modal-input" placeholder="https://…" maxlength="2000" autocomplete="off" />
-        <p id="reddit-submit-error" class="action-modal-error" style="color:var(--color-error,#c33);margin:0.25rem 0 0"></p>
-        <div class="action-modal-actions">
-          <button type="button" class="action-modal-cancel" id="reddit-submit-cancel">Cancel</button>
-          <button type="button" id="reddit-submit-confirm">Submit</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <div id="action-input-modal" class="action-modal" hidden>
     <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="action-modal-title">
       <h3 id="action-modal-title" class="action-modal-title">Add</h3>

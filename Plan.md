@@ -41,11 +41,7 @@ with the thumbnail only in `data-lazy-src` isn't recovered. One-line fix; do it 
 
 **Dated** — act on or after the date.
 
-### Reddit RSS ends 2026-11-13 (2026-10-04)
-
-Reddit is retiring `.rss` feeds with no replacement for non-mod use, and API access was refused, so Reddit stops being a source. On/after the cutoff, delete the six Reddit feeds in the admin account (r/VinylDeals, r/buildapcsales, r/GameDeals, r/Boardgamedeals, r/LaptopDeals, one user-submitted) through the app's feed-delete path (none are starred or archived), restart, and drop any Reddit mention from README.
-
-Replacements: BGG `https://boardgamegeek.com/rss/uforum/10` (Boardgamedeals; the forum HTML 403s, only the `/rss/` URL works) and a filtered Slickdeals feed (PC and laptop deals). No replacement for r/GameDeals or r/VinylDeals; vinyl.deals has no feed and its rows are `onclick` handlers, so the page scraper can't read it without a new row mode (skipped).
+None right now.
 
 **Build when it bites** — only if the symptom recurs or the cost is felt.
 
@@ -549,6 +545,3 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
 - Reddit feed filters (e.g. a flair like "US"): apply locally to the batched `/r/a+b/new` results (no extra requests) rather than as a per-feed
   Redlisten search, which costs a request per feed per sweep and cannot batch. Check that the listing carries `link_flair_text` first. Add Feed
   currently drops search and filter parameters and warns.
-- Remove the Reddit OAuth integration (`services/reddit.py` OAuth/submit code, `routes/integrations_reddit.py`, client ID/secret settings,
-  Submit to Reddit button, on-star subreddit send, Reddit admin section). Keep the Reddit subtab in Settings → Integrations for the Redlisten
-  key. `redlisten.py` reuses `reddit.post_to_entry`, `feed_target`, `is_reddit_feed_url` and the URL helpers, so move those over first.

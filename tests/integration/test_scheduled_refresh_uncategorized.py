@@ -62,7 +62,6 @@ def configured(tmp_path, monkeypatch):
     monkeypatch.setattr(main.deviantart_service, "refresh_all_deviantart_feeds", lambda *a, **k: None)
     monkeypatch.setattr(main, "get_deviantart_credentials", lambda: (None, None))
     monkeypatch.setattr(main, "get_deviantart_user_token", lambda: None)
-    monkeypatch.setattr(main, "get_reddit_user_token", lambda: None)
     monkeypatch.setattr(main, "inoreader_connected", lambda: False)
 
     # The app-settings cache is module-level and keyed by the (shared default)

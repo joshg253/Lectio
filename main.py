@@ -669,17 +669,6 @@ SETTING_TTRSS_URL = "ttrss_url"
 SETTING_TTRSS_USERNAME = "ttrss_username"
 SETTING_TTRSS_PASSWORD = "ttrss_password"
 SETTING_TTRSS_IMPORT_STATE = "ttrss_import_state"
-# Reddit OAuth integration.
-SETTING_REDDIT_CLIENT_ID = "reddit_client_id"
-SETTING_REDDIT_CLIENT_SECRET = "reddit_client_secret"
-SETTING_REDDIT_ACCESS_TOKEN = "reddit_oauth_access_token"
-SETTING_REDDIT_REFRESH_TOKEN = "reddit_oauth_refresh_token"
-SETTING_REDDIT_TOKEN_EXPIRES_AT = "reddit_oauth_token_expires_at"
-SETTING_REDDIT_OAUTH_STATE = "reddit_oauth_state"
-SETTING_REDDIT_USERNAME = "reddit_username"
-SETTING_SHARED_REDDIT_CLIENT_ID = "shared_reddit_client_id"
-SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
-SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
 # Redlisten (https://redlisten.com): API key for fetching Reddit feeds without Reddit's own API.
 SETTING_REDLISTEN_API_KEY = "redlisten_api_key"
 SETTING_SHARED_REDLISTEN_API_KEY = "shared_redlisten_api_key"
@@ -1235,67 +1224,11 @@ def get_pinterest_oauth_token() -> str:
     return data["access_token"]
 
 
-def get_reddit_credentials() -> tuple[str, str]:
-    """Reddit OAuth client (client_id, client_secret).
-
-    Resolution: per-user setting → shared-instance (admin's settings) → empty.
-    No env-var fallback — credentials are DB-only for this integration.
-    """
-    cid = get_runtime_setting(SETTING_REDDIT_CLIENT_ID) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_ID) or ""
-    secret = get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_SECRET) or ""
-    return cid, secret
-
-
 def get_redlisten_api_key() -> str:
     """Redlisten API key. Resolution: per-user setting → shared-instance (admin's settings) → REDLISTEN_API_KEY env."""
     return (
         get_runtime_setting(SETTING_REDLISTEN_API_KEY) or _get_shared_credential(SETTING_SHARED_REDLISTEN_API_KEY) or _ENV_REDLISTEN_API_KEY
     )
-
-
-def reddit_connected() -> bool:
-    """True if the current user has connected their Reddit account."""
-    with get_meta_connection() as conn:
-        return bool(get_setting(conn, SETTING_REDDIT_REFRESH_TOKEN))
-
-
-def get_reddit_user_token() -> str:
-    """Return a valid Reddit access token, refreshing if needed.
-
-    Empty string if not connected or refresh failed — caller must prompt reconnect.
-    """
-    with get_meta_connection() as conn:
-        access = get_setting(conn, SETTING_REDDIT_ACCESS_TOKEN) or ""
-        refresh = get_setting(conn, SETTING_REDDIT_REFRESH_TOKEN) or ""
-        try:
-            expires_at = float(get_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT) or 0)
-        except TypeError, ValueError:
-            expires_at = 0.0
-    if not refresh:
-        return ""
-    if access and time.time() < expires_at - 60:
-        return access
-    cid, secret = get_reddit_credentials()
-    if not cid or not secret:
-        return ""
-    try:
-        data = reddit_service.refresh_access_token(cid, secret, refresh)
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("[reddit] token refresh failed; reconnect required: %s", exc)
-        return ""
-    with get_meta_connection() as conn:
-        set_setting(conn, SETTING_REDDIT_ACCESS_TOKEN, data["access_token"])
-        if data.get("refresh_token"):
-            set_setting(conn, SETTING_REDDIT_REFRESH_TOKEN, data["refresh_token"])
-        set_setting(conn, SETTING_REDDIT_TOKEN_EXPIRES_AT, str(time.time() + float(data.get("expires_in", 3600))))
-    return data["access_token"]
-
-
-def _reddit_redirect_uri(request: Request) -> str:
-    base = os.getenv("LECTIO_PUBLIC_URL", "").rstrip("/")
-    if not base:
-        base = str(request.base_url).rstrip("/")
-    return f"{base}/integrations/reddit/oauth/callback"
 
 
 def get_inoreader_credentials() -> tuple[str, str]:
@@ -12267,8 +12200,6 @@ def _external_feed_health(feed_url: str) -> tuple[str, str]:
         if err:
             return "error", f"Last Redlisten sync failed: {err}"
         return "ok", "Synced through Redlisten."
-    if reddit_connected():
-        return "ok", "Synced through your Reddit account."
     return "paused", "Needs a Redlisten API key (Settings → Integrations → Reddit)."
 
 
@@ -20592,20 +20523,16 @@ def _scheduled_refresh_tick() -> None:
                 devto_service.refresh_all_devto_feeds(_sc)
                 _da_cid, _da_secret = get_deviantart_credentials()
                 deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
-                # Redlisten (key-based, paced for the free plan) wins over the OAuth path when a key is set.
+                # Redlisten sweep (key-based, paced for the free plan); a no-op without a key.
                 _redlisten_key = get_redlisten_api_key()
-                _reddit_token = "" if _redlisten_key else get_reddit_user_token()
-                if _redlisten_key or _reddit_token:
+                if _redlisten_key:
                     try:
                         with get_reader() as _rdr:
-                            if _redlisten_key:
-                                redlisten_service.refresh_reddit_feeds(
-                                    _sc, _rdr, _redlisten_key, on_new_entries=feed_refresh_service.after_external_sync
-                                )
-                            else:
-                                reddit_service.refresh_all_reddit_feeds(_sc, _rdr, _reddit_token)
+                            redlisten_service.refresh_reddit_feeds(
+                                _sc, _rdr, _redlisten_key, on_new_entries=feed_refresh_service.after_external_sync
+                            )
                     except Exception:
-                        LOGGER.exception("[reddit] feed sync error in scheduler")
+                        LOGGER.exception("[redlisten] feed sync error in scheduler")
             if inoreader_connected():
                 try:
                     _inoreader_drip_step()
@@ -22586,6 +22513,7 @@ _LOG_CATEGORIES: dict[str, tuple[str, ...]] = {
         "deviantart",
         "devto",
         "reddit",
+        "redlisten",
         "inoreader*",
         "pinterest-oauth",
         "quire*",
@@ -23476,7 +23404,6 @@ def _home_inner(
         "instapaper_configured": is_instapaper_configured(),
         "quire_configured": is_quire_configured(),
         "quire_project_name": quire_project_name(),
-        "reddit_connected": reddit_connected(),
         "youtube_sync_last_at": youtube_sync_last_at,
         "youtube_sync_last_result": youtube_sync_last_result,
         "inactive_feeds": inactive_feeds,
@@ -25104,15 +25031,6 @@ def _run_on_star_destinations(feed_url: str, entry_id: str) -> None:
                     ok, err = _quire_add_entry(token, quire_project_oid(), title, link, feed_title)
                     if not ok:
                         LOGGER.warning("[on-star] quire add failed: %s", err)
-
-        reddit_sub = (get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT) or "").strip().removeprefix("r/").strip("/")
-        if reddit_sub and link:
-            reddit_token = get_reddit_user_token()
-            if reddit_token:
-                try:
-                    reddit_service.submit_link(reddit_token, reddit_sub, title, link)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.warning("[on-star] reddit submit failed: %s", exc)
     except Exception:
         LOGGER.exception("[on-star] error for %s/%s", feed_url, entry_id)
 
@@ -26828,7 +26746,6 @@ from routes.integrations_inoreader import router as _inoreader_router  # noqa: E
 from routes.integrations_miniflux import router as _miniflux_import_router  # noqa: E402
 from routes.integrations_pinterest import router as _pinterest_oauth_router  # noqa: E402
 from routes.integrations_quire import router as _quire_oauth_router  # noqa: E402
-from routes.integrations_reddit import router as _reddit_oauth_router  # noqa: E402
 from routes.integrations_ttrss import router as _ttrss_import_router  # noqa: E402
 from routes.integrations_youtube import router as _youtube_oauth_router  # noqa: E402
 from routes.saved import router as _saved_router  # noqa: E402
@@ -26902,7 +26819,6 @@ app.include_router(_feeds_router)
 app.include_router(_quire_oauth_router)
 app.include_router(_youtube_oauth_router)
 app.include_router(_pinterest_oauth_router)
-app.include_router(_reddit_oauth_router)
 app.include_router(_inoreader_router)
 app.include_router(_miniflux_import_router)
 app.include_router(_freshrss_import_router)

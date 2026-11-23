@@ -2585,12 +2585,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         await _quireQuickAdd(quireBtn);
         return;
       }
-      const redditBtn = event.target instanceof Element && event.target.closest('[data-reddit-feed-url]');
-      if (redditBtn) {
-        event.preventDefault();
-        await openRedditSubmitModal(redditBtn);
-        return;
-      }
     });
 
     // Right-click the Quire button to choose a destination project instead of
@@ -2799,72 +2793,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
         if (!r.ok || !j.ok) { showToastMessage(j.error || 'Redlisten check failed.'); return; }
         renderRedlistenStats(j.stats);
       } finally { btn.disabled = false; }
-    });
-
-    // --- Reddit "Submit to subreddit" modal ----------------------------------
-    async function openRedditSubmitModal(btn) {
-      hideShareMenu();
-      const feedUrl = btn.getAttribute('data-reddit-feed-url') || '';
-      const entryId = btn.getAttribute('data-reddit-entry-id') || '';
-      const prefillTitle = btn.getAttribute('data-reddit-title') || '';
-      const prefillUrl = btn.getAttribute('data-reddit-url') || '';
-
-      // Pre-fill subreddit from feed URL if it's a reddit feed.
-      let prefillSub = '';
-      const subMatch = feedUrl.match(/\/r\/([A-Za-z0-9_]+)/);
-      if (subMatch) prefillSub = 'r/' + subMatch[1];
-
-      const modal = document.getElementById('reddit-submit-modal');
-      if (!modal) return;
-      const subInput = document.getElementById('reddit-submit-sub');
-      const titleInput = document.getElementById('reddit-submit-title');
-      const urlInput = document.getElementById('reddit-submit-url');
-      const errEl = document.getElementById('reddit-submit-error');
-      if (subInput) subInput.value = prefillSub;
-      if (titleInput) titleInput.value = prefillTitle;
-      if (urlInput) urlInput.value = prefillUrl;
-      if (errEl) errEl.textContent = '';
-      modal.dataset.feedUrl = feedUrl;
-      modal.dataset.entryId = entryId;
-      modal.removeAttribute('hidden');
-      if (subInput) subInput.focus();
-    }
-
-    document.getElementById('reddit-submit-confirm')?.addEventListener('click', async () => {
-      const modal = document.getElementById('reddit-submit-modal');
-      if (!modal) return;
-      const subInput = document.getElementById('reddit-submit-sub');
-      const titleInput = document.getElementById('reddit-submit-title');
-      const urlInput = document.getElementById('reddit-submit-url');
-      const errEl = document.getElementById('reddit-submit-error');
-      const subreddit = (subInput?.value || '').trim();
-      const title = (titleInput?.value || '').trim();
-      const url = (urlInput?.value || '').trim();
-      if (!subreddit) { if (errEl) errEl.textContent = 'Subreddit is required.'; return; }
-      if (!url) { if (errEl) errEl.textContent = 'URL is required.'; return; }
-      const btn = document.getElementById('reddit-submit-confirm');
-      if (btn) btn.disabled = true;
-      try {
-        const r = await fetch('/api/reddit/submit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ subreddit, title, url,
-            feed_url: modal.dataset.feedUrl || '',
-            entry_id: modal.dataset.entryId || '' }),
-        });
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
-        modal.setAttribute('hidden', '');
-        showToastMessage(`Submitted to r/${subreddit.replace(/^r\//, '')}.`);
-      } catch (e) {
-        if (errEl) errEl.textContent = e.message || 'Submit failed.';
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    });
-    document.getElementById('reddit-submit-cancel')?.addEventListener('click', () => {
-      document.getElementById('reddit-submit-modal')?.setAttribute('hidden', '');
     });
 
     document.addEventListener('click', (event) => {
@@ -15585,11 +15513,8 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
           const quireRow = document.getElementById('sett-star-quire-row');
           const ipOk = !!window.INSTAPAPER_CONFIGURED, ytOk = !!d.yt_oauth_connected, emOk = !!window.EMAIL_CONFIGURED;
           const quireOk = !!d.quire_connected && !!d.quire_project_oid;
-          const redditOk = !!d.reddit_connected;
           if (ipRow) { ipRow.hidden = !ipOk; const c = document.getElementById('sett-star-ip'); if (c) c.checked = !!d.star_send_instapaper; }
           if (quireRow) { quireRow.hidden = !quireOk; const c = document.getElementById('sett-star-quire'); if (c) c.checked = !!d.star_send_quire; }
-          const redditRow = document.getElementById('sett-star-reddit-row');
-          if (redditRow) { redditRow.hidden = !redditOk; const i = document.getElementById('sett-star-reddit-sub'); if (i) i.value = d.star_send_reddit_subreddit || ''; }
           if (emRow) { emRow.hidden = !emOk; const i = document.getElementById('sett-star-email'); if (i) i.value = d.star_send_email || ''; }
           if (ytRow) {
             ytRow.hidden = !ytOk;
@@ -15616,7 +15541,7 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
               })();
             }
           }
-          if (none) none.hidden = (ipOk || ytOk || emOk || quireOk || redditOk);
+          if (none) none.hidden = (ipOk || ytOk || emOk || quireOk);
         }
         v('sett-yt-oauth-client-id', d.yt_oauth_client_id);
         secretField('sett-yt-oauth-client-secret', d.yt_oauth_client_secret_set, d.yt_oauth_client_secret_masked);
@@ -15755,29 +15680,11 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             if (hint) hint.hidden = false;
           } else { if (el) el.hidden = true; if (hint) hint.hidden = true; }
         }
-        // Reddit integration: creds + connection status.
-        v('sett-reddit-client-id', d.reddit_client_id);
-        secretField('sett-reddit-client-secret', d.reddit_client_secret_set, d.reddit_client_secret_masked);
         secretField('sett-redlisten-api-key', d.redlisten_api_key_set, d.redlisten_api_key_masked);
         {
           const st = document.getElementById('sett-redlisten-status');
           if (st) st.textContent = d.redlisten_active ? 'Redlisten is active: Reddit feeds refresh through it.' : '';
           renderRedlistenStats(d.redlisten_stats);
-        }
-        {
-          const rdConfigured = !!d.reddit_configured;
-          const rdConnected = !!d.reddit_connected;
-          window.REDDIT_CONNECTED = rdConnected;
-          const row = document.getElementById('sett-reddit-oauth-row');
-          const status = document.getElementById('sett-reddit-oauth-status');
-          const connect = document.getElementById('sett-reddit-oauth-connect');
-          const disconnect = document.getElementById('sett-reddit-oauth-disconnect');
-          if (row) row.hidden = !rdConfigured;
-          if (status) status.textContent = rdConnected
-            ? `Connected as /u/${d.reddit_username || 'Reddit'}.`
-            : rdConfigured ? 'Not connected.' : '';
-          if (connect) connect.hidden = rdConnected || !rdConfigured;
-          if (disconnect) disconnect.hidden = !rdConnected;
         }
         // Populate OAuth callback URL hints with the actual public URL.
         {
@@ -15788,7 +15695,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             'sett-quire-callback-url':     base + '/quire/callback',
             'sett-pinterest-callback-url': base + '/integrations/pinterest/oauth/callback',
             'sett-inoreader-callback-url': base + '/inoreader/oauth/callback',
-            'sett-reddit-callback-url':    base + '/integrations/reddit/oauth/callback',
           };
           for (const [id, url] of Object.entries(cbMap)) {
             const el = document.getElementById(id);
@@ -15931,9 +15837,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
             star_send_yt_playlist: (document.getElementById('sett-star-yt-playlist')?.value || ''),
             star_send_yt_playlist_title: (() => { const s = document.getElementById('sett-star-yt-playlist'); const o = s && s.options[s.selectedIndex]; return (o && o.dataset.title) || ''; })(),
             star_send_email: (document.getElementById('sett-star-email')?.value || '').trim(),
-            star_send_reddit_subreddit: (document.getElementById('sett-star-reddit-sub')?.value || '').trim(),
-            reddit_client_id: g('sett-reddit-client-id'),
-            reddit_client_secret: g('sett-reddit-client-secret'),
             redlisten_api_key: g('sett-redlisten-api-key'),
           };
         }
@@ -16027,10 +15930,6 @@ const UNCATEGORIZED_FOLDER_ID = '-1';
       });
       document.getElementById('sett-quire-disconnect')?.addEventListener('click', async () => {
         await fetch('/quire/disconnect', { method: 'POST', credentials: 'same-origin' });
-        loadSettingsData();
-      });
-      document.getElementById('sett-reddit-oauth-disconnect')?.addEventListener('click', async () => {
-        await fetch('/integrations/reddit/oauth/disconnect', { method: 'POST', credentials: 'same-origin' });
         loadSettingsData();
       });
 

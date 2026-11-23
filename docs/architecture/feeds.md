@@ -1298,9 +1298,9 @@ through Redlisten", the last sweep's error, "Needs a Redlisten API key", or "Uns
 unsupported and skipped). `services/redlisten.py` fills feeds from api.redlisten.com's Reddit-compatible listings through
 `reddit.post_to_entry`, which unescapes and sanitizes the body like fetched feed HTML. Entry ids are the post permalink; the old RSS entries
 used `.../r/<sub>/t3_<id>`, so the two schemes never share an id (no overlap exists today, since the RSS history predates the sweep). The
-key resolves per-user → admin shared → `REDLISTEN_API_KEY` env (`get_redlisten_api_key`), and when set the scheduler uses it instead of the
-OAuth sync. Sources are the reader's enabled Reddit subscriptions, in a folder or not. The free plan is 1,000 requests a month and 50,000
-results, so the scheduled sweep runs at most hourly, batches up to 10 subreddits per request (`/r/a+b/new`, posts routed back by their
+key resolves per-user → admin shared → `REDLISTEN_API_KEY` env (`get_redlisten_api_key`). Sources are the reader's enabled Reddit
+subscriptions, in a folder or not. The free plan is 1,000 requests a month and 50,000 results, so the scheduled sweep runs at most hourly,
+batches up to 10 subreddits per request (`/r/a+b/new`, posts routed back by their
 `subreddit` field, permalink as fallback), checks profile feeds only daily, asks for the plan's 50-result page, warns at 80% of the monthly
 quota, and any 429 stops it (a monthly-quota 429 pauses it for hours). More than 10 subreddits costs a second request per sweep, which
 exceeds the free quota. Any `update_feeds` call except the scheduler's (`external_sync=False`), such as a folder refresh, the Refresh button
