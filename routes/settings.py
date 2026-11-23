@@ -228,6 +228,7 @@ from main import (
     youtube_quota_cap,
 )
 from services import redlisten as redlisten_service
+from services.errors import public_error
 from services.redirects import local_url
 
 router = APIRouter()
@@ -254,7 +255,7 @@ def check_redlisten_key() -> JSONResponse:
         with get_meta_connection() as conn:
             redlisten_service.check_key(conn, key)
     except redlisten_service.RedlistenError as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+        return JSONResponse({"ok": False, "error": public_error(exc, "Redlisten check")}, status_code=502)
     return JSONResponse({"ok": True, "stats": _redlisten_stats()})
 
 

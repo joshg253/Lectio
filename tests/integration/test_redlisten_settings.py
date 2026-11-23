@@ -106,7 +106,7 @@ def test_check_reports_a_rejected_key(configured, monkeypatch):
 
     monkeypatch.setattr(routes.settings.redlisten_service, "check_key", boom)
     resp = client.post("/settings/redlisten/check")
-    assert resp.status_code == 502 and "invalid" in resp.json()["error"]
+    assert resp.status_code == 502 and "Redlisten check failed" in resp.json()["error"]
 
 
 def test_check_returns_stats_and_never_the_key(configured, monkeypatch):
