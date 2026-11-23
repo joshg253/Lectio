@@ -1314,3 +1314,11 @@ headers on every sweep response and is stored in a per-user `redlisten_usage` ro
 costs a request, so only the Settings "Check plan and usage" button calls it (`POST /settings/redlisten/check`). `get_stats` adds the
 subscription counts and the projected monthly requests (`730 * ceil(subs / 10) + 30 * profiles`) with hints, and `/settings/all` returns it
 as `redlisten_stats`.
+
+## Future-dated feed entries
+
+Some publishers stamp new items at a fixed future hour (e.g. noon UTC "today"). `entry_publication_date` clamps a feed `published` more than
+1h past the entry's received time (`added`) to the received time; `_entry_sort_sql` mirrors this for the SQL sort fast paths. It is relative
+to `added`, not now, so the date doesn't shift as time passes. Only `published` is clamped: `updated` advances legitimately after first fetch.
+Stored values are untouched, except that "move to feed" and host migration copy the effective (clamped) date. A manual date set later than
+the received time is also clamped. Fever, GReader and Miniflux still use the raw date (see Plan.md).

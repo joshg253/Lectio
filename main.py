@@ -7187,7 +7187,37 @@ def real_published_date(value: datetime | None) -> datetime | None:
 # The URL/title inference tiers of entry_publication_date are deliberately not
 # reproduced here: they cannot be expressed in SQL, and they only ever apply to
 # entries this expression already treats as undated.
-_ENTRY_SORT_SQL = "coalesce(published, updated, first_updated)"
+
+
+# A feed date this far past the received time is a publisher clock/timezone quirk (e.g. "today" always stamped at a fixed future hour),
+# not a publication. Relative to `added`, not now, so an entry's date never changes as time passes.
+_FUTURE_DATE_SLACK = timedelta(hours=1)
+
+
+def _entry_sort_sql(prefix: str = "") -> str:
+    """SQL mirror of entry_publication_date's feed tiers, including `_clamp_to_received` (a `published` more than the slack past
+    `first_updated` sorts as `first_updated`). Only `published` is clamped: `updated` legitimately advances after first fetch."""
+    p, f = f"{prefix}published", f"{prefix}first_updated"
+    return (
+        f"CASE WHEN {p} IS NOT NULL AND {p} > datetime({f}, '+{int(_FUTURE_DATE_SLACK.total_seconds())} seconds') THEN {f} "
+        f"ELSE coalesce({p}, {prefix}updated, {f}) END"
+    )
+
+
+_ENTRY_SORT_SQL = _entry_sort_sql()
+
+
+def _clamp_to_received(value: datetime | None, entry) -> datetime | None:
+    """*value*, or the entry's received time when *value* is more than the slack ahead of it."""
+    added = getattr(entry, "added", None)
+    if value is None or added is None:
+        return value
+    try:
+        v = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        a = added if added.tzinfo is not None else added.replace(tzinfo=timezone.utc)
+        return added if v > a + _FUTURE_DATE_SLACK else value
+    except AttributeError, TypeError, ValueError, OverflowError:
+        return value
 
 
 def entry_publication_date(entry) -> datetime | None:
@@ -7203,7 +7233,7 @@ def entry_publication_date(entry) -> datetime | None:
     `entry.link` and `entry.id` can differ and the date may live in either.
     """
     return (
-        real_published_date(getattr(entry, "published", None))
+        _clamp_to_received(real_published_date(getattr(entry, "published", None)), entry)
         or real_published_date(getattr(entry, "updated", None))
         or url_inferred_pubdate(getattr(entry, "link", None))
         or url_inferred_pubdate(getattr(entry, "id", None))
@@ -13784,7 +13814,7 @@ def _search_entry_keys_in_sql(
                 "SELECT e.feed, e.id FROM entries e "
                 "LEFT JOIN feeds f ON f.url = e.feed "
                 f"WHERE {' AND '.join(where)} "
-                "ORDER BY COALESCE(e.published, e.first_updated) DESC LIMIT ?",
+                "ORDER BY " + _entry_sort_sql("e.") + " DESC LIMIT ?",
                 params,
             ).fetchall()
         finally:
@@ -13822,9 +13852,7 @@ def _sorted_star_key_window(
     # made it worth checking the chunked one.
     by_star = sort_by == "starred"
     by_size = sort_by == "size"
-    sort_expr = (
-        "''" if by_star or by_size else "COALESCE(e.published, e.updated, e.first_updated)" if sort_by == "post" else "e.first_updated"
-    )
+    sort_expr = "''" if by_star or by_size else _entry_sort_sql("e.") if sort_by == "post" else "e.first_updated"
     read_clause = {
         True: " AND e.read = 1",
         False: " AND (e.read IS NULL OR e.read != 1)",

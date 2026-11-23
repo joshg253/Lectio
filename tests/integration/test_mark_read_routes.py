@@ -251,7 +251,7 @@ def test_older_than_marks_entries_dated_only_by_added(monkeypatch):
     entries = [
         _FakeEntry("e_added_old", published=None, updated=None, added=old),  # marked
         _FakeEntry("e_pub_old", published=old, added=recent),  # marked
-        _FakeEntry("e_recent", published=recent, added=old),  # skipped (published recent)
+        _FakeEntry("e_recent", published=recent, added=recent),  # skipped (published recent)
         _FakeEntry("e_no_date", published=None, updated=None, added=None),  # skipped
     ]
     fake = _FakeReader(entries)
