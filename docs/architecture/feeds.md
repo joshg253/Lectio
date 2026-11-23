@@ -1288,3 +1288,25 @@ Only posts added in the last day are swept, which bounds the scan, and any post 
 A feed can lead with a stub (a literal `"null"` text/plain element, an escaped empty paragraph, an author blurb), so nothing reads `entry.content[0]`. `services/entry_content.py` picks the element with the most visible words (`richest_content`) and `entry_body` falls back to the summary; the pane, tag auto-refetch, move/merge, dedup, email and the Google Reader/Fever/Miniflux APIs all go through it.
 
 A failed `videos.list` call (timeout, quota) is not a result: `get_video_durations_batch` reports those ids in `.failed`, the callers leave them uncached rather than storing a "no duration" negative, and `fetch_and_store_durations_for_feed` skips them for 10 minutes so an outage isn't re-hit on every refresh.
+
+**Reddit is a special feed type (via Redlisten).** Reddit killed its RSS, so a Reddit feed is only a stored identity URL
+(`https://www.reddit.com/r/<sub>/.rss`, built by `reddit.reddit_feed_url_from_input` from `r/name`, `u/name` or any reddit.com URL in Add
+Feed, which skips discovery; a typed name reuses an existing feed's spelling case-insensitively) and is never fetched directly:
+`FeedRefreshService.is_externally_synced` skips it and clears stale failures. Feed Properties (`_external_feed_health`) shows "Synced
+through Redlisten", the last sweep's error, "Needs a Redlisten API key", or "Unsupported Reddit address" -- never Failing.
+`reddit.feed_target` decides what a stored URL follows (`/r/a`, `/r/a+b`, `/user/x/submitted`; search, top, threads and overviews are
+unsupported and skipped). `services/redlisten.py` fills feeds from api.redlisten.com's Reddit-compatible listings through
+`reddit.post_to_entry`, which unescapes and sanitizes the body like fetched feed HTML. Entry ids are the post permalink; the old RSS entries
+used `.../r/<sub>/t3_<id>`, so the two schemes never share an id (no overlap exists today, since the RSS history predates the sweep). The
+key resolves per-user → admin shared → `REDLISTEN_API_KEY` env (`get_redlisten_api_key`), and when set the scheduler uses it instead of the
+OAuth sync. Sources are the reader's enabled Reddit subscriptions, in a folder or not. The free plan is 1,000 requests a month and 50,000
+results, so the scheduled sweep runs at most hourly, batches up to 10 subreddits per request (`/r/a+b/new`, posts routed back by their
+`subreddit` field, permalink as fallback), checks profile feeds only daily, asks for the plan's 50-result page, warns at 80% of the monthly
+quota, and any 429 stops it (a monthly-quota 429 pauses it for hours). More than 10 subreddits costs a second request per sweep, which
+exceeds the free quota. Any `update_feeds` call except the scheduler's (`external_sync=False`), such as a folder refresh, the Refresh button
+or a new feed, runs a forced sweep of just those feeds, skipping the spacing but not the back-off or a 60 s per-feed cooldown; Feed
+Properties never queues one. Pacing state is per user, so users sharing one key do not coordinate (see Plan.md). Sweep errors are recorded
+and shown in Feed Properties. Entries the user deleted (`deleted_entries`) are skipped before insert, and feeds that gain entries run
+`FeedRefreshService.after_external_sync` (tombstone purge, overrides, rules), since the normal refresh path no longer reaches them. A
+changed key resets the back-off and spacing; a failed profile check is retried next sweep, not tomorrow; Reddit feeds skip WebSub hub
+discovery. A full page of all-new posts is logged as a possible gap (no pagination yet).

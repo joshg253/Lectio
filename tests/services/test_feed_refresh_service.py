@@ -11,6 +11,7 @@ import socks
 
 import services.feed_refresh as _feed_refresh_mod
 from services import bot_challenge
+from services import reddit as reddit_service
 from services.feed_refresh import FeedRefreshService
 
 
@@ -1358,3 +1359,53 @@ def test_a_raising_duration_fetch_still_lets_the_hook_run(tmp_path: Path):
     service.update_feeds(["https://a.test/feed"], enhance=False, inline_followups=True)
 
     assert events == ["update https://a.test/feed", "hook https://a.test/feed"]
+
+
+def test_externally_synced_feeds_are_not_fetched_and_their_failures_clear(tmp_path: Path):
+    db = tmp_path / "m.sqlite"
+    events: list[str] = []
+    reader = _NewCountReader({"https://example.com/feed": 0}, events)
+    service = _build_service(db, reader, [], [])
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
+    conn = _make_conn(db)
+    conn.execute(
+        "INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error) VALUES (?, 3, 99, 'HTTP 404')",
+        ("https://www.reddit.com/r/x/.rss",),
+    )
+    conn.commit()
+
+    service.update_feeds(["https://www.reddit.com/r/x/.rss", "https://example.com/feed"])
+
+    assert events == ["update https://example.com/feed"]
+    row = (
+        _make_conn(db)
+        .execute("SELECT consecutive_failures, last_error FROM feed_failure_state WHERE feed_url = ?", ("https://www.reddit.com/r/x/.rss",))
+        .fetchone()
+    )
+    assert (row["consecutive_failures"], row["last_error"]) == (0, None)
+
+
+def test_externally_synced_feeds_sync_on_any_refresh_but_the_schedulers(tmp_path: Path):
+    synced: list[list[str]] = []
+    service = _build_service(tmp_path / "m.sqlite", _NewCountReader({}, []), [], [])
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
+    service._sync_externally = synced.append
+    url = "https://www.reddit.com/r/x/.rss"
+
+    service.update_feeds([url], inline_followups=True, external_sync=False)
+    assert synced == []
+    service.update_feeds([url], inline_followups=True)  # e.g. a folder refresh
+    assert synced == [[url]]
+
+
+def test_externally_synced_feeds_never_appear_in_the_failing_list(tmp_path: Path):
+    db = tmp_path / "m.sqlite"
+    service = _build_service(db, _NewCountReader({}, []), [], [])
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
+    conn = _make_conn(db)
+    for url in ("https://www.reddit.com/r/x/.rss", "https://example.com/feed"):
+        conn.execute("INSERT INTO feed_failure_state (feed_url, consecutive_failures, last_error) VALUES (?, 2, 'HTTP 404')", (url,))
+        conn.execute("INSERT INTO folder_feeds (folder_id, feed_url) VALUES (1, ?)", (url,))
+    conn.commit()
+
+    assert [r["feed_url"] for r in service.get_problematic_feeds(_make_conn(db))] == ["https://example.com/feed"]

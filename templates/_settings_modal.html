@@ -299,6 +299,12 @@
             <label class="settings-label" for="sett-reddit-client-secret">Client Secret</label>
             <input type="password" id="sett-reddit-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
           </div>
+          <p class="settings-hint" style="grid-column:1 / -1">Reddit's RSS no longer works, so Reddit feeds (add them as <code>r/name</code> or a reddit.com URL) are fetched through <a href="https://redlisten.com/docs" target="_blank" rel="noopener">Redlisten</a> with an API key (no Reddit app needed). Without one they stay empty. The free plan allows 1,000 requests a month, so Lectio checks at most hourly and batches subreddits.</p>
+          <div class="settings-field" style="grid-column:1 / -1">
+            <label class="settings-label" for="sett-redlisten-api-key">Redlisten API key</label>
+            <input type="password" id="sett-redlisten-api-key" class="settings-input settings-input--secret" placeholder="rl_live_..." autocomplete="new-password" />
+            <span id="sett-redlisten-status" class="settings-inline-status"></span>
+          </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-reddit-oauth-row">
             <span id="sett-reddit-oauth-status" class="settings-inline-status"></span>
             <a id="sett-reddit-oauth-connect" class="settings-inline-btn" href="/integrations/reddit/oauth/connect" hidden>Connect Reddit account</a>

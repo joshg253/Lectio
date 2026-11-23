@@ -69,6 +69,7 @@ from services import youtube_oauth as youtube_oauth_service
 from services import pinterest_oauth as pinterest_oauth_service
 from services import quire as quire_service
 from services import reddit as reddit_service
+from services import redlisten as redlisten_service
 from services import inoreader as inoreader_service
 from services import passwords
 from services import podcast_audio
@@ -679,6 +680,9 @@ SETTING_REDDIT_USERNAME = "reddit_username"
 SETTING_SHARED_REDDIT_CLIENT_ID = "shared_reddit_client_id"
 SETTING_SHARED_REDDIT_CLIENT_SECRET = "shared_reddit_client_secret"
 SETTING_STAR_SEND_REDDIT_SUBREDDIT = "star_send_reddit_subreddit"
+# Redlisten (https://redlisten.com): API key for fetching Reddit feeds without Reddit's own API.
+SETTING_REDLISTEN_API_KEY = "redlisten_api_key"
+SETTING_SHARED_REDLISTEN_API_KEY = "shared_redlisten_api_key"
 # Instance tuning settings (admin-only, stored in admin's app_settings).
 SETTING_FETCH_HISTORY_MAX_AGE_DAYS = "fetch_history_max_age_days"
 # Auto-read age (days; 0 = off) at instance and account level. Each level below can only shorten it: folder, then feed.
@@ -901,6 +905,7 @@ _ENV_PINTEREST_OAUTH_CLIENT_SECRET = os.getenv("PINTEREST_OAUTH_CLIENT_SECRET", 
 _ENV_QUIRE_CLIENT_ID = os.getenv("QUIRE_CLIENT_ID", "").strip()
 _ENV_QUIRE_CLIENT_SECRET = os.getenv("QUIRE_CLIENT_SECRET", "").strip()
 # Inoreader migration OAuth creds — env is the fallback; DB settings take precedence.
+_ENV_REDLISTEN_API_KEY = os.getenv("REDLISTEN_API_KEY", "").strip()
 _ENV_INOREADER_CLIENT_ID = os.getenv("INOREADER_CLIENT_ID", "").strip()
 _ENV_INOREADER_CLIENT_SECRET = os.getenv("INOREADER_CLIENT_SECRET", "").strip()
 _yt_sync_hour_raw = os.getenv("YOUTUBE_SYNC_HOUR", "").strip()
@@ -1239,6 +1244,13 @@ def get_reddit_credentials() -> tuple[str, str]:
     cid = get_runtime_setting(SETTING_REDDIT_CLIENT_ID) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_ID) or ""
     secret = get_runtime_setting(SETTING_REDDIT_CLIENT_SECRET) or _get_shared_credential(SETTING_SHARED_REDDIT_CLIENT_SECRET) or ""
     return cid, secret
+
+
+def get_redlisten_api_key() -> str:
+    """Redlisten API key. Resolution: per-user setting → shared-instance (admin's settings) → REDLISTEN_API_KEY env."""
+    return (
+        get_runtime_setting(SETTING_REDLISTEN_API_KEY) or _get_shared_credential(SETTING_SHARED_REDLISTEN_API_KEY) or _ENV_REDLISTEN_API_KEY
+    )
 
 
 def reddit_connected() -> bool:
@@ -10327,7 +10339,10 @@ def get_feed_properties(feed_url: str) -> dict:
                 last_received_dt = entry.added
 
         last_exception = getattr(feed_obj, "last_exception", None)
-        if last_exception:
+        if feed_refresh_service.is_externally_synced(feed_url):
+            # Reddit RSS is dead: these feeds are filled by Redlisten or not at all, and are never "failing".
+            health, health_detail = _external_feed_health(feed_url)
+        elif last_exception:
             health = "error"
             health_detail = feed_refresh_service.humanize_feed_exception(last_exception)
         elif getattr(feed_obj, "updates_enabled", True):
@@ -10518,7 +10533,12 @@ def get_feed_properties(feed_url: str) -> dict:
         # known feed error, start a background update so the UI can show posts
         # shortly after the request. We don't block the request on the update.
         try:
-            should_queue_update = total_posts == 0 and health != "error" and bool(getattr(feed_obj, "updates_enabled", True))
+            should_queue_update = (
+                total_posts == 0
+                and health != "error"
+                and bool(getattr(feed_obj, "updates_enabled", True))
+                and not feed_refresh_service.is_externally_synced(feed_url)  # a queued update would spend Redlisten quota
+            )
         except Exception:
             should_queue_update = False
 
@@ -12237,6 +12257,32 @@ def _run_rules_on_new_entries(feed_url: str) -> None:
             LOGGER.exception("[refresh] %s failed for %s", run.__name__, feed_url)
 
 
+def _external_feed_health(feed_url: str) -> tuple[str, str]:
+    """(health, detail) for a Reddit feed, which Lectio never fetches itself."""
+    if reddit_service.feed_target(feed_url) is None:
+        return "paused", "Unsupported Reddit address (only r/name, r/a+b and u/name are followed)."
+    if get_redlisten_api_key():
+        with get_meta_connection() as conn:
+            err = redlisten_service.last_error(conn)
+        if err:
+            return "error", f"Last Redlisten sync failed: {err}"
+        return "ok", "Synced through Redlisten."
+    if reddit_connected():
+        return "ok", "Synced through your Reddit account."
+    return "paused", "Needs a Redlisten API key (Settings → Integrations → Reddit)."
+
+
+def _redlisten_manual_sync(feed_urls: list[str]) -> None:
+    """Manual refresh / new-feed sync of Reddit feeds through Redlisten (no-op without a key)."""
+    key = get_redlisten_api_key()
+    if not key:
+        return
+    with get_meta_connection() as conn, get_reader() as reader:
+        redlisten_service.refresh_reddit_feeds(
+            conn, reader, key, only=feed_urls, force=True, on_new_entries=feed_refresh_service.after_external_sync
+        )
+
+
 feed_refresh_service = FeedRefreshService(
     get_meta_connection=get_meta_connection,
     get_reader=get_reader,
@@ -12254,6 +12300,8 @@ feed_refresh_service = FeedRefreshService(
     on_proxy_unreachable=_mark_backend_unreachable,
     progress_hook=_note_scheduler_progress,
     on_new_entries=lambda feed_url: _run_rules_on_new_entries(feed_url),
+    is_externally_synced=reddit_service.is_reddit_feed_url,
+    sync_externally=lambda urls: _redlisten_manual_sync(urls),
 )
 
 websub_service: WebSubService | None = (
@@ -19272,7 +19320,7 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> str:
                 (folder_id, feed_url),
             )
     invalidate_meta_structure_cache()
-    if websub_service:
+    if websub_service and not reddit_service.is_reddit_feed_url(feed_url):  # Reddit has no hub, and discovery would fetch the dead RSS URL
         _uid = tenancy.current_user_id()
         threading.Thread(
             target=websub_service._discover_and_subscribe,
@@ -20544,11 +20592,18 @@ def _scheduled_refresh_tick() -> None:
                 devto_service.refresh_all_devto_feeds(_sc)
                 _da_cid, _da_secret = get_deviantart_credentials()
                 deviantart_service.refresh_all_deviantart_feeds(_sc, _da_cid, _da_secret, access_token=get_deviantart_user_token())
-                _reddit_token = get_reddit_user_token()
-                if _reddit_token:
+                # Redlisten (key-based, paced for the free plan) wins over the OAuth path when a key is set.
+                _redlisten_key = get_redlisten_api_key()
+                _reddit_token = "" if _redlisten_key else get_reddit_user_token()
+                if _redlisten_key or _reddit_token:
                     try:
                         with get_reader() as _rdr:
-                            reddit_service.refresh_all_reddit_feeds(_sc, _rdr, _reddit_token)
+                            if _redlisten_key:
+                                redlisten_service.refresh_reddit_feeds(
+                                    _sc, _rdr, _redlisten_key, on_new_entries=feed_refresh_service.after_external_sync
+                                )
+                            else:
+                                reddit_service.refresh_all_reddit_feeds(_sc, _rdr, _reddit_token)
                     except Exception:
                         LOGGER.exception("[reddit] feed sync error in scheduler")
             if inoreader_connected():
@@ -20570,7 +20625,7 @@ def _scheduled_refresh_tick() -> None:
     # Refresh without enhancement so automation (hide-shorts, mark-read, dedup)
     # runs as soon as entries land, instead of queuing behind the network-heavy
     # lead-image / duration pass over the whole batch.
-    feed_refresh_service.update_feeds(feeds_to_refresh, enhance=False, inline_followups=True)
+    feed_refresh_service.update_feeds(feeds_to_refresh, enhance=False, inline_followups=True, external_sync=False)
     _run_automation_after_refresh(feeds_to_refresh)
     invalidate_unread_counts_cache()
     if websub_service:
