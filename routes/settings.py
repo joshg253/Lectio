@@ -228,10 +228,12 @@ router = APIRouter()
 
 def _redlisten_stats() -> dict | None:
     """Stored Redlisten usage and the cost of the current subscriptions; None without a key. Spends no request."""
-    if not get_redlisten_api_key():
+    key = get_redlisten_api_key()
+    if not key:
         return None
     try:
         with get_meta_connection() as conn, get_reader() as reader:
+            redlisten_service.forget_if_key_changed(conn, key)
             return redlisten_service.get_stats(conn, redlisten_service.reddit_feed_urls(reader))
     except Exception:  # noqa: BLE001 — a broken stats panel must not take the whole Settings load down
         return None

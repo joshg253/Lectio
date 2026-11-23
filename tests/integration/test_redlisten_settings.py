@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from _tenancy_helpers import configure_test_tenancy
 from fastapi import FastAPI
@@ -120,3 +122,16 @@ def test_check_returns_stats_and_never_the_key(configured, monkeypatch):
     resp = client.post("/settings/redlisten/check")
     assert resp.status_code == 200 and KEY not in resp.text
     assert resp.json()["stats"]["plan"] == "free" and resp.json()["stats"]["requests_used"] == 3
+
+
+def test_settings_drop_the_old_keys_stats_when_the_key_changes(configured, monkeypatch):
+    monkeypatch.setattr(main, "_ENV_REDLISTEN_API_KEY", "")
+    client = _client(monkeypatch, admin=False)
+    client.post("/settings/all", json={"redlisten_api_key": KEY})
+    client.get("/settings/all")  # first sight of the key
+    with main.get_meta_connection() as conn:
+        routes.settings.redlisten_service._record_usage(conn, {"requests_used": 7, "requests_limit": 1000}, time.time(), {"plan": "free"})
+    assert client.get("/settings/all").json()["redlisten_stats"]["plan"] == "free"
+    client.post("/settings/all", json={"redlisten_api_key": KEY + "2"})
+    stats = client.get("/settings/all").json()["redlisten_stats"]
+    assert (stats["plan"], stats["requests_used"]) == ("", None)
