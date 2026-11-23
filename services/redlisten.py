@@ -139,12 +139,14 @@ def _set(meta_conn, key: str, value: str) -> None:
 
 def _tombstones(meta_conn, feed_urls: list[str]) -> set[tuple[str, str]]:
     """Entries the user deleted (``deleted_entries``): a re-listed post must not bring them back."""
-    placeholders = ",".join("?" for _ in feed_urls)
+    dead: set[tuple[str, str]] = set()
     try:
-        rows = meta_conn.execute(f"SELECT feed_url, entry_id FROM deleted_entries WHERE feed_url IN ({placeholders})", feed_urls).fetchall()
+        for feed_url in feed_urls:
+            for row in meta_conn.execute("SELECT entry_id FROM deleted_entries WHERE feed_url = ?", (feed_url,)):
+                dead.add((feed_url, str(row[0])))
     except sqlite3.OperationalError:
-        return set()
-    return {(str(r[0]), str(r[1])) for r in rows}
+        pass
+    return dead
 
 
 def _add_entries(reader, entries: list[dict], dead: set[tuple[str, str]]) -> int:
@@ -162,7 +164,8 @@ def _add_entries(reader, entries: list[dict], dead: set[tuple[str, str]]) -> int
 
 def _reset_pacing_if_key_changed(meta_conn, api_key: str) -> None:
     """A different key starts with a clean slate: the old key's back-off and spacing say nothing about the new one."""
-    fingerprint = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+    # Only to tell keys apart, never to store or check a password; a slow hash keeps the key unrecoverable from the stored value anyway.
+    fingerprint = hashlib.pbkdf2_hmac("sha256", api_key.encode(), b"lectio-redlisten-key-fingerprint", 10_000).hex()[:12]
     row = meta_conn.execute("SELECT value FROM app_settings WHERE key = ?", (_KEY_FINGERPRINT_KEY,)).fetchone()
     if row and row[0] == fingerprint:
         return
