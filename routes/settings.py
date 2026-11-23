@@ -185,6 +185,7 @@ from main import (
     get_push_active_feed_urls,
     get_quire_credentials,
     get_quire_usage_status,
+    get_reader,
     get_reddit_credentials,
     get_redlisten_api_key,
     get_resend_api_key,
@@ -226,9 +227,38 @@ from main import (
     youtube_hide_unpremiered_global,
     youtube_quota_cap,
 )
+from services import redlisten as redlisten_service
+from services.errors import public_error
 from services.redirects import local_url
 
 router = APIRouter()
+
+
+def _redlisten_stats() -> dict | None:
+    """Stored Redlisten usage and the cost of the current subscriptions; None without a key. Spends no request."""
+    key = get_redlisten_api_key()
+    if not key:
+        return None
+    try:
+        with get_meta_connection() as conn, get_reader() as reader:
+            redlisten_service.forget_if_key_changed(conn, key)
+            return redlisten_service.get_stats(conn, redlisten_service.reddit_feed_urls(reader))
+    except Exception:  # noqa: BLE001 — a broken stats panel must not take the whole Settings load down
+        return None
+
+
+@router.post("/settings/redlisten/check")
+def check_redlisten_key() -> JSONResponse:
+    """Ask Redlisten for the plan and usage (``/v1/me``, one request) and remember it."""
+    key = get_redlisten_api_key()
+    if not key:
+        return JSONResponse({"ok": False, "error": "No Redlisten API key is set."}, status_code=400)
+    try:
+        with get_meta_connection() as conn:
+            redlisten_service.check_key(conn, key)
+    except redlisten_service.RedlistenError as exc:
+        return JSONResponse({"ok": False, "error": public_error(exc, "Redlisten check")}, status_code=502)
+    return JSONResponse({"ok": True, "stats": _redlisten_stats()})
 
 
 @router.post("/settings/email-bcc")
@@ -354,6 +384,7 @@ def get_all_settings():
             "redlisten_api_key_set": bool(get_runtime_setting(SETTING_REDLISTEN_API_KEY)),
             "redlisten_api_key_masked": _masked(get_runtime_setting(SETTING_REDLISTEN_API_KEY, "")),
             "redlisten_active": bool(get_redlisten_api_key()),
+            "redlisten_stats": _redlisten_stats(),
             "star_send_reddit_subreddit": get_runtime_setting(SETTING_STAR_SEND_REDDIT_SUBREDDIT, ""),
             "resend_api_key_set": bool(resend_key),
             "resend_api_key_masked": _masked(resend_key),

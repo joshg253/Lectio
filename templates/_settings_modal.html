@@ -299,11 +299,17 @@
             <label class="settings-label" for="sett-reddit-client-secret">Client Secret</label>
             <input type="password" id="sett-reddit-client-secret" class="settings-input settings-input--secret" placeholder="your client secret" autocomplete="new-password" />
           </div>
-          <p class="settings-hint" style="grid-column:1 / -1">Reddit's RSS no longer works, so Reddit feeds (add them as <code>r/name</code> or a reddit.com URL) are fetched through <a href="https://redlisten.com/docs" target="_blank" rel="noopener">Redlisten</a> with an API key (no Reddit app needed). Without one they stay empty. The free plan allows 1,000 requests a month, so Lectio checks at most hourly and batches subreddits.</p>
+          <p class="settings-hint" style="grid-column:1 / -1">Reddit's RSS no longer works, so Reddit feeds (add them as <code>r/name</code> or a reddit.com URL) are fetched through <a href="https://redlisten.com/docs" target="_blank" rel="noopener">Redlisten</a> with an API key (no Reddit app needed). Without one they stay empty. The free plan allows 1,000 requests a month, so Lectio checks at most hourly and batches up to 10 subreddits per request.</p>
           <div class="settings-field" style="grid-column:1 / -1">
             <label class="settings-label" for="sett-redlisten-api-key">Redlisten API key</label>
             <input type="password" id="sett-redlisten-api-key" class="settings-input settings-input--secret" placeholder="rl_live_..." autocomplete="new-password" />
             <span id="sett-redlisten-status" class="settings-inline-status"></span>
+          </div>
+          <div id="sett-redlisten-stats" class="settings-yt-quota" style="grid-column:1 / -1" hidden></div>
+          <ul id="sett-redlisten-hints" class="settings-hint" style="grid-column:1 / -1;margin:0;padding-left:1.2rem" hidden></ul>
+          <div class="settings-field" style="grid-column:1 / -1">
+            <button type="button" id="sett-redlisten-check" class="settings-inline-btn" hidden>Check plan and usage</button>
+            <span class="settings-hint" id="sett-redlisten-check-note" hidden>Costs one request of the monthly quota. Usage otherwise updates after each sweep.</span>
           </div>
           <div class="settings-da-account" style="grid-column:1 / -1;margin-top:0.25rem" id="sett-reddit-oauth-row">
             <span id="sett-reddit-oauth-status" class="settings-inline-status"></span>
