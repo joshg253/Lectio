@@ -241,18 +241,6 @@
           </label>
         </div>
 
-        <h3>Reddit OAuth</h3>
-        <p class="account-hint">Register a <em>web app</em> at <a href="https://www.reddit.com/prefs/apps" target="_blank" rel="noopener">reddit.com/prefs/apps</a> with <code>{{ public_url }}/integrations/reddit/oauth/callback</code> as the redirect URI.</p>
-        <div class="tuning-grid keys-grid">
-          <label class="fld">Client ID
-            <input type="text" id="adm-reddit-client-id" value="{{ shared_reddit_client_id }}" placeholder="your app client ID" autocomplete="off" />
-          </label>
-          <label class="fld">Client secret
-            <input type="password" id="adm-reddit-client-secret" autocomplete="new-password"
-                   placeholder="{{ shared_reddit_client_secret_masked if shared_reddit_client_secret_set else 'your client secret' }}" />
-          </label>
-        </div>
-
         <div style="margin-top:.75rem">
           <button type="button" class="adm-save">Save configuration</button>
         </div>
@@ -401,10 +389,6 @@
         if (ytSecret) payload.shared_yt_oauth_client_secret = ytSecret;
         const piSecret = $('adm-pinterest-oauth-client-secret')?.value.trim();
         if (piSecret) payload.shared_pinterest_oauth_client_secret = piSecret;
-        const rdId = $('adm-reddit-client-id')?.value.trim();
-        if (rdId !== undefined) payload.shared_reddit_client_id = rdId;
-        const rdSecret = $('adm-reddit-client-secret')?.value.trim();
-        if (rdSecret) payload.shared_reddit_client_secret = rdSecret;
         const rlKey = $('adm-redlisten-api-key')?.value.trim();
         if (rlKey) payload.shared_redlisten_api_key = rlKey;
         try { await post('/settings/all', payload); toast('Configuration saved.'); }

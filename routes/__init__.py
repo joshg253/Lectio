@@ -414,7 +414,7 @@ actually call it -- moving the function out of main.py entirely would still have
 route this stage didn't move. `normalize_resume_read_filter` and `unsubscribed_feed_urls_among` both stayed too,
 confirmed shared with `_home_inner` (main.py, the `/`+`/read` home-view core, Stage 10 territory) via the same
 grep. `get_meta_structure_snapshot`, `is_instapaper_configured`, `is_quire_configured`, `pinterest_oauth_connected`,
-`reddit_connected`, and `templates` are all pre-existing widely-shared main.py infrastructure (several already
+and `templates` are all pre-existing widely-shared main.py infrastructure (several already
 re-imported by `routes/feeds.py`/`routes/settings.py`) -- none of it moved. No `services.automation_rules`
 ordering constraint. One test file needed retargeting for the "handler registered directly as `main.<name>` on a
 bare test `FastAPI()` app" gotcha: `tests/integration/test_hide_locked_comics.py` (-> `routes.entries.entry_pane`).

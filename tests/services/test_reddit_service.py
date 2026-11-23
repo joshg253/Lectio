@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -60,23 +59,10 @@ def test_is_reddit_feed_url(url, is_reddit):
 
 
 # ---------------------------------------------------------------------------
-# authorize_url
+# post_to_entry
 # ---------------------------------------------------------------------------
 
-
-def test_authorize_url_contains_params():
-    url = svc.authorize_url("my_client_id", "https://host/callback", "abc123")
-    assert "my_client_id" in url
-    assert "abc123" in url
-    assert "permanent" in url
-    assert "identity" in url or "submit" in url
-
-
-# ---------------------------------------------------------------------------
-# fetch_reddit_feed_entries
-# ---------------------------------------------------------------------------
-
-_SAMPLE_LISTING = {
+_SAMPLE_LISTING: dict = {
     "data": {
         "children": [
             {
@@ -106,32 +92,13 @@ _SAMPLE_LISTING = {
 }
 
 
-@patch("services.reddit.get_subreddit_new")
-def test_fetch_reddit_feed_entries_subreddit(mock_get_sub_new):
-    mock_get_sub_new.return_value = [c["data"] for c in _SAMPLE_LISTING["data"]["children"]]
-    entries = svc.fetch_reddit_feed_entries("tok", "https://old.reddit.com/r/buildapcsales/.rss")
-    assert len(entries) == 2
-    # Link post → external URL as link
-    assert entries[0]["link"] == "https://example.com/deal"
-    # Self post → permalink as link
-    assert "def456" in entries[1]["link"]
-    # IDs use the permalink
-    assert "abc123" in entries[0]["id"]
-    assert isinstance(entries[0]["published"], datetime)
-    mock_get_sub_new.assert_called_once_with("tok", "buildapcsales")
-
-
-@patch("services.reddit.get_user_submitted")
-def test_fetch_reddit_feed_entries_redditor(mock_get_user):
-    mock_get_user.return_value = [_SAMPLE_LISTING["data"]["children"][0]["data"]]
-    entries = svc.fetch_reddit_feed_entries("tok", "https://old.reddit.com/user/spez/submitted/.rss")
-    assert len(entries) == 1
-    mock_get_user.assert_called_once_with("tok", "spez")
-
-
-def test_fetch_reddit_feed_entries_unknown_url():
-    entries = svc.fetch_reddit_feed_entries("tok", "https://example.com/feed")
-    assert entries == []
+def test_post_to_entry_links_and_ids():
+    feed = "https://www.reddit.com/r/buildapcsales/.rss"
+    link_post, self_post = (svc.post_to_entry(c["data"], feed) for c in _SAMPLE_LISTING["data"]["children"])
+    assert link_post["link"] == "https://example.com/deal"  # link post: the external URL
+    assert "def456" in self_post["link"]  # self post: the thread
+    assert link_post["id"] == "https://www.reddit.com/r/buildapcsales/comments/abc123/cool_deal/"
+    assert isinstance(link_post["published"], datetime)
 
 
 # ---------------------------------------------------------------------------
@@ -152,31 +119,6 @@ def test_posts_from_listing_filters_non_t3():
     result = svc._posts_from_listing(data)
     assert len(result) == 1
     assert result[0]["title"] == "post"
-
-
-# ---------------------------------------------------------------------------
-# submit_link
-# ---------------------------------------------------------------------------
-
-
-def test_submit_link_strips_r_prefix():
-    with patch("services.reddit.httpx.Client") as mock_client_cls:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"json": {"errors": [], "data": {"url": "https://redd.it/abc", "id": "abc"}}}
-        mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
-        result = svc.submit_link("tok", "r/technology", "Title", "https://example.com")
-    assert result["url"] == "https://redd.it/abc"
-
-
-def test_submit_link_raises_on_api_error():
-    with patch("services.reddit.httpx.Client") as mock_client_cls:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"json": {"errors": [["SUBREDDIT_NOTALLOWED", "You are not allowed to post here.", "sr"]]}}
-        mock_client_cls.return_value.__enter__.return_value.post.return_value = mock_resp
-        with pytest.raises(RuntimeError, match="SUBREDDIT_NOTALLOWED"):
-            svc.submit_link("tok", "technology", "Title", "https://example.com")
 
 
 @pytest.mark.parametrize(
