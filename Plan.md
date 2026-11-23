@@ -545,3 +545,7 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
 - Reddit feed filters (e.g. a flair like "US"): apply locally to the batched `/r/a+b/new` results (no extra requests) rather than as a per-feed
   Redlisten search, which costs a request per feed per sweep and cannot batch. Check that the listing carries `link_flair_text` first. Add Feed
   currently drops search and filter parameters and warns.
+
+- Future-dated feed entries: the clamp covers the web app (Python and SQL sort). Fever/GReader/Miniflux, feed last-post stats and prune still use
+  the raw date; route them through `entry_effective_date`. Reader's own per-feed `recent_sort` is unclamped. A manual date later than receipt is
+  clamped; skip the clamp for `entry_date_overrides` rows if that bites.
