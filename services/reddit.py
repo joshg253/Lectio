@@ -20,7 +20,7 @@ import base64
 import html
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
@@ -138,9 +138,13 @@ _TARGET_USER_RE = re.compile(r"^/(?:user|u)/([A-Za-z0-9_-]+)/submitted(?:/new)?/
 def feed_target(url: str) -> tuple[str, list[str]] | None:
     """What a stored Reddit feed URL follows: ``("sub", [names])`` or ``("user", [name])``, or None if unsupported."""
     try:
-        path = urlparse(url).path or ""
+        parsed = urlparse(url)
     except ValueError:
         return None
+    # A search or time filter in the query narrows the feed; following the whole subreddit instead would flood it.
+    if {"q", "t", "restrict_sr", "flair"} & set(parse_qs(parsed.query)):
+        return None
+    path = parsed.path or ""
     if m := _TARGET_SUB_RE.match(path):
         return "sub", m.group(1).split("+")
     if m := _TARGET_USER_RE.match(path):
@@ -154,6 +158,8 @@ def reddit_feed_url_from_input(text: str) -> str | None:
     text = (text or "").strip()
     if not text:
         return None
+    if "://" not in text and re.match(r"^(?:[\w-]+\.)?reddit\.com/", text, re.IGNORECASE):
+        text = "https://" + text
     match = _SHORTHAND_RE.match(text)
     if not match and "://" in text and is_reddit_feed_url(text):
         match = _PAGE_RE.match(urlparse(text).path)

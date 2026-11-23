@@ -703,7 +703,8 @@ def discover_feed_route(url: str = Query(...)):
     if reddit_url:
         sub = reddit_service.subreddit_from_feed_url(reddit_url)
         label = f"r/{sub}" if sub else f"u/{reddit_service.redditor_from_feed_url(reddit_url)}"
-        filtered = "?" in url or "/search" in url
+        # A pasted page URL that is not a plain subreddit/user listing (search, top, a thread, a filter) is narrower than what we follow.
+        filtered = "://" in url and reddit_service.feed_target(url) is None
         note = f"Reddit feed for {label}."
         if filtered:
             note += " Search and filter parameters are not supported, so this follows every post."

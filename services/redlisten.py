@@ -9,8 +9,11 @@ The free plan allows 1,000 requests/month, so the sweep is deliberately thrifty:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -36,10 +39,12 @@ _LAST_SWEEP_KEY = "redlisten_last_sweep"
 _BLOCKED_UNTIL_KEY = "redlisten_blocked_until"
 _LAST_USER_SWEEP_KEY = "redlisten_last_user_sweep"
 _LAST_ERROR_KEY = "redlisten_last_error"
+_KEY_FINGERPRINT_KEY = "redlisten_key_fingerprint"
 _MANUAL_PREFIX = "redlisten_manual:"
 # A manual refresh (button, add-feed) skips the hourly spacing but not this per-feed one, so mashing Refresh cannot burn the monthly quota.
 MANUAL_COOLDOWN_SECONDS = 60
 
+_manual_lock = threading.Lock()
 _PERMALINK_SUB_RE = re.compile(r"^/r/([A-Za-z0-9_]+)/", re.IGNORECASE)
 
 
@@ -132,9 +137,21 @@ def _set(meta_conn, key: str, value: str) -> None:
     meta_conn.commit()
 
 
-def _add_entries(reader, entries: list[dict]) -> int:
+def _tombstones(meta_conn, feed_urls: list[str]) -> set[tuple[str, str]]:
+    """Entries the user deleted (``deleted_entries``): a re-listed post must not bring them back."""
+    placeholders = ",".join("?" for _ in feed_urls)
+    try:
+        rows = meta_conn.execute(f"SELECT feed_url, entry_id FROM deleted_entries WHERE feed_url IN ({placeholders})", feed_urls).fetchall()
+    except sqlite3.OperationalError:
+        return set()
+    return {(str(r[0]), str(r[1])) for r in rows}
+
+
+def _add_entries(reader, entries: list[dict], dead: set[tuple[str, str]]) -> int:
     added = 0
     for entry in entries:
+        if (entry["feed_url"], entry["id"]) in dead:
+            continue
         try:
             reader.add_entry(entry)
             added += 1
@@ -143,13 +160,28 @@ def _add_entries(reader, entries: list[dict]) -> int:
     return added
 
 
+def _reset_pacing_if_key_changed(meta_conn, api_key: str) -> None:
+    """A different key starts with a clean slate: the old key's back-off and spacing say nothing about the new one."""
+    fingerprint = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+    row = meta_conn.execute("SELECT value FROM app_settings WHERE key = ?", (_KEY_FINGERPRINT_KEY,)).fetchone()
+    if row and row[0] == fingerprint:
+        return
+    if row:  # a first run has nothing to reset
+        for key in (_BLOCKED_UNTIL_KEY, _LAST_SWEEP_KEY, _LAST_USER_SWEEP_KEY, _LAST_ERROR_KEY):
+            meta_conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+    meta_conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (_KEY_FINGERPRINT_KEY, fingerprint))
+    meta_conn.commit()
+
+
 def last_error(meta_conn) -> str:
     """The error that ended the most recent sweep, or "" if it succeeded (for Feed Properties)."""
     row = meta_conn.execute("SELECT value FROM app_settings WHERE key = ?", (_LAST_ERROR_KEY,)).fetchone()
     return str((row[0] if row else "") or "")
 
 
-def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = None, *, only=None, force: bool = False) -> int:
+def refresh_reddit_feeds(
+    meta_conn, reader, api_key: str, now: float | None = None, *, only=None, force: bool = False, on_new_entries=None
+) -> int:
     """Fetch new posts for Reddit subscriptions via Redlisten. Returns the number of entries added.
 
     The scheduled call is a no-op if the last sweep was under ``MIN_SWEEP_INTERVAL_SECONDS`` ago or a 429 back-off is running.
@@ -157,6 +189,7 @@ def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = No
     cooldown; ``only`` limits it to those feed URLs.
     """
     now = time.time() if now is None else now
+    _reset_pacing_if_key_changed(meta_conn, api_key)
     if now < _get_float(meta_conn, _BLOCKED_UNTIL_KEY):
         return 0
     if not force and now - _get_float(meta_conn, _LAST_SWEEP_KEY) < MIN_SWEEP_INTERVAL_SECONDS:
@@ -165,17 +198,20 @@ def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = No
     if only is not None:
         wanted = set(only)
         feed_urls = [u for u in feed_urls if u in wanted]
-    if force:
-        feed_urls = [u for u in feed_urls if now - _get_float(meta_conn, _MANUAL_PREFIX + u) >= MANUAL_COOLDOWN_SECONDS]
-    meta_conn.commit()  # never fetch inside a transaction the caller left open
-    if not feed_urls:
-        return 0
-    if force:
-        for url in feed_urls:
-            meta_conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (_MANUAL_PREFIX + url, str(now)))
-        meta_conn.commit()
-    else:
-        _set(meta_conn, _LAST_SWEEP_KEY, str(now))
+    with _manual_lock:  # check and record the cooldown together so overlapping refreshes of one feed cannot both fetch
+        if force:
+            feed_urls = [u for u in feed_urls if now - _get_float(meta_conn, _MANUAL_PREFIX + u) >= MANUAL_COOLDOWN_SECONDS]
+        meta_conn.commit()  # never fetch inside a transaction the caller left open
+        if not feed_urls:
+            return 0
+        if force:
+            for url in feed_urls:
+                meta_conn.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)", (_MANUAL_PREFIX + url, str(now)))
+            meta_conn.commit()
+        else:
+            _set(meta_conn, _LAST_SWEEP_KEY, str(now))
+    dead = _tombstones(meta_conn, feed_urls)
+    meta_conn.commit()
 
     by_sub: dict[str, list[str]] = {}
     by_user: dict[str, list[str]] = {}
@@ -186,6 +222,15 @@ def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = No
 
     added = 0
     error = ""
+    fresh: dict[str, int] = {}
+
+    def add(url: str, entries: list[dict]) -> None:
+        nonlocal added
+        n = _add_entries(reader, entries, dead)
+        added += n
+        if n:
+            fresh[url] = fresh.get(url, 0) + n
+
     try:
         subs = sorted(by_sub)
         for i in range(0, len(subs), SUBS_PER_REQUEST):
@@ -198,12 +243,16 @@ def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = No
                 LOGGER.warning("[redlisten] subreddit batch %s failed: %s", batch, exc)
                 error = str(exc)
                 continue
+            before = added
             for post in posts:
                 for url in by_sub.get(_post_subreddit(post), ()):
-                    added += _add_entries(reader, [reddit_service.post_to_entry(post, url)])
+                    add(url, [reddit_service.post_to_entry(post, url)])
+            if len(posts) >= PAGE_LIMIT and added - before >= len(posts):
+                LOGGER.warning(
+                    "[redlisten] a full page of %d posts was all new for %s; older posts may have been missed", len(posts), batch
+                )
         user_due = force or now - _get_float(meta_conn, _LAST_USER_SWEEP_KEY) >= USER_SWEEP_INTERVAL_SECONDS
-        if by_user and user_due and not force:
-            _set(meta_conn, _LAST_USER_SWEEP_KEY, str(now))
+        user_failed = False
         for user, urls in by_user.items() if user_due else ():
             try:
                 posts = _get_listing(api_key, f"/user/{user}/submitted", {"limit": PAGE_LIMIT, "sort": "new"})
@@ -212,14 +261,23 @@ def refresh_reddit_feeds(meta_conn, reader, api_key: str, now: float | None = No
             except RedlistenError as exc:
                 LOGGER.warning("[redlisten] user %s failed: %s", user, exc)
                 error = str(exc)
+                user_failed = True
                 continue
             for url in urls:
-                added += _add_entries(reader, [reddit_service.post_to_entry(p, url) for p in posts])
+                add(url, [reddit_service.post_to_entry(p, url) for p in posts])
+        if by_user and user_due and not force and not user_failed:  # a failed profile check is retried next sweep, not tomorrow
+            _set(meta_conn, _LAST_USER_SWEEP_KEY, str(now))
     except RedlistenRateLimited as exc:
         wait = _QUOTA_BACKOFF_SECONDS if exc.quota else max(exc.retry_after, 60.0)
         _set(meta_conn, _BLOCKED_UNTIL_KEY, str(now + wait))
         LOGGER.warning("[redlisten] %s; pausing %d s", exc, wait)
         error = f"{exc}; paused"
     _set(meta_conn, _LAST_ERROR_KEY, error)
+    if on_new_entries is not None:
+        for url in fresh:
+            try:
+                on_new_entries(url)
+            except Exception:  # noqa: BLE001 — a failed follow-up must not fail the sweep
+                LOGGER.exception("[redlisten] new-entries hook failed for %s", url)
     LOGGER.info("[redlisten] sweep added %d entries at %s", added, datetime.now(timezone.utc).isoformat())
     return added

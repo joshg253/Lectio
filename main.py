@@ -12278,7 +12278,9 @@ def _redlisten_manual_sync(feed_urls: list[str]) -> None:
     if not key:
         return
     with get_meta_connection() as conn, get_reader() as reader:
-        redlisten_service.refresh_reddit_feeds(conn, reader, key, only=feed_urls, force=True)
+        redlisten_service.refresh_reddit_feeds(
+            conn, reader, key, only=feed_urls, force=True, on_new_entries=feed_refresh_service.after_external_sync
+        )
 
 
 feed_refresh_service = FeedRefreshService(
@@ -19318,7 +19320,7 @@ def add_feed_to_folder(feed_url: str, folder_id: int) -> str:
                 (folder_id, feed_url),
             )
     invalidate_meta_structure_cache()
-    if websub_service:
+    if websub_service and not reddit_service.is_reddit_feed_url(feed_url):  # Reddit has no hub, and discovery would fetch the dead RSS URL
         _uid = tenancy.current_user_id()
         threading.Thread(
             target=websub_service._discover_and_subscribe,
@@ -20597,7 +20599,9 @@ def _scheduled_refresh_tick() -> None:
                     try:
                         with get_reader() as _rdr:
                             if _redlisten_key:
-                                redlisten_service.refresh_reddit_feeds(_sc, _rdr, _redlisten_key)
+                                redlisten_service.refresh_reddit_feeds(
+                                    _sc, _rdr, _redlisten_key, on_new_entries=feed_refresh_service.after_external_sync
+                                )
                             else:
                                 reddit_service.refresh_all_reddit_feeds(_sc, _rdr, _reddit_token)
                     except Exception:

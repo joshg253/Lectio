@@ -542,7 +542,9 @@ The single-pane Back tests only check source text. Add a headless-Chromium check
     back-off state instance-wide, keyed by a hash of the key.
   - Derive the sweep spacing from the number of batches and a monthly budget, so more than 10 subreddits stays inside the free quota
     (deals feeds are time-sensitive, so this was left out; hourly is the floor for now).
-  - A `before=`/`after=` cursor would avoid re-fetching 50 unchanged results per sweep.
+  - A `before=`/`after=` cursor would avoid re-fetching 50 unchanged results per sweep, and paginate when a burst exceeds one 50-post page.
+  - The key field cannot be cleared from the UI (an empty secret means keep, as for every other integration secret); replacing works. Add a
+    Clear button.
 - Reddit feed filters (e.g. a flair like "US"): apply locally to the batched `/r/a+b/new` results (no extra requests) rather than as a per-feed
   Redlisten search, which costs a request per feed per sweep and cannot batch. Check that the listing carries `link_flair_text` first. Add Feed
   currently drops search and filter parameters and warns.

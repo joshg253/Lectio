@@ -244,3 +244,13 @@ def test_hyphenated_subreddit_input_is_rejected(text):
 
 def test_hyphenated_user_is_fine():
     assert svc.reddit_feed_url_from_input("u/some-user") == "https://www.reddit.com/user/some-user/submitted/.rss"
+
+
+@pytest.mark.parametrize("text", ["reddit.com/r/Python", "www.reddit.com/r/Python/", "old.reddit.com/r/Python/new"])
+def test_schemeless_reddit_urls_are_recognized(text):
+    assert svc.reddit_feed_url_from_input(text) == "https://www.reddit.com/r/Python/.rss"
+
+
+def test_feed_target_rejects_query_filters():
+    assert svc.feed_target("https://www.reddit.com/r/foo/.rss?q=flair%3AUS&restrict_sr=on") is None
+    assert svc.feed_target("https://www.reddit.com/r/foo/.rss?sort=new") == ("sub", ["foo"])

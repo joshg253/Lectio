@@ -11,6 +11,7 @@ import socks
 
 import services.feed_refresh as _feed_refresh_mod
 from services import bot_challenge
+from services import reddit as reddit_service
 from services.feed_refresh import FeedRefreshService
 
 
@@ -1365,7 +1366,7 @@ def test_externally_synced_feeds_are_not_fetched_and_their_failures_clear(tmp_pa
     events: list[str] = []
     reader = _NewCountReader({"https://example.com/feed": 0}, events)
     service = _build_service(db, reader, [], [])
-    service._is_externally_synced = lambda url: "reddit.com" in url
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
     conn = _make_conn(db)
     conn.execute(
         "INSERT INTO feed_failure_state (feed_url, consecutive_failures, next_retry_at, last_error) VALUES (?, 3, 99, 'HTTP 404')",
@@ -1387,7 +1388,7 @@ def test_externally_synced_feeds_are_not_fetched_and_their_failures_clear(tmp_pa
 def test_externally_synced_feeds_sync_on_any_refresh_but_the_schedulers(tmp_path: Path):
     synced: list[list[str]] = []
     service = _build_service(tmp_path / "m.sqlite", _NewCountReader({}, []), [], [])
-    service._is_externally_synced = lambda url: "reddit.com" in url
+    service._is_externally_synced = reddit_service.is_reddit_feed_url
     service._sync_externally = synced.append
     url = "https://www.reddit.com/r/x/.rss"
 

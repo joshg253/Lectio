@@ -94,3 +94,10 @@ never other videos linked in its description. Every add is logged.
 **Admin → Logs** opens on the last 15 minutes. Besides level and time range, a Category filter narrows to automations, maintenance, refresh
 and fetch, YouTube, integrations, images, or other (untagged records such as HTTP access lines). Categories group the `[tag]` that log lines
 carry, and a line can belong to more than one (a YouTube playlist automation is both).
+
+**Reddit feeds** work through a [Redlisten](https://redlisten.com/docs) API key, because Reddit's own RSS no longer works. Put the key in
+Settings → Integrations → Reddit (or Administration for everyone, or `REDLISTEN_API_KEY` in `.env`; your own key wins). Add a feed in Add
+Feed as `r/name`, `u/name` or a reddit.com link; search, top and single-thread links are not supported and the dialog says so. Without a key
+the feed stays empty and Feed Properties says why. New posts arrive about hourly (profile feeds daily); Refresh checks right away. The free
+plan allows 1,000 requests a month: up to 10 subreddits share one request, more than that costs a second request per check and goes over the
+limit. A quota or rate-limit reply pauses checks and the log warns at 80%.

@@ -58,8 +58,8 @@ def test_batches_subreddits_into_one_request_and_routes_posts():
     assert added == 2
     assert client.get.call_count == 1
     assert client.get.call_args.args[0].endswith("/r/python+rust/new")
-    feeds = {c.args[0]["feed_url"] for c in reader.add_entry.call_args_list}
-    assert feeds == {"https://www.reddit.com/r/Python/.rss", "https://old.reddit.com/r/rust/.rss"}
+    routed = {c.args[0]["feed_url"]: c.args[0]["title"] for c in reader.add_entry.call_args_list}
+    assert routed == {"https://www.reddit.com/r/Python/.rss": "a", "https://old.reddit.com/r/rust/.rss": "b"}
 
 
 def test_sweep_is_spaced_by_min_interval():
@@ -218,12 +218,14 @@ def test_last_error_clears_after_a_clean_sweep():
 
 def test_non_quota_429_backs_off_for_retry_after_only():
     conn = _meta()
-    reader = _reader("https://www.reddit.com/r/Python/.rss")
+    url = "https://www.reddit.com/r/Python/.rss"
+    reader = _reader(url)
     client = _client(_resp(429, {"error": {"status": 429}}, {"Retry-After": "120"}), _resp(body=_listing()))
     with patch.object(svc.httpx, "Client", return_value=client):
         svc.refresh_reddit_feeds(conn, reader, "k", now=NOW)
-        # past the hourly spacing and the 120 s back-off: runs again (a quota 429 would still be blocked for hours)
-        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + svc.MIN_SWEEP_INTERVAL_SECONDS + 1)
+        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + 60, only=[url], force=True)  # inside Retry-After: nothing
+        assert client.get.call_count == 1
+        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + 130, only=[url], force=True)  # a quota 429 would still block
     assert client.get.call_count == 2
 
 
@@ -236,4 +238,51 @@ def test_manual_cooldown_is_per_feed():
         svc.refresh_reddit_feeds(conn, reader, "k", now=NOW, only=[a], force=True)
         svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + 5, only=[b], force=True)  # a different feed: not blocked
         svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + 10, only=[a], force=True)  # same feed inside cooldown: skipped
+    assert client.get.call_count == 2
+
+
+def test_deleted_entries_are_not_re_added():
+    conn = _meta()
+    conn.execute("CREATE TABLE deleted_entries (feed_url TEXT, entry_id TEXT)")
+    url = "https://www.reddit.com/r/Python/.rss"
+    conn.execute("INSERT INTO deleted_entries VALUES (?, ?)", (url, "https://www.reddit.com/r/Python/comments/a/t/"))
+    reader = _reader(url)
+    client = _client(_resp(body=_listing(_post("Python", "a"), _post("Python", "b"))))
+    with patch.object(svc.httpx, "Client", return_value=client):
+        assert svc.refresh_reddit_feeds(conn, reader, "k", now=NOW) == 1
+    assert [c.args[0]["title"] for c in reader.add_entry.call_args_list] == ["b"]
+
+
+def test_new_entries_hook_runs_for_feeds_that_gained_entries_only():
+    conn = _meta()
+    a, b = "https://www.reddit.com/r/Python/.rss", "https://www.reddit.com/r/rust/.rss"
+    reader = _reader(a, b)
+    client = _client(_resp(body=_listing(_post("Python", "a"))))
+    seen: list[str] = []
+    with patch.object(svc.httpx, "Client", return_value=client):
+        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW, on_new_entries=seen.append)
+    assert seen == [a]
+
+
+def test_a_new_key_does_not_inherit_the_old_keys_backoff():
+    conn = _meta()
+    url = "https://www.reddit.com/r/Python/.rss"
+    reader = _reader(url)
+    client = _client(_resp(429, {"error": {"code": "quota_exceeded"}}), _resp(body=_listing()))
+    with patch.object(svc.httpx, "Client", return_value=client):
+        svc.refresh_reddit_feeds(conn, reader, "old-key", now=NOW)
+        assert svc.refresh_reddit_feeds(conn, reader, "old-key", now=NOW + 7200) == 0  # still paused for the quota
+        assert client.get.call_count == 1
+        svc.refresh_reddit_feeds(conn, reader, "new-key", now=NOW + 7200)
+    assert client.get.call_count == 2
+
+
+def test_a_failed_profile_check_is_retried_next_sweep_not_tomorrow():
+    conn = _meta()
+    url = "https://www.reddit.com/user/spez/submitted/.rss"
+    reader = _reader(url)
+    client = _client(_resp(500), _resp(body=_listing()))
+    with patch.object(svc.httpx, "Client", return_value=client):
+        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW)
+        svc.refresh_reddit_feeds(conn, reader, "k", now=NOW + svc.MIN_SWEEP_INTERVAL_SECONDS + 1)
     assert client.get.call_count == 2

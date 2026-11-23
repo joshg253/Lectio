@@ -58,7 +58,7 @@ def test_without_a_key_the_message_says_why_it_stays_empty(configured, monkeypat
 
     resp = _client().post("/feeds", data={"feed_url": "r/Python", "folder_id": "1"})
 
-    assert "Redlisten" in resp.headers["location"]
+    assert "stays+empty+until+you+add+a+Redlisten+API+key" in resp.headers["location"]
 
 
 def _discover_client() -> TestClient:
@@ -88,3 +88,42 @@ def test_discover_warns_when_a_search_filter_would_be_dropped(monkeypatch):
     data = _discover_client().get("/feeds/discover", params={"url": url}).json()
     assert data["feeds"][0]["url"] == "https://www.reddit.com/r/Python/.rss"
     assert data["filtered"] is True and "not supported" in data["message"]
+
+
+@pytest.mark.parametrize(
+    "url, filtered",
+    [
+        ("https://www.reddit.com/r/Python/", False),
+        ("r/Python", False),
+        ("https://www.reddit.com/r/Python/top/", True),
+        ("https://www.reddit.com/r/Python/comments/abc/some_title/", True),
+    ],
+)
+def test_discover_warns_only_for_pages_narrower_than_the_feed(monkeypatch, url, filtered):
+    from services import feed_discovery
+
+    monkeypatch.setattr(feed_discovery, "probe_url", lambda *a, **kw: pytest.fail("must not probe"))
+    assert _discover_client().get("/feeds/discover", params={"url": url}).json()["filtered"] is filtered
+
+
+def test_adding_a_reddit_feed_does_not_start_websub_discovery(configured, monkeypatch):
+    from unittest.mock import MagicMock
+
+    started: list = []
+
+    class _Thread:
+        def __init__(self, *a, target=None, **kw):
+            started.append(target)
+
+        def start(self):
+            pass
+
+    hub = MagicMock()
+    monkeypatch.setattr(main, "websub_service", hub)
+    monkeypatch.setattr(routes.feeds, "discover_feed_urls_ex", lambda *a, **kw: pytest.fail("no discovery"))
+    monkeypatch.setattr(routes.feeds, "get_redlisten_api_key", lambda: "")
+    monkeypatch.setattr(main.threading, "Thread", _Thread)
+
+    _client().post("/feeds", data={"feed_url": "r/Python", "folder_id": "1"})
+
+    assert hub._discover_and_subscribe not in started

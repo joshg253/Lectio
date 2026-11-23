@@ -1306,4 +1306,7 @@ quota, and any 429 stops it (a monthly-quota 429 pauses it for hours). More than
 exceeds the free quota. Any `update_feeds` call except the scheduler's (`external_sync=False`), such as a folder refresh, the Refresh button
 or a new feed, runs a forced sweep of just those feeds, skipping the spacing but not the back-off or a 60 s per-feed cooldown; Feed
 Properties never queues one. Pacing state is per user, so users sharing one key do not coordinate (see Plan.md). Sweep errors are recorded
-and shown in Feed Properties.
+and shown in Feed Properties. Entries the user deleted (`deleted_entries`) are skipped before insert, and feeds that gain entries run
+`FeedRefreshService.after_external_sync` (tombstone purge, overrides, rules), since the normal refresh path no longer reaches them. A
+changed key resets the back-off and spacing; a failed profile check is retried next sweep, not tomorrow; Reddit feeds skip WebSub hub
+discovery. A full page of all-new posts is logged as a possible gap (no pagination yet).

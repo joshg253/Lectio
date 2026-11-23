@@ -1083,6 +1083,10 @@ class FeedRefreshService:
                 total_ms,
             )
 
+    def after_external_sync(self, feed_url: str) -> None:
+        """What a refresh does once a feed gains entries, for feeds filled by another service: tombstone purge, overrides, rules."""
+        self._after_new_entries(feed_url, followups=True)
+
     def _after_new_entries(self, feed_url: str, *, followups: bool) -> float:
         """Per-feed work run as soon as a refresh stores new entries; returns the seconds it took, so the caller can keep it out of the
         feed's fetch time.
