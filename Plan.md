@@ -87,6 +87,11 @@ Empty.
 
 No decision pending on any of these; each is "build when wanted". Roughly highest value first: FakeFeedz, Combine-when-failing, then the rest.
 
+### Replace hardcoded colors with theme variables (2026-11-22)
+`static/style.css` and `reader.css` hold roughly 430 hex colors outside variable definitions, while `static/themes/light.css` and `dark.css`
+define about 35 variables each. Audit which are legitimate (vendor code, one-off gradients), tokenize the rest, then check contrast per page
+in both themes. Retint tier; do it incrementally, per area.
+
 ### FakeFeedz Enhancements (2026-10-16)
 
 Setting up three page feeds took many round trips because the Add Feed dialog only exposes the listing-page selector; `content_selector`

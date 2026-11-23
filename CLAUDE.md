@@ -44,6 +44,12 @@ Given to the global `pr-review` skill as the project rules:
 - UI/API vs services vs storage split holds; runtime config is env-driven
 - American English; lines wrap at 140
 
+## Web UI rules
+- No hardcoded colors, fonts or spacing in new or edited CSS; use the theme variables in `static/themes/light.css` and `dark.css`.
+- Verify every UI change in a real browser in both light and dark mode, and look at a screenshot before saying it works.
+- Check contrast and accessibility per page, in both themes.
+- Name restyles by tier: retint (tokens/colors), reskin (type, shadows, backgrounds, motion; layout unchanged), new visual world.
+
 ## Model guidance
 General model and subagent rules are in the global file. Lectio specifics:
 - The main session is Sonnet at medium effort (pinned in `.claude/settings.json`). Use it directly for normal implementation, refactors,
